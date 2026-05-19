@@ -1,10 +1,10 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseServiceRoleClient } from "@/lib/supabase/server";
 import { requireRoleInRoute } from "@/lib/rbac/middleware";
 import { STAFF_ROLES } from "@/lib/rbac/constants";
 import { ORGANIZATION_ID as DEMO_ORG_ID } from "@/lib/config";
 
-export async function POST() {
+export async function POST(request: NextRequest) {
   // Require admin role — this endpoint performs privileged service-role writes
   const authOrError = await requireRoleInRoute(STAFF_ROLES.ADMIN);
   if (authOrError instanceof NextResponse) return authOrError;
@@ -30,8 +30,40 @@ export async function POST() {
     );
   }
 
+  // Parse optional force flag from request body
+  let force = false;
+  try {
+    const body = await request.json();
+    force = !!body?.force;
+  } catch {
+    // No body or invalid JSON — treat as non-force seed
+  }
+
   const results: Record<string, string> = {};
   const errors: Record<string, string> = {};
+
+  // ── Force reset: delete existing demo records before re-inserting ──────────
+  if (force) {
+    const deleteResults = await Promise.all([
+      supabase.from("service_locations").delete().eq("organization_id", DEMO_ORG_ID),
+      supabase.from("payer_configurations").delete().eq("organization_id", DEMO_ORG_ID),
+      supabase.from("clearinghouse_connections").delete().eq("organization_id", DEMO_ORG_ID),
+    ]);
+
+    const deleteErrors: string[] = [];
+    if (deleteResults[0].error) deleteErrors.push(`service_locations: ${deleteResults[0].error.message}`);
+    if (deleteResults[1].error) deleteErrors.push(`payer_configurations: ${deleteResults[1].error.message}`);
+    if (deleteResults[2].error) deleteErrors.push(`clearinghouse_connections: ${deleteResults[2].error.message}`);
+
+    if (deleteErrors.length > 0) {
+      return NextResponse.json(
+        { success: false, error: `Reset failed — could not clear existing data: ${deleteErrors.join("; ")}` },
+        { status: 500 },
+      );
+    }
+  }
+
+  const actionLabel = force ? "re-seeded" : "inserted";
 
   // ── 1. Organization ──────────────────────────────────────────────────────────
   {
@@ -150,19 +182,26 @@ export async function POST() {
       },
     ];
 
-    const { data: existing } = await supabase
-      .from("service_locations")
-      .select("id")
-      .eq("organization_id", DEMO_ORG_ID)
-      .is("archived_at", null)
-      .limit(1);
-
-    if (!existing || existing.length === 0) {
+    if (force) {
+      // Records already deleted above — always insert fresh
       const { error } = await supabase.from("service_locations").insert(locations);
       if (error) errors.service_locations = error.message;
-      else results.service_locations = `inserted ${locations.length}`;
+      else results.service_locations = `${actionLabel} ${locations.length}`;
     } else {
-      results.service_locations = "already exists";
+      const { data: existing } = await supabase
+        .from("service_locations")
+        .select("id")
+        .eq("organization_id", DEMO_ORG_ID)
+        .is("archived_at", null)
+        .limit(1);
+
+      if (!existing || existing.length === 0) {
+        const { error } = await supabase.from("service_locations").insert(locations);
+        if (error) errors.service_locations = error.message;
+        else results.service_locations = `inserted ${locations.length}`;
+      } else {
+        results.service_locations = "already exists";
+      }
     }
   }
 
@@ -214,26 +253,33 @@ export async function POST() {
       },
     ];
 
-    let inserted = 0;
-    for (const payer of payers) {
-      const { data: existingPayer } = await supabase
-        .from("payer_configurations")
-        .select("id")
-        .eq("organization_id", DEMO_ORG_ID)
-        .eq("payer_id", payer.payer_id)
-        .maybeSingle();
+    if (force) {
+      // Records already deleted above — insert all fresh
+      const { error } = await supabase.from("payer_configurations").insert(payers);
+      if (error) errors.payer_configurations = error.message;
+      else results.payer_configurations = `${actionLabel} ${payers.length}`;
+    } else {
+      let inserted = 0;
+      for (const payer of payers) {
+        const { data: existingPayer } = await supabase
+          .from("payer_configurations")
+          .select("id")
+          .eq("organization_id", DEMO_ORG_ID)
+          .eq("payer_id", payer.payer_id)
+          .maybeSingle();
 
-      if (existingPayer) { inserted++; continue; }
+        if (existingPayer) { inserted++; continue; }
 
-      const { error } = await supabase.from("payer_configurations").insert(payer);
-      if (error && !errors.payer_configurations) {
-        errors.payer_configurations = error.message;
-      } else {
-        inserted++;
+        const { error } = await supabase.from("payer_configurations").insert(payer);
+        if (error && !errors.payer_configurations) {
+          errors.payer_configurations = error.message;
+        } else {
+          inserted++;
+        }
       }
-    }
-    if (!errors.payer_configurations) {
-      results.payer_configurations = `seeded ${inserted}`;
+      if (!errors.payer_configurations) {
+        results.payer_configurations = `seeded ${inserted}`;
+      }
     }
   }
 
@@ -241,13 +287,8 @@ export async function POST() {
   {
     const now = new Date().toISOString();
 
-    const { data: existing } = await supabase
-      .from("clearinghouse_connections")
-      .select("id")
-      .eq("organization_id", DEMO_ORG_ID)
-      .limit(1);
-
-    if (!existing || existing.length === 0) {
+    if (force) {
+      // Records already deleted above — insert fresh
       const { error } = await supabase.from("clearinghouse_connections").insert({
         organization_id: DEMO_ORG_ID,
         vendor: "office_ally",
@@ -276,9 +317,47 @@ export async function POST() {
         updated_at: now,
       });
       if (error) errors.clearinghouse = error.message;
-      else results.clearinghouse = "inserted";
+      else results.clearinghouse = actionLabel;
     } else {
-      results.clearinghouse = "already exists";
+      const { data: existing } = await supabase
+        .from("clearinghouse_connections")
+        .select("id")
+        .eq("organization_id", DEMO_ORG_ID)
+        .limit(1);
+
+      if (!existing || existing.length === 0) {
+        const { error } = await supabase.from("clearinghouse_connections").insert({
+          organization_id: DEMO_ORG_ID,
+          vendor: "office_ally",
+          connection_name: "Office Ally – Production",
+          mode: "test",
+          submitter_id: "SBH2024",
+          sender_qualifier: "ZZ",
+          receiver_qualifier: "ZZ",
+          receiver_id: "330897513",
+          receiver_name: "OFFICEALLY",
+          gs_receiver_code: "OA",
+          x12_version: "005010X222A1",
+          isa_usage_indicator: "P",
+          sftp_host: "sftp.officeally.com",
+          sftp_port: 22,
+          sftp_username: "sunrise_bh",
+          inbound_folder: "inbound",
+          outbound_folder: "outbound",
+          api_base_url: "https://api.officeally.com",
+          auth_type: "sftp_key",
+          eligibility_service_type_code: "MH",
+          eligibility_transaction_set: "270",
+          is_active: true,
+          encrypted_credentials: {},
+          created_at: now,
+          updated_at: now,
+        });
+        if (error) errors.clearinghouse = error.message;
+        else results.clearinghouse = "inserted";
+      } else {
+        results.clearinghouse = "already exists";
+      }
     }
   }
 
@@ -287,6 +366,7 @@ export async function POST() {
   return NextResponse.json(
     {
       success: !hasErrors,
+      reset: force,
       seeded_by: authOrError.staffId,
       seeded_at: new Date().toISOString(),
       results,

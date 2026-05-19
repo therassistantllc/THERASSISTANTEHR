@@ -52,6 +52,7 @@ const FIX_LINKS: Record<string, string> = {
 
 type SeedResult = {
   success: boolean;
+  reset?: boolean;
   seeded_at?: string;
   results?: Record<string, string>;
   errors?: Record<string, string>;
@@ -67,6 +68,7 @@ export default function SystemReadinessClient() {
   const [error, setError] = useState<string | null>(null);
   const [seeding, setSeeding] = useState(false);
   const [seedResult, setSeedResult] = useState<SeedResult | null>(null);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
 
   const load = useCallback(() => {
     if (!organizationId) { setLoading(false); return; }
@@ -78,11 +80,16 @@ export default function SystemReadinessClient() {
       .finally(() => setLoading(false));
   }, [organizationId]);
 
-  const runSeed = useCallback(async () => {
+  const runSeed = useCallback(async (force = false) => {
     setSeeding(true);
     setSeedResult(null);
+    setShowResetConfirm(false);
     try {
-      const res = await fetch("/api/admin/seed-settings", { method: "POST" });
+      const res = await fetch("/api/admin/seed-settings", {
+        method: "POST",
+        headers: force ? { "Content-Type": "application/json" } : undefined,
+        body: force ? JSON.stringify({ force: true }) : undefined,
+      });
       const json: SeedResult = await res.json();
       setSeedResult(json);
       if (json.success) {
@@ -110,9 +117,47 @@ export default function SystemReadinessClient() {
         </div>
         <div className="hero-actions">
           {isAdmin && (
-            <button className="button button-primary" onClick={runSeed} disabled={seeding || loading}>
-              {seeding ? "Seeding…" : "Seed Demo Data"}
-            </button>
+            <>
+              <button
+                className="button button-primary"
+                onClick={() => runSeed(false)}
+                disabled={seeding || loading || showResetConfirm}
+              >
+                {seeding ? "Seeding…" : "Seed Demo Data"}
+              </button>
+
+              {showResetConfirm ? (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "var(--surface-2, #f4f6f9)", border: "1px solid var(--text-danger, #c53030)", borderRadius: "var(--radius, 6px)", padding: "6px 12px" }}>
+                  <span style={{ fontSize: "var(--text-sm)", color: "var(--text-danger, #c53030)", fontWeight: 600 }}>
+                    Deletes & re-inserts all demo records — continue?
+                  </span>
+                  <button
+                    className="button button-danger"
+                    style={{ padding: "4px 10px", fontSize: "var(--text-sm)" }}
+                    onClick={() => runSeed(true)}
+                    disabled={seeding}
+                  >
+                    Yes, reset
+                  </button>
+                  <button
+                    className="button button-secondary"
+                    style={{ padding: "4px 10px", fontSize: "var(--text-sm)" }}
+                    onClick={() => setShowResetConfirm(false)}
+                    disabled={seeding}
+                  >
+                    Cancel
+                  </button>
+                </span>
+              ) : (
+                <button
+                  className="button button-secondary"
+                  onClick={() => setShowResetConfirm(true)}
+                  disabled={seeding || loading}
+                >
+                  Reset Demo Data
+                </button>
+              )}
+            </>
           )}
           <button className="button button-secondary" onClick={load} disabled={loading}>
             {loading ? "Checking…" : "Refresh"}
@@ -127,8 +172,17 @@ export default function SystemReadinessClient() {
       {seedResult && (
         <section className="panel" style={{ borderLeft: `3px solid ${seedResult.success ? "var(--text-success)" : "var(--text-danger)"}` }}>
           <h2 style={{ marginBottom: "var(--space-3)" }}>
-            {seedResult.success ? "✓ Demo Data Seeded" : "⚠ Seed Encountered Issues"}
+            {seedResult.success
+              ? seedResult.reset
+                ? "⚡ Demo Data Reset & Re-seeded"
+                : "✓ Demo Data Seeded"
+              : "⚠ Seed Encountered Issues"}
           </h2>
+          {seedResult.reset && seedResult.success && (
+            <p style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", marginBottom: "var(--space-3)" }}>
+              Existing demo records were deleted and re-inserted with clean defaults.
+            </p>
+          )}
           {seedResult.error && (
             <p style={{ color: "var(--text-danger)", fontSize: "var(--text-sm)", marginBottom: "var(--space-3)" }}>
               {seedResult.error}
@@ -136,7 +190,9 @@ export default function SystemReadinessClient() {
           )}
           {seedResult.results && Object.keys(seedResult.results).length > 0 && (
             <div style={{ marginBottom: "var(--space-3)" }}>
-              <p style={{ fontSize: "var(--text-sm)", fontWeight: 600, marginBottom: "var(--space-2)" }}>Tables populated:</p>
+              <p style={{ fontSize: "var(--text-sm)", fontWeight: 600, marginBottom: "var(--space-2)" }}>
+                {seedResult.reset ? "Tables re-seeded:" : "Tables populated:"}
+              </p>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--text-sm)" }}>
                 <thead>
                   <tr style={{ borderBottom: "1px solid var(--border-color)", textAlign: "left" }}>
@@ -145,14 +201,18 @@ export default function SystemReadinessClient() {
                   </tr>
                 </thead>
                 <tbody>
-                  {Object.entries(seedResult.results).map(([table, status]) => (
-                    <tr key={table} style={{ borderBottom: "1px solid var(--border-color)" }}>
-                      <td style={{ padding: "6px 10px", fontFamily: "monospace" }}>{table}</td>
-                      <td style={{ padding: "6px 10px", color: status === "already exists" ? "var(--text-secondary)" : "var(--text-success)" }}>
-                        {status === "already exists" ? "↩ already exists" : `✓ ${status}`}
-                      </td>
-                    </tr>
-                  ))}
+                  {Object.entries(seedResult.results).map(([table, status]) => {
+                    const isSkipped = status === "already exists";
+                    const isReseeded = status.startsWith("re-seeded");
+                    return (
+                      <tr key={table} style={{ borderBottom: "1px solid var(--border-color)" }}>
+                        <td style={{ padding: "6px 10px", fontFamily: "monospace" }}>{table}</td>
+                        <td style={{ padding: "6px 10px", color: isSkipped ? "var(--text-secondary)" : isReseeded ? "var(--accent, #2563eb)" : "var(--text-success)" }}>
+                          {isSkipped ? "↩ already exists" : isReseeded ? `⚡ ${status}` : `✓ ${status}`}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -174,7 +234,7 @@ export default function SystemReadinessClient() {
           )}
           {seedResult.seeded_at && (
             <p style={{ fontSize: "var(--text-xs, 0.75rem)", color: "var(--text-secondary)", marginTop: "var(--space-3)" }}>
-              Seeded at {new Date(seedResult.seeded_at).toLocaleString()}
+              {seedResult.reset ? "Reset" : "Seeded"} at {new Date(seedResult.seeded_at).toLocaleString()}
             </p>
           )}
         </section>
