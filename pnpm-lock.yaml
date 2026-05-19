@@ -153,6 +153,13 @@ overrides:
 importers:
 
   .:
+    dependencies:
+      '@types/pg':
+        specifier: ^8.20.0
+        version: 8.20.0
+      pg:
+        specifier: ^8.20.0
+        version: 8.20.0
     devDependencies:
       prettier:
         specifier: ^3.8.3

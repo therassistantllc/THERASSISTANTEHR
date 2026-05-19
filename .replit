@@ -35,3 +35,6 @@ externalPort = 3000
 
 [userenv.shared]
 NEXT_PUBLIC_ORGANIZATION_ID = "11111111-1111-1111-1111-111111111111"
+
+[nix]
+channel = "stable-25_05"
