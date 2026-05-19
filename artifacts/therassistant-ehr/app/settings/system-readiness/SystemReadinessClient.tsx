@@ -49,11 +49,21 @@ const FIX_LINKS: Record<string, string> = {
   fee_schedule_or_billing_defaults: "/settings/billing-defaults",
 };
 
+type SeedResult = {
+  success: boolean;
+  seeded_at?: string;
+  results?: Record<string, string>;
+  errors?: Record<string, string>;
+  error?: string;
+};
+
 export default function SystemReadinessClient() {
   const organizationId = useMemo(() => getOrganizationId(), []);
   const [data, setData] = useState<ReadinessPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [seeding, setSeeding] = useState(false);
+  const [seedResult, setSeedResult] = useState<SeedResult | null>(null);
 
   const load = useCallback(() => {
     if (!organizationId) { setLoading(false); return; }
@@ -64,6 +74,23 @@ export default function SystemReadinessClient() {
       .catch(() => setError("Failed to load system readiness status."))
       .finally(() => setLoading(false));
   }, [organizationId]);
+
+  const runSeed = useCallback(async () => {
+    setSeeding(true);
+    setSeedResult(null);
+    try {
+      const res = await fetch("/api/admin/seed-settings", { method: "POST" });
+      const json: SeedResult = await res.json();
+      setSeedResult(json);
+      if (json.success) {
+        load();
+      }
+    } catch {
+      setSeedResult({ success: false, error: "Network error — could not reach seed endpoint." });
+    } finally {
+      setSeeding(false);
+    }
+  }, [load]);
 
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(); }, [load]);
@@ -79,6 +106,9 @@ export default function SystemReadinessClient() {
           </p>
         </div>
         <div className="hero-actions">
+          <button className="button button-primary" onClick={runSeed} disabled={seeding || loading}>
+            {seeding ? "Seeding…" : "Seed Demo Data"}
+          </button>
           <button className="button button-secondary" onClick={load} disabled={loading}>
             {loading ? "Checking…" : "Refresh"}
           </button>
@@ -88,6 +118,62 @@ export default function SystemReadinessClient() {
 
       {!organizationId && <div className="alert-panel">No organization context.</div>}
       {error && <div className="alert-panel">{error}</div>}
+
+      {seedResult && (
+        <section className="panel" style={{ borderLeft: `3px solid ${seedResult.success ? "var(--text-success)" : "var(--text-danger)"}` }}>
+          <h2 style={{ marginBottom: "var(--space-3)" }}>
+            {seedResult.success ? "✓ Demo Data Seeded" : "⚠ Seed Encountered Issues"}
+          </h2>
+          {seedResult.error && (
+            <p style={{ color: "var(--text-danger)", fontSize: "var(--text-sm)", marginBottom: "var(--space-3)" }}>
+              {seedResult.error}
+            </p>
+          )}
+          {seedResult.results && Object.keys(seedResult.results).length > 0 && (
+            <div style={{ marginBottom: "var(--space-3)" }}>
+              <p style={{ fontSize: "var(--text-sm)", fontWeight: 600, marginBottom: "var(--space-2)" }}>Tables populated:</p>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--text-sm)" }}>
+                <thead>
+                  <tr style={{ borderBottom: "1px solid var(--border-color)", textAlign: "left" }}>
+                    <th style={{ padding: "6px 10px" }}>Table</th>
+                    <th style={{ padding: "6px 10px" }}>Result</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(seedResult.results).map(([table, status]) => (
+                    <tr key={table} style={{ borderBottom: "1px solid var(--border-color)" }}>
+                      <td style={{ padding: "6px 10px", fontFamily: "monospace" }}>{table}</td>
+                      <td style={{ padding: "6px 10px", color: status === "already exists" ? "var(--text-secondary)" : "var(--text-success)" }}>
+                        {status === "already exists" ? "↩ already exists" : `✓ ${status}`}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {seedResult.errors && Object.keys(seedResult.errors).length > 0 && (
+            <div>
+              <p style={{ fontSize: "var(--text-sm)", fontWeight: 600, marginBottom: "var(--space-2)", color: "var(--text-danger)" }}>Errors:</p>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--text-sm)" }}>
+                <tbody>
+                  {Object.entries(seedResult.errors).map(([table, msg]) => (
+                    <tr key={table} style={{ borderBottom: "1px solid var(--border-color)" }}>
+                      <td style={{ padding: "6px 10px", fontFamily: "monospace" }}>{table}</td>
+                      <td style={{ padding: "6px 10px", color: "var(--text-danger)" }}>{msg}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {seedResult.seeded_at && (
+            <p style={{ fontSize: "var(--text-xs, 0.75rem)", color: "var(--text-secondary)", marginTop: "var(--space-3)" }}>
+              Seeded at {new Date(seedResult.seeded_at).toLocaleString()}
+            </p>
+          )}
+        </section>
+      )}
 
       {loading && <div className="panel"><div className="empty-state">Running checks…</div></div>}
 
