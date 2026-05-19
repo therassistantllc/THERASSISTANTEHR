@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DEFAULT_ORG_ID } from "@/lib/config";
+import { useUserRole } from "@/lib/store/userRole";
 
 type ReadinessCheck = {
   key: string;
@@ -59,6 +60,8 @@ type SeedResult = {
 
 export default function SystemReadinessClient() {
   const organizationId = useMemo(() => getOrganizationId(), []);
+  const { role } = useUserRole();
+  const isAdmin = role === "admin_biller";
   const [data, setData] = useState<ReadinessPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -106,9 +109,11 @@ export default function SystemReadinessClient() {
           </p>
         </div>
         <div className="hero-actions">
-          <button className="button button-primary" onClick={runSeed} disabled={seeding || loading}>
-            {seeding ? "Seeding…" : "Seed Demo Data"}
-          </button>
+          {isAdmin && (
+            <button className="button button-primary" onClick={runSeed} disabled={seeding || loading}>
+              {seeding ? "Seeding…" : "Seed Demo Data"}
+            </button>
+          )}
           <button className="button button-secondary" onClick={load} disabled={loading}>
             {loading ? "Checking…" : "Refresh"}
           </button>
