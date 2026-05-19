@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { DEFAULT_ORG_ID } from "@/lib/config";
 import styles from "./charge-capture.module.css";
 
 type ChargeStatus = "ready" | "unsigned" | "missing_dx" | "hold";
@@ -19,6 +20,74 @@ interface ChargeRow {
   charge: number;
   status: ChargeStatus;
   blockers: string[];
+}
+
+type ApiItem = {
+  chargeCaptureId: string;
+  clientId: string;
+  patientName: string;
+  dateOfBirth?: string | null;
+  serviceDate?: string | null;
+  chargeStatus?: string | null;
+  totalCharge: number;
+  blockers: Array<{ field?: string; message?: string }>;
+};
+
+type ApiMetrics = {
+  total: number;
+  blocked: number;
+  readyForClaim: number;
+  claimCreated: number;
+  validationFailed: number;
+  readyForBatch: number;
+};
+
+type ApiPayload = {
+  success: boolean;
+  error?: string;
+  metrics?: ApiMetrics;
+  items?: ApiItem[];
+};
+
+function getOrganizationId() {
+  if (typeof window === "undefined") return DEFAULT_ORG_ID;
+  const params = new URLSearchParams(window.location.search);
+  return params.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
+}
+
+function mapApiStatus(chargeStatus?: string | null): ChargeStatus {
+  switch (chargeStatus) {
+    case "ready_for_claim":
+    case "claim_created":
+    case "ready_for_batch":
+      return "ready";
+    case "blocked":
+      return "hold";
+    case "validation_failed":
+      return "missing_dx";
+    default:
+      return "unsigned";
+  }
+}
+
+function mapApiItem(item: ApiItem): ChargeRow {
+  const blockerMessages = item.blockers.map((b) =>
+    [b.field, b.message].filter(Boolean).join(": ") || "Needs review",
+  );
+  return {
+    id: item.chargeCaptureId,
+    clientId: item.clientId,
+    patient: item.patientName,
+    dob: item.dateOfBirth ? new Date(item.dateOfBirth).toLocaleDateString() : "—",
+    dos: item.serviceDate ? new Date(item.serviceDate).toLocaleDateString() : "—",
+    cpt: "—",
+    cptDesc: "—",
+    provider: "—",
+    insurance: "—",
+    charge: item.totalCharge,
+    status: mapApiStatus(item.chargeStatus),
+    blockers: blockerMessages,
+  };
 }
 
 const DEMO_CHARGES: ChargeRow[] = [
@@ -53,21 +122,51 @@ function money(v: number) {
 }
 
 export default function ChargeCaptureClient() {
+  const organizationId = useMemo(() => getOrganizationId(), []);
+  const [apiPayload, setApiPayload] = useState<ApiPayload | null>(null);
+  const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterType>("all");
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
-  const counts = useMemo(() => ({
-    total: DEMO_CHARGES.length,
-    ready: DEMO_CHARGES.filter((c) => c.status === "ready").length,
-    unsigned: DEMO_CHARGES.filter((c) => c.status === "unsigned").length,
-    missing_dx: DEMO_CHARGES.filter((c) => c.status === "missing_dx").length,
-    hold: DEMO_CHARGES.filter((c) => c.status === "hold").length,
-    totalCharge: DEMO_CHARGES.reduce((s, c) => s + c.charge, 0),
-  }), []);
+  useEffect(() => {
+    if (!organizationId) { setLoading(false); return; }
+    fetch(`/api/billing/claim-readiness?organizationId=${encodeURIComponent(organizationId)}`, { cache: "no-store" })
+      .then((res) => res.json() as Promise<ApiPayload>)
+      .then((json) => { if (json.success) setApiPayload(json); })
+      .catch(() => { })
+      .finally(() => setLoading(false));
+  }, [organizationId]);
+
+  const apiItems = apiPayload?.items ?? [];
+  const charges: ChargeRow[] = apiItems.length > 0 ? apiItems.map(mapApiItem) : DEMO_CHARGES;
+  const usingDemo = apiItems.length === 0;
+
+  const apiMetrics = apiPayload?.metrics;
+  const counts = useMemo(() => {
+    if (apiMetrics && !usingDemo) {
+      const ready = apiMetrics.readyForClaim + apiMetrics.claimCreated + apiMetrics.readyForBatch;
+      return {
+        total: apiMetrics.total,
+        ready,
+        unsigned: apiMetrics.total - apiMetrics.blocked - ready - apiMetrics.validationFailed,
+        missing_dx: apiMetrics.validationFailed,
+        hold: apiMetrics.blocked,
+        totalCharge: charges.reduce((s, c) => s + c.charge, 0),
+      };
+    }
+    return {
+      total: charges.length,
+      ready: charges.filter((c) => c.status === "ready").length,
+      unsigned: charges.filter((c) => c.status === "unsigned").length,
+      missing_dx: charges.filter((c) => c.status === "missing_dx").length,
+      hold: charges.filter((c) => c.status === "hold").length,
+      totalCharge: charges.reduce((s, c) => s + c.charge, 0),
+    };
+  }, [apiMetrics, usingDemo, charges]);
 
   const filtered = useMemo(() => {
-    let list = DEMO_CHARGES;
+    let list = charges;
     if (filter !== "all") list = list.filter((c) => c.status === filter);
     if (search.trim()) {
       const q = search.toLowerCase();
@@ -79,7 +178,7 @@ export default function ChargeCaptureClient() {
       );
     }
     return list;
-  }, [filter, search]);
+  }, [charges, filter, search]);
 
   const readySelected = filtered.filter((c) => selected.has(c.id) && c.status === "ready");
 
@@ -106,6 +205,8 @@ export default function ChargeCaptureClient() {
       {/* Header */}
       <header className={styles.header}>
         <span className={styles.headerTitle}>Charge Capture</span>
+        {loading ? <span style={{ fontSize: 11, color: "#94a3b8", marginLeft: 8 }}>Loading…</span> : null}
+        {!loading && usingDemo ? <span style={{ fontSize: 11, color: "#94a3b8", marginLeft: 8 }}>Demo data</span> : null}
         <div className={styles.headerSpacer} />
         <div className={styles.searchWrap}>
           <span className={styles.searchIcon}>
@@ -150,7 +251,7 @@ export default function ChargeCaptureClient() {
         </div>
         <div className={styles.summaryCard}>
           <span className={styles.summaryValue}>{money(counts.totalCharge)}</span>
-          <span className={styles.summaryLabel}>Total Charges</span>
+          <span className={styles.summaryLabel}>Total $</span>
         </div>
       </div>
 
