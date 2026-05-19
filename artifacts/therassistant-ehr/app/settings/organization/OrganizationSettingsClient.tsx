@@ -109,6 +109,55 @@ function hasErrors(errors: BillingErrors): boolean {
   return Object.values(errors).some(Boolean);
 }
 
+/* ── Preview formatting helpers ── */
+function fmtPhone(v: string): string {
+  const d = v.replace(/\D/g, "");
+  if (d.length !== 10) return v || "—";
+  return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+}
+
+function fmtTaxId(v: string, type: string): string {
+  const d = v.replace(/\D/g, "");
+  if (!d) return "—";
+  if (type === "EIN" && d.length === 9) return `${d.slice(0, 2)}-${d.slice(2)}`;
+  return v;
+}
+
+const POS_LABELS: Record<string, string> = {
+  "11": "11 – Office",
+  "12": "12 – Home",
+  "49": "49 – Independent Clinic",
+  "02": "02 – Telehealth",
+  "10": "10 – Telehealth (patient home)",
+};
+
+/* ── Small presentational helpers for the CMS-1500 preview ── */
+function PlaceholderText({ children }: { children: React.ReactNode }) {
+  return <span style={{ color: "#94A3B8", fontStyle: "italic" }}>{children}</span>;
+}
+
+function CmsBox({
+  boxNum,
+  label,
+  children,
+  style,
+}: {
+  boxNum: string;
+  label: string;
+  children: React.ReactNode;
+  style?: React.CSSProperties;
+}) {
+  return (
+    <div style={{ padding: "8px 10px", minHeight: 64, ...style }}>
+      <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.07em", textTransform: "uppercase", color: "#5c6e82", marginBottom: 5, fontFamily: "sans-serif" }}>
+        <span style={{ background: "#e8edf2", borderRadius: 3, padding: "1px 5px", marginRight: 5 }}>{boxNum}</span>
+        {label}
+      </div>
+      <div style={{ lineHeight: 1.55 }}>{children}</div>
+    </div>
+  );
+}
+
 function getOrganizationId() {
   if (typeof window === "undefined") return DEFAULT_ORG_ID;
   const params = new URLSearchParams(window.location.search);
@@ -125,6 +174,7 @@ export default function OrganizationSettingsClient() {
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<"idle" | "saved" | "error">("idle");
   const [statusMsg, setStatusMsg] = useState("");
+  const [previewOpen, setPreviewOpen] = useState(true);
 
   useEffect(() => {
     if (!organizationId) { setLoading(false); return; }
@@ -345,6 +395,130 @@ export default function OrganizationSettingsClient() {
               {bf("billing_state", "State (2-letter)")}
               {bf("billing_zip", "ZIP Code")}
             </div>
+          </section>
+
+          {/* ── Claim Header Preview ── */}
+          <section className="panel" style={{ padding: 0, overflow: "hidden" }}>
+            {/* Toggle header */}
+            <button
+              type="button"
+              onClick={() => setPreviewOpen((o) => !o)}
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "var(--space-4) var(--space-5)",
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                textAlign: "left",
+              }}
+              aria-expanded={previewOpen}
+            >
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{
+                  display: "inline-flex", alignItems: "center", justifyContent: "center",
+                  width: 22, height: 22, borderRadius: 6, background: "var(--navy, #10243f)",
+                  color: "#fff", fontSize: 11, fontWeight: 700, flexShrink: 0,
+                }}>
+                  ☰
+                </span>
+                <span style={{ fontSize: "var(--text-base, 15px)", fontWeight: 700, color: "var(--text, #1a2332)" }}>
+                  Claim Header Preview
+                </span>
+                <span style={{ fontSize: "var(--text-xs, 11px)", color: "var(--muted, #5c6e82)", fontWeight: 400 }}>
+                  — live view of how these values appear on an 837P / CMS-1500
+                </span>
+              </span>
+              <span style={{ fontSize: 12, color: "var(--muted, #5c6e82)", transform: previewOpen ? "rotate(180deg)" : "none", transition: "transform 0.2s" }}>▼</span>
+            </button>
+
+            {previewOpen && (
+              <div style={{ borderTop: "1px solid var(--line, #d8e1e9)", padding: "var(--space-5)" }}>
+                {/* CMS-1500 mock — rendered as a bordered grid */}
+                <div style={{
+                  fontFamily: "'Courier New', Courier, monospace",
+                  fontSize: 12,
+                  border: "1.5px solid #1a2332",
+                  borderRadius: 4,
+                  overflow: "hidden",
+                  maxWidth: 760,
+                }}>
+                  {/* Form header bar */}
+                  <div style={{
+                    background: "#1a2332", color: "#fff",
+                    padding: "6px 12px", fontSize: 11, fontWeight: 700,
+                    letterSpacing: "0.08em", textTransform: "uppercase",
+                  }}>
+                    CMS-1500 (02-12) · Billing Provider Boxes
+                  </div>
+
+                  {/* Box rows */}
+                  {/* Row 1: Box 33 (Billing Provider Info) spanning full width */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", borderBottom: "1px solid #c8d4de" }}>
+                    {/* Box 33 */}
+                    <CmsBox
+                      boxNum="33"
+                      label="BILLING PROVIDER INFO & PH#"
+                      style={{ borderRight: "1px solid #c8d4de" }}
+                    >
+                      <div style={{ fontWeight: 700 }}>{billing.billing_provider_name || <PlaceholderText>Billing Provider Name</PlaceholderText>}</div>
+                      <div>{billing.billing_address_line1 || <PlaceholderText>Address Line 1</PlaceholderText>}</div>
+                      {billing.billing_address_line2 && <div>{billing.billing_address_line2}</div>}
+                      <div>
+                        {billing.billing_city || <PlaceholderText>City</PlaceholderText>}
+                        {billing.billing_city ? ", " : " "}
+                        {billing.billing_state || <PlaceholderText>ST</PlaceholderText>}
+                        {" "}
+                        {billing.billing_zip || <PlaceholderText>ZIP</PlaceholderText>}
+                      </div>
+                      <div style={{ marginTop: 4 }}>{fmtPhone(billing.billing_phone)}</div>
+                    </CmsBox>
+
+                    {/* Box 33a + 33b stacked */}
+                    <div>
+                      <CmsBox boxNum="33a" label="NPI" style={{ borderBottom: "1px solid #c8d4de" }}>
+                        <span style={{ letterSpacing: "0.12em", fontWeight: 700 }}>
+                          {billing.billing_provider_npi || <PlaceholderText>0000000000</PlaceholderText>}
+                        </span>
+                      </CmsBox>
+                      <CmsBox boxNum="33b" label="OTHER ID #">
+                        <PlaceholderText>—</PlaceholderText>
+                      </CmsBox>
+                    </div>
+                  </div>
+
+                  {/* Row 2: Box 25 (Tax ID) + Default POS */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", borderBottom: "1px solid #c8d4de" }}>
+                    <CmsBox boxNum="25" label="FEDERAL TAX I.D. NUMBER" style={{ borderRight: "1px solid #c8d4de" }}>
+                      <span style={{ letterSpacing: "0.1em", fontWeight: 700 }}>
+                        {fmtTaxId(billing.billing_tax_id, billing.billing_tax_id_type)}
+                      </span>
+                      <span style={{ marginLeft: 12, fontSize: 11, color: "#5c6e82" }}>
+                        ☑ {billing.billing_tax_id_type || "EIN"}
+                      </span>
+                    </CmsBox>
+
+                    <CmsBox boxNum="24B" label="DEFAULT PLACE OF SERVICE">
+                      <div>
+                        <span style={{ fontSize: 11, color: "#5c6e82" }}>Office: </span>
+                        {(POS_LABELS[billing.default_pos_office] ?? billing.default_pos_office) || <PlaceholderText>—</PlaceholderText>}
+                      </div>
+                      <div style={{ marginTop: 3 }}>
+                        <span style={{ fontSize: 11, color: "#5c6e82" }}>Telehealth: </span>
+                        {(POS_LABELS[billing.default_pos_telehealth] ?? billing.default_pos_telehealth) || <PlaceholderText>—</PlaceholderText>}
+                      </div>
+                    </CmsBox>
+                  </div>
+
+                  {/* Footer note */}
+                  <div style={{ padding: "6px 12px", background: "#f2f4f7", fontSize: 10, color: "#5c6e82" }}>
+                    Read-only preview — save the form to persist changes. Greyed values indicate empty fields.
+                  </div>
+                </div>
+              </div>
+            )}
           </section>
 
           {status !== "idle" && (
