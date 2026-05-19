@@ -30,3 +30,8 @@ externalPort = 80
 [[ports]]
 localPort = 22803
 externalPort = 3000
+
+[userenv]
+
+[userenv.shared]
+NEXT_PUBLIC_ORGANIZATION_ID = "org-thera-colorado"
