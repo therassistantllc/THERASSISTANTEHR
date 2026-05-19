@@ -41,9 +41,11 @@ The app is single-tenant per deployment, scoped to one `organization_id`.
 | `NEXT_PUBLIC_ORGANIZATION_ID` | `11111111-1111-1111-1111-111111111111` | UUID of the active organization |
 
 This is set as a **shared env var** in Replit Secrets. The resolution order in `lib/config.ts` is:
-1. `NEXT_PUBLIC_ORGANIZATION_ID` env var (preferred)
-2. `?organizationId=` URL query param (useful for testing)
-3. Hardcoded `DEFAULT_ORG_ID` fallback (`11111111-1111-1111-1111-111111111111`)
+
+- **Module constant `ORGANIZATION_ID`**: env var → hardcoded fallback (`11111111-1111-1111-1111-111111111111`)
+- **Per-request helpers** (`getOrgIdFromSearchParams`, `getOrgIdFromRequest`): `?organizationId=` URL param → env var → fallback
+
+The URL param override is intentional: it lets developers test a specific org on a running deployment without changing the env var.
 
 To deploy for a different clinic: update `NEXT_PUBLIC_ORGANIZATION_ID` to the new clinic's UUID (must match the UUID in the database row for that organization).
 
