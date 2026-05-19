@@ -1,8 +1,11 @@
-// File: next.config.ts
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Turbopack configuration removed - defaults to project root
+  allowedDevOrigins: [
+    "*.janeway.replit.dev",
+    "*.replit.dev",
+    "*.repl.co",
+  ],
 };
 
 export default nextConfig;
