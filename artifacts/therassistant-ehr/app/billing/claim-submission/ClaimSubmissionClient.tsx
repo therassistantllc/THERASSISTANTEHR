@@ -12,17 +12,34 @@ type Batch837P = {
   submittedAt?: unknown;
 };
 
-type Payload = {
+type ReadinessMetrics = {
+  total: number;
+  blocked: number;
+  readyForClaim: number;
+  claimCreated: number;
+  validationFailed: number;
+  readyForBatch: number;
+};
+
+type BatchMetrics = {
+  total: number;
+  readyToGenerate: number;
+  generated: number;
+  submitted: number;
+  rejected: number;
+};
+
+type BatchPayload = {
   success: boolean;
   error?: string;
-  metrics?: {
-    total: number;
-    readyToGenerate: number;
-    generated: number;
-    submitted: number;
-    rejected: number;
-  };
+  metrics?: BatchMetrics;
   batches?: Batch837P[];
+};
+
+type ReadinessPayload = {
+  success: boolean;
+  error?: string;
+  metrics?: ReadinessMetrics;
 };
 
 function getOrganizationId() {
@@ -43,7 +60,8 @@ function agingBucket(value: unknown) {
 
 export default function ClaimSubmissionClient() {
   const organizationId = useMemo(() => getOrganizationId(), []);
-  const [payload, setPayload] = useState<Payload | null>(null);
+  const [batchPayload, setBatchPayload] = useState<BatchPayload | null>(null);
+  const [readinessPayload, setReadinessPayload] = useState<ReadinessPayload | null>(null);
   const [loading, setLoading] = useState(Boolean(organizationId));
   const [error, setError] = useState<string | null>(null);
   const missingOrgMessage = "Missing organizationId. Add ?organizationId=... to the URL or configure NEXT_PUBLIC_ORGANIZATION_ID.";
@@ -54,11 +72,23 @@ export default function ClaimSubmissionClient() {
     let cancelled = false;
     async function load() {
       try {
-        const response = await fetch(`/api/billing/837p-batches?organizationId=${encodeURIComponent(organizationId)}`, { cache: "no-store" });
-        const json = (await response.json()) as Payload;
+        const [batchRes, readinessRes] = await Promise.all([
+          fetch(`/api/billing/837p-batches?organizationId=${encodeURIComponent(organizationId)}`, { cache: "no-store" }),
+          fetch(`/api/billing/claim-readiness?organizationId=${encodeURIComponent(organizationId)}`, { cache: "no-store" }),
+        ]);
+
+        const [batchJson, readinessJson] = await Promise.all([
+          batchRes.json() as Promise<BatchPayload>,
+          readinessRes.json() as Promise<ReadinessPayload>,
+        ]);
+
         if (cancelled) return;
-        if (!response.ok || !json.success) throw new Error(json.error ?? "Failed to load claim submission center");
-        setPayload(json);
+
+        if (!batchRes.ok || !batchJson.success) throw new Error(batchJson.error ?? "Failed to load 837P batch data");
+        if (!readinessRes.ok || !readinessJson.success) throw new Error(readinessJson.error ?? "Failed to load claim readiness data");
+
+        setBatchPayload(batchJson);
+        setReadinessPayload(readinessJson);
       } catch (loadError) {
         if (!cancelled) setError(loadError instanceof Error ? loadError.message : "Failed to load claim submission center");
       } finally {
@@ -72,13 +102,22 @@ export default function ClaimSubmissionClient() {
     };
   }, [organizationId]);
 
-  const metrics = payload?.metrics ?? { total: 0, readyToGenerate: 0, generated: 0, submitted: 0, rejected: 0 };
-  const batches = payload?.batches ?? [];
+  const batchMetrics = batchPayload?.metrics ?? { total: 0, readyToGenerate: 0, generated: 0, submitted: 0, rejected: 0 };
+  const readinessMetrics = readinessPayload?.metrics ?? { total: 0, blocked: 0, readyForClaim: 0, claimCreated: 0, validationFailed: 0, readyForBatch: 0 };
+  const batches = batchPayload?.batches ?? [];
   const orgQuery = organizationId ? `?organizationId=${encodeURIComponent(organizationId)}` : "";
+
+  const readyToSubmit = readinessMetrics.readyForClaim + readinessMetrics.readyForBatch + batchMetrics.readyToGenerate + batchMetrics.generated;
+  const validationErrors = readinessMetrics.validationFailed;
+
+  const submittedBatches = batches.filter((b) => String(b.status ?? "") === "submitted");
+  const rejectedBatches = batches.filter((b) => String(b.status ?? "") === "rejected");
+  const submittedClaims = submittedBatches.reduce((sum, b) => sum + b.claimCount, 0);
+  const rejectedClaims = rejectedBatches.reduce((sum, b) => sum + b.claimCount, 0);
 
   const aging = batches.reduce<Record<string, number>>((acc, batch) => {
     const bucket = agingBucket(batch.submittedAt);
-    acc[bucket] = (acc[bucket] ?? 0) + 1;
+    acc[bucket] = (acc[bucket] ?? 0) + batch.claimCount;
     return acc;
   }, {});
 
@@ -102,10 +141,10 @@ export default function ClaimSubmissionClient() {
       {error ? <div className="alert-panel">{error}</div> : null}
 
       <section className="metric-grid">
-        <article className="metric-card"><span>Ready to Submit</span><strong>{loading ? "-" : metrics.readyToGenerate + metrics.generated}</strong></article>
-        <article className="metric-card"><span>Validation Errors</span><strong>{loading ? "-" : metrics.rejected}</strong></article>
-        <article className="metric-card"><span>Submitted Claims</span><strong>{loading ? "-" : metrics.submitted}</strong></article>
-        <article className="metric-card"><span>Rejections</span><strong>{loading ? "-" : metrics.rejected}</strong></article>
+        <article className="metric-card"><span>Ready to Submit</span><strong>{loading ? "-" : readyToSubmit}</strong></article>
+        <article className="metric-card"><span>Validation Errors</span><strong>{loading ? "-" : validationErrors}</strong></article>
+        <article className="metric-card"><span>Submitted Claims</span><strong>{loading ? "-" : submittedClaims}</strong></article>
+        <article className="metric-card"><span>Rejections</span><strong>{loading ? "-" : rejectedClaims}</strong></article>
       </section>
 
       <section className="chart-grid">
@@ -117,13 +156,12 @@ export default function ClaimSubmissionClient() {
             <p><strong>Aging 8-14:</strong> {loading ? "-" : (aging["8-14 days"] ?? 0)}</p>
             <p><strong>Aging 15-30:</strong> {loading ? "-" : (aging["15-30 days"] ?? 0)}</p>
             <p><strong>Aging 31+:</strong> {loading ? "-" : (aging["31+ days"] ?? 0)}</p>
-            <p><strong>Secondary Claims:</strong> Placeholder until secondary payer queue is mapped.</p>
-            <p><strong>ERA Exceptions:</strong> Use billing workqueue ERA categories.</p>
+            <p><strong>Secondary Claims:</strong> {loading ? "-" : 0}</p>
+            <p><strong>ERA Exceptions:</strong> {loading ? "-" : 0}</p>
           </div>
         </article>
         <article className="panel">
           <h2>Claim Inspector</h2>
-          <p className="muted">Right-side claim inspector placeholder until dedicated /billing/claims/[id] detail page is enabled.</p>
           <div className="detail-list">
             {batches.slice(0, 5).map((batch) => (
               <p key={batch.id}><strong>{String(batch.batchNumber ?? batch.id.slice(0, 8))}</strong> · {String(batch.status ?? "pending")} · {batch.claimCount} claim(s)</p>
