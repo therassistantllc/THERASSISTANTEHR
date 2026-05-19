@@ -185,7 +185,7 @@ export default function PaymentsClient() {
               </button>
             ))}
           </div>
-          <div className={styles.queueList}>
+          <div className={`${styles.queueList} text-[10px]`}>
             {filtered.map((pmt) => {
               const icon = methodIcon(pmt.method);
               return (
