@@ -1,6 +1,6 @@
 import "server-only";
 
-import { createServerSupabaseAdminClient as createServerSupabaseAdminClientTyped } from "@/lib/supabase/server";
+import { createServerSupabaseAdminClient as createServerSupabaseAdminClient } from "@/lib/supabase/server";
 
 /**
  * Sensitive key patterns to redact from headers and request/response bodies
@@ -161,7 +161,7 @@ interface CreateTransactionLogInput {
 export async function createAvailityTransactionLog(
   input: CreateTransactionLogInput
 ): Promise<string | null> {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) {
     console.warn("Availity transaction log: Supabase client not available");
     return null;
@@ -218,7 +218,7 @@ interface UpdateTransactionLogInput {
 export async function updateAvailityTransactionLog(
   input: UpdateTransactionLogInput
 ): Promise<boolean> {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) {
     console.warn("Availity transaction log: Supabase client not available");
     return false;
@@ -267,7 +267,7 @@ interface CompleteTransactionLogInput {
 export async function completeAvailityTransactionLog(
   input: CompleteTransactionLogInput
 ): Promise<boolean> {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) {
     console.warn("Availity transaction log: Supabase client not available");
     return false;
@@ -318,7 +318,7 @@ interface FailTransactionLogInput {
 export async function failAvailityTransactionLog(
   input: FailTransactionLogInput
 ): Promise<boolean> {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) {
     console.warn("Availity transaction log: Supabase client not available");
     return false;

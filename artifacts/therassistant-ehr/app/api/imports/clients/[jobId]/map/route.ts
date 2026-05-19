@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerSupabaseAdminClient as createServerSupabaseAdminClientTyped } from "@/lib/supabase/server";
+import { createServerSupabaseAdminClient as createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import {
   applyClientImportMapping,
   CLIENT_IMPORT_CANONICAL_FIELDS,
@@ -41,7 +41,7 @@ export async function POST(
       })
     ) as ClientImportMapping;
 
-    const supabase = createServerSupabaseAdminClientTyped();
+    const supabase = createServerSupabaseAdminClient();
     if (!supabase) {
       return NextResponse.json(
         { error: "Database connection not available" },

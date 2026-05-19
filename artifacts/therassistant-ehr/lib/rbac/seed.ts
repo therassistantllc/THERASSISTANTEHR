@@ -7,7 +7,7 @@
  * - Safe to run multiple times (checks for existence before creating)
  */
 
-import { createServerSupabaseAdminClientTyped } from "@/lib/supabase/server";
+import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import {
   DEFAULT_ROLE_PERMISSIONS,
   PERMISSION_LABELS,
@@ -23,7 +23,7 @@ import { PermissionCode, StaffRoleCode } from "./constants";
  * Should be called once during initial setup
  */
 export async function seedPermissions() {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
 
   if (!supabase) {
     throw new Error("Failed to initialize Supabase client for seed");
@@ -66,7 +66,7 @@ export async function seedPermissions() {
  * Seed default roles for an organization
  */
 export async function seedRoles(organizationId: string) {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
 
   if (!supabase) {
     throw new Error("Failed to initialize Supabase client for seed");
@@ -110,7 +110,7 @@ export async function seedRoles(organizationId: string) {
  * Sets up the default permission mappings per role
  */
 export async function seedRolePermissions(organizationId: string) {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
 
   if (!supabase) {
     throw new Error("Failed to initialize Supabase client for seed");

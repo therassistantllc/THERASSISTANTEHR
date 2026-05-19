@@ -1,6 +1,6 @@
 // File: lib/clearinghouse/ClearinghouseService.ts
 import { MockClearinghouseAdapter } from "@/lib/clearinghouse/MockClearinghouseAdapter";
-import { createServerSupabaseAdminClient as createServerSupabaseAdminClientTyped } from "@/lib/supabase/server";
+import { createServerSupabaseAdminClient as createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import type {
   ClaimStatusCheck,
   ClaimStatusRequestInput,
@@ -51,7 +51,7 @@ function patientName(patient: AppPatient) {
 }
 
 async function getActiveConnection(organizationId: string): Promise<ClearinghouseConnection | null> {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) return null;
 
   const { data } = await supabase
@@ -67,7 +67,7 @@ async function getActiveConnection(organizationId: string): Promise<Clearinghous
 }
 
 async function insertTransaction(transaction: Partial<EdiTransaction>) {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) return null;
   const { patient_id: _unusedPatientId, ...safeTransaction } = transaction as Partial<EdiTransaction> & {
     patient_id?: string | null;
@@ -86,7 +86,7 @@ async function insertTransaction(transaction: Partial<EdiTransaction>) {
 }
 
 async function insertEvent(event: Partial<ClearinghouseResponseEvent>) {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) return null;
   const payload = {
     id: uuid(),
@@ -109,7 +109,7 @@ export class ClearinghouseService {
     insurancePolicyId?: string | null;
     serviceTypeCode?: string;
   }) {
-    const supabase = createServerSupabaseAdminClientTyped();
+    const supabase = createServerSupabaseAdminClient();
     if (!supabase) {
       throw new Error("SUPABASE_SERVICE_ROLE_KEY is required for clearinghouse server routes.");
     }
@@ -278,7 +278,7 @@ export class ClearinghouseService {
   }
 
   async getPatientEligibility(patientId: string) {
-    const supabase = createServerSupabaseAdminClientTyped();
+    const supabase = createServerSupabaseAdminClient();
     if (!supabase) {
       throw new Error("SUPABASE_SERVICE_ROLE_KEY is required for clearinghouse server routes.");
     }
@@ -301,7 +301,7 @@ export class ClearinghouseService {
   }
 
   async runClaimStatus(input: { claimId: string }) {
-    const supabase = createServerSupabaseAdminClientTyped();
+    const supabase = createServerSupabaseAdminClient();
     if (!supabase) {
       throw new Error("SUPABASE_SERVICE_ROLE_KEY is required for clearinghouse server routes.");
     }
@@ -474,7 +474,7 @@ export class ClearinghouseService {
   }
 
   async getClaimStatusHistory(claimId: string) {
-    const supabase = createServerSupabaseAdminClientTyped();
+    const supabase = createServerSupabaseAdminClient();
     if (!supabase) {
       throw new Error("SUPABASE_SERVICE_ROLE_KEY is required for clearinghouse server routes.");
     }
@@ -509,7 +509,7 @@ export class ClearinghouseService {
   }
 
   async getTransactions(filters: Record<string, string | null | undefined>) {
-    const supabase = createServerSupabaseAdminClientTyped();
+    const supabase = createServerSupabaseAdminClient();
     if (!supabase) {
       throw new Error("SUPABASE_SERVICE_ROLE_KEY is required for clearinghouse server routes.");
     }
@@ -530,7 +530,7 @@ export class ClearinghouseService {
   }
 
   async getEvents(filters: Record<string, string | null | undefined>) {
-    const supabase = createServerSupabaseAdminClientTyped();
+    const supabase = createServerSupabaseAdminClient();
     if (!supabase) {
       throw new Error("SUPABASE_SERVICE_ROLE_KEY is required for clearinghouse server routes.");
     }

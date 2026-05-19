@@ -3,7 +3,7 @@
  * Used for permission checks in Server Components and API routes
  */
 
-import { createServerSupabaseAdminClientTyped } from "@/lib/supabase/server";
+import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { PermissionCode, StaffRoleCode } from "./constants";
 
 export interface StaffContextData {
@@ -27,7 +27,7 @@ export async function getStaffContext(
   organizationId: string,
   staffId: string,
 ): Promise<StaffContextData | null> {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
 
   if (!supabase) {
     return null;

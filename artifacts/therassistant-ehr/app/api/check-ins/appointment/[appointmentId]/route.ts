@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
+import { DEFAULT_ORG_ID } from "@/lib/config";
 
 type DbRow = Record<string, unknown>;
 
@@ -50,7 +51,7 @@ export async function GET(request: Request, context: { params: Promise<{ appoint
 
     const { appointmentId } = await context.params;
     const { searchParams } = new URL(request.url);
-    const organizationId = searchParams.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || "11111111-1111-1111-1111-111111111111";
+    const organizationId = searchParams.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
 
     if (!organizationId) return NextResponse.json({ success: false, error: "organizationId is required" }, { status: 400 });
 
@@ -83,7 +84,7 @@ export async function POST(request: Request, context: { params: Promise<{ appoin
 
     const { appointmentId } = await context.params;
     const body = await request.json();
-    const organizationId = clean(body.organizationId) || process.env.NEXT_PUBLIC_ORGANIZATION_ID || "11111111-1111-1111-1111-111111111111";
+    const organizationId = clean(body.organizationId) || process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
     const status = clean(body.status) || "submitted";
 
     if (!organizationId) return NextResponse.json({ success: false, error: "organizationId is required" }, { status: 400 });

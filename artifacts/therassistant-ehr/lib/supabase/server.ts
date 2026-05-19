@@ -1,7 +1,6 @@
 // File: lib/supabase/server.ts
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-
-type Database = Record<string, unknown>;
+import type { Database } from "./database.types";
 
 function getServiceRoleKey() {
   // Only accept server-side env vars. NEXT_PUBLIC_ prefixed vars are bundled

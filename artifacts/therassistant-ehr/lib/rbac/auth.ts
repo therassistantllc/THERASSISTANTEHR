@@ -3,8 +3,8 @@
  * Used in API routes, server actions, and route handlers
  */
 
-import { createServerSupabaseAdminClientTyped } from "@/lib/supabase/server";
-import type { Database } from "@/src/types/supabase";
+import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
+import type { Database } from "@/lib/supabase/database.types";
 import { PermissionCode, StaffRoleCode } from "./constants";
 
 /**
@@ -37,7 +37,7 @@ export interface StaffAuthContext {
  * Returns null if not authenticated
  */
 export async function getAuthenticatedUser(): Promise<AuthenticatedUser | null> {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) return null;
 
   try {
@@ -65,7 +65,7 @@ export async function getAuthenticatedUser(): Promise<AuthenticatedUser | null> 
  * Looks up from auth metadata first, then falls back to staff_profiles table
  */
 export async function getUserOrganization(userId: string): Promise<string | null> {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) return null;
 
   // First try user metadata (fast path — set at sign-up/invite)
@@ -95,7 +95,7 @@ export async function getUserOrganization(userId: string): Promise<string | null
 export async function getStaffProfileByAuthUser(
   userId: string,
 ): Promise<Database["public"]["Tables"]["staff_profiles"]["Row"] | null> {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) return null;
 
   const { data, error } = await supabase
@@ -117,7 +117,7 @@ export async function getStaffProfileByAuthUser(
 export async function getStaffProfileById(
   staffId: string,
 ): Promise<Database["public"]["Tables"]["staff_profiles"]["Row"] | null> {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) return null;
 
   const { data, error } = await supabase
@@ -140,7 +140,7 @@ export async function getStaffRoles(
   staffId: string,
   organizationId: string,
 ): Promise<StaffRoleCode[]> {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) return [];
 
   const { data, error } = await supabase
@@ -173,7 +173,7 @@ export async function getEffectivePermissions(
   staffId: string,
   organizationId: string,
 ): Promise<PermissionCode[]> {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) return [];
 
   // First get all role IDs for this staff member
@@ -230,7 +230,7 @@ export async function loadStaffAuthContext(
   staffId: string,
   organizationId: string,
 ): Promise<StaffAuthContext | null> {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) return null;
 
   // Get staff profile

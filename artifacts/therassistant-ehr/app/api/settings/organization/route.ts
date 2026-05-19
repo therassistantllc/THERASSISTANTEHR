@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerSupabaseAdminClient, createServerSupabaseAdminClientTyped } from "@/lib/supabase/server";
+import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 
 const BILLING_PROFILE_KEY = "organization.billing_profile";
 
@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "organizationId is required" }, { status: 400 });
   }
 
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) {
     return NextResponse.json({ error: "Database connection not available" }, { status: 503 });
   }

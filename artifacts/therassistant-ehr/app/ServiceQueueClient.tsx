@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { DEFAULT_ORG_ID } from "@/lib/config";
 
 type QueueItem = {
   id: string;
@@ -31,7 +32,7 @@ type MailroomResponse = {
   items?: unknown[];
 };
 
-const ORG_ID = process.env.NEXT_PUBLIC_ORGANIZATION_ID ?? "11111111-1111-1111-1111-111111111111";
+const ORG_ID = process.env.NEXT_PUBLIC_ORGANIZATION_ID ?? DEFAULT_ORG_ID;
 
 export default function ServiceQueueClient() {
   const orgId = useMemo(() => ORG_ID, []);

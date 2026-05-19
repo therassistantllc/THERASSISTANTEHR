@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
+import { DEFAULT_ORG_ID } from "@/lib/config";
 
 type DbRow = Record<string, unknown>;
 
@@ -55,7 +56,7 @@ export async function GET(request: Request) {
     }
 
     const url = new URL(request.url);
-    const organizationId = url.searchParams.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || "11111111-1111-1111-1111-111111111111";
+    const organizationId = url.searchParams.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
     const status = url.searchParams.get("status") || "active";
     const workType = url.searchParams.get("workType") || "";
     const priority = url.searchParams.get("priority") || "";

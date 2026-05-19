@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerSupabaseAdminClientTyped } from "@/lib/supabase/server";
+import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { parseClientImportFile } from "@/lib/imports/clientImportParser";
 import { proposeClientImportMapping } from "@/lib/imports/clientImportMappingService";
 
@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
 
     const proposedMapping = proposeClientImportMapping(parsed.headers);
 
-    const supabase = createServerSupabaseAdminClientTyped();
+    const supabase = createServerSupabaseAdminClient();
     if (!supabase) {
       return NextResponse.json({ error: "Database connection not available" }, { status: 503 });
     }

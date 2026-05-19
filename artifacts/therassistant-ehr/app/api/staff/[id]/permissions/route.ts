@@ -12,7 +12,7 @@ import {
   enforceOrganizationInRoute,
   isValidUuid,
 } from "@/lib/rbac/middleware";
-import { createServerSupabaseAdminClientTyped } from "@/lib/supabase/server";
+import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { PERMISSIONS } from "@/lib/rbac/constants";
 import { getEffectivePermissions } from "@/lib/rbac/auth";
 
@@ -37,7 +37,7 @@ export async function GET(
 
   const { organizationId } = authOrError;
 
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) {
     return NextResponse.json({ error: "Server error" }, { status: 500 });
   }

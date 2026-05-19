@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import crypto from "crypto";
-import { createServerSupabaseServiceRoleClientTyped } from "@/lib/supabase/server";
+import { createServerSupabaseServiceRoleClient } from "@/lib/supabase/server";
 
 function generateUuid() {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -23,7 +23,7 @@ function extractErrorMessage(error: unknown) {
 
 export async function POST(request: Request) {
   try {
-    const supabase = createServerSupabaseServiceRoleClientTyped();
+    const supabase = createServerSupabaseServiceRoleClient();
 
     if (!supabase) {
       return NextResponse.json(

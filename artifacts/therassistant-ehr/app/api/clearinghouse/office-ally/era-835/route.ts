@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import crypto from "crypto";
 import { OfficeAllyJsonApiAdapter } from "@/lib/clearinghouse/adapters/OfficeAllyJsonApiAdapter";
 import { parse835 } from "@/lib/clearinghouse/parsers/parse835";
-import { createServerSupabaseServiceRoleClientTyped } from "@/lib/supabase/server";
-import type { Json } from "@/src/types/supabase";
+import { createServerSupabaseServiceRoleClient } from "@/lib/supabase/server";
+import type { Json } from "@/lib/supabase/database.types";
 import type { Database } from "@/lib/supabase/database.types";
 
 function generateUuid() {
@@ -24,7 +24,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: "organizationId is required" }, { status: 400 });
     }
 
-    const supabase = createServerSupabaseServiceRoleClientTyped();
+    const supabase = createServerSupabaseServiceRoleClient();
     if (!supabase) {
       return NextResponse.json(
         { success: false, error: "SUPABASE_SERVICE_ROLE_KEY is required for ERA auto-posting." },

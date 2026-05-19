@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createServerSupabaseAdminClientTyped } from "@/lib/supabase/server";
+import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { generateOfficeAlly837PBatch } from "@/lib/edi/officeAlly837p/generate837p";
 import type {
   ClaimPartiesSnapshot,
@@ -162,7 +162,7 @@ function normalizeConnection(row: Record<string, unknown>): OfficeAllyConnection
 }
 
 async function insertClaimStatusEvent(
-  supabase: ReturnType<typeof createServerSupabaseAdminClientTyped>,
+  supabase: ReturnType<typeof createServerSupabaseAdminClient>,
   claimId: string,
   source: "validation" | "837p_batch",
   status: string,
@@ -190,7 +190,7 @@ async function insertClaimStatusEvent(
 
 export async function POST(request: Request) {
   try {
-    const supabase = createServerSupabaseAdminClientTyped();
+    const supabase = createServerSupabaseAdminClient();
     if (!supabase) {
       return NextResponse.json({ error: "Database connection not available" }, { status: 500 });
     }

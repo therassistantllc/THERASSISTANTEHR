@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { NextResponse } from "next/server";
-import { createServerSupabaseServiceRoleClientTyped } from "@/lib/supabase/server";
-import type { Database } from "@/src/types/supabase";
+import { createServerSupabaseServiceRoleClient } from "@/lib/supabase/server";
+import type { Database } from "@/lib/supabase/database.types";
 
 type ClaimUpdate = Database["public"]["Tables"]["claims"]["Update"];
 
@@ -35,7 +35,7 @@ function isMissingRelation(message: string) {
 }
 
 async function resolveOrganizationId(
-  supabase: NonNullable<ReturnType<typeof createServerSupabaseServiceRoleClientTyped>>,
+  supabase: NonNullable<ReturnType<typeof createServerSupabaseServiceRoleClient>>,
   submittedOrganizationId?: string | null,
 ) {
   const submitted = String(submittedOrganizationId ?? "").trim();
@@ -59,7 +59,7 @@ async function resolveOrganizationId(
 
 export async function POST(request: Request) {
   try {
-    const supabase = createServerSupabaseServiceRoleClientTyped();
+    const supabase = createServerSupabaseServiceRoleClient();
     if (!supabase) {
       return NextResponse.json(
         {

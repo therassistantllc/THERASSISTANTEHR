@@ -11,7 +11,7 @@ import {
   requirePermissionInRoute,
   parseRequestBody,
 } from "@/lib/rbac/middleware";
-import { createServerSupabaseAdminClientTyped } from "@/lib/supabase/server";
+import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { PERMISSIONS } from "@/lib/rbac/constants";
 
 /**
@@ -25,7 +25,7 @@ export async function GET(_request: NextRequest) {
 
   const { organizationId } = authOrError;
 
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) {
     return NextResponse.json({ error: "Server error" }, { status: 500 });
   }
@@ -133,7 +133,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) {
     return NextResponse.json({ error: "Server error" }, { status: 500 });
   }

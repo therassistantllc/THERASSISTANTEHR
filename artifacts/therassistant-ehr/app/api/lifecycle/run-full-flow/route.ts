@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createServerSupabaseAdminClient as createServerSupabaseAdminClientTyped } from "@/lib/supabase/server";
+import { createServerSupabaseAdminClient as createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireRoleInRoute } from "@/lib/rbac/middleware";
 import { mapLegacyClaimInputToProfessionalClaim } from "@/lib/claims/createProfessionalClaimFromLegacyInput";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -87,7 +87,7 @@ export async function POST(request: Request) {
   if (authOrError instanceof NextResponse) return authOrError;
 
   try {
-    const supabase = createServerSupabaseAdminClientTyped();
+    const supabase = createServerSupabaseAdminClient();
     if (!supabase) return NextResponse.json({ error: "Database connection not available" }, { status: 500 });
 
     const body = await request.json();

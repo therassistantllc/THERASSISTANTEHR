@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { DEFAULT_ORG_ID } from "@/lib/config";
 
 type CheckInResponse = {
   success?: boolean;
@@ -19,8 +20,8 @@ type CheckInResponse = {
 };
 
 function getOrganizationId() {
-  if (typeof window === "undefined") return process.env.NEXT_PUBLIC_ORGANIZATION_ID || "11111111-1111-1111-1111-111111111111";
-  return new URLSearchParams(window.location.search).get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || "11111111-1111-1111-1111-111111111111";
+  if (typeof window === "undefined") return process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
+  return new URLSearchParams(window.location.search).get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
 }
 
 export default function CheckInClient({ appointmentId }: { appointmentId: string }) {

@@ -1,6 +1,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
-import { createServerSupabaseAdminClientTyped } from "@/lib/supabase/server";
+import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 
 interface PayerConfig {
   id: string;
@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
   try {
     const organizationId = req.nextUrl.searchParams.get("organization_id") || null;
 
-    const supabase = await createServerSupabaseAdminClientTyped();
+    const supabase = await createServerSupabaseAdminClient();
     if (!supabase) {
       return NextResponse.json(
         { error: "Database connection not available" },
@@ -95,7 +95,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const supabase = await createServerSupabaseAdminClientTyped();
+    const supabase = await createServerSupabaseAdminClient();
     if (!supabase) {
       return NextResponse.json(
         { error: "Database connection not available" },

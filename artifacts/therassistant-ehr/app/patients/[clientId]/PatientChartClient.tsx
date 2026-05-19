@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { DEFAULT_ORG_ID } from "@/lib/config";
 
 type InsurancePolicySummary = {
   id: string;
@@ -124,9 +125,9 @@ type DetailState = {
 };
 
 function getOrganizationId() {
-  if (typeof window === "undefined") return "11111111-1111-1111-1111-111111111111";
+  if (typeof window === "undefined") return DEFAULT_ORG_ID;
   const params = new URLSearchParams(window.location.search);
-  return params.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || "11111111-1111-1111-1111-111111111111";
+  return params.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
 }
 
 function formatDate(value: string | null | undefined) {

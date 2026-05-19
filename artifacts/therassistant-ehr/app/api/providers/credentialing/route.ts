@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
+import { DEFAULT_ORG_ID } from "@/lib/config";
 
 const CREDENTIALING_SELECT =
   "id, provider_name, credential_display, individual_npi, email, practice_name, practice_address, practice_tax_id, group_npi, group_medicaid_id, phone, taxonomy_code, individual_medicaid_id, caqh_id, other_payer_id, primary_license_number, primary_license_effective_date, payer_effective_date, payer_revalidation_date, secondary_license_number, secondary_license_effective_date, is_active, updated_at";
@@ -47,7 +48,7 @@ export async function POST(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const organizationId =
-      searchParams.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || "11111111-1111-1111-1111-111111111111";
+      searchParams.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
     if (!organizationId) {
       return NextResponse.json({ success: false, error: "organizationId is required" }, { status: 400 });
     }
@@ -113,7 +114,7 @@ export async function PATCH(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const organizationId =
-      searchParams.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || "11111111-1111-1111-1111-111111111111";
+      searchParams.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
     const id = searchParams.get("id");
 
     if (!organizationId) {

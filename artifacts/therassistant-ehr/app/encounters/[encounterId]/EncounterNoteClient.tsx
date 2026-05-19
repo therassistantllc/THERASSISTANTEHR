@@ -7,6 +7,7 @@ import DiagnosisPicker, { Diagnosis } from "@/components/encounter/DiagnosisPick
 import CptCodePanel, { ServiceLine } from "@/components/encounter/CptCodePanel";
 import ClaimReadinessSidebar, { ClaimReadinessCheck } from "@/components/encounter/ClaimReadinessSidebar";
 import SignNoteModal from "@/components/encounter/SignNoteModal";
+import { DEFAULT_ORG_ID } from "@/lib/config";
 
 type EncounterSummary = {
   success: boolean;
@@ -20,9 +21,9 @@ type EncounterSummary = {
 };
 
 function getOrganizationId() {
-  if (typeof window === "undefined") return "11111111-1111-1111-1111-111111111111";
+  if (typeof window === "undefined") return DEFAULT_ORG_ID;
   const params = new URLSearchParams(window.location.search);
-  return params.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || "11111111-1111-1111-1111-111111111111";
+  return params.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
 }
 
 function formatDate(value: string | null | undefined): string {

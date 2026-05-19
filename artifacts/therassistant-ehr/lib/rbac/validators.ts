@@ -3,8 +3,8 @@
  * Provides reusable validation functions for email, roles, staffing constraints, etc.
  */
 
-import { createServerSupabaseAdminClientTyped } from "@/lib/supabase/server";
-import type { Database } from "@/src/types/supabase";
+import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
+import type { Database } from "@/lib/supabase/database.types";
 
 /**
  * Validate email format
@@ -45,7 +45,7 @@ export async function isEmailUniqueInOrg(
   organizationId: string,
   excludeStaffId?: string,
 ): Promise<boolean> {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) return false;
 
   let query = supabase
@@ -72,7 +72,7 @@ export async function roleExistsInOrg(
   roleId: string,
   organizationId: string,
 ): Promise<boolean> {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) return false;
 
   const { data, error } = await supabase
@@ -94,7 +94,7 @@ export async function validateRoleStaffLinkage(
   roleCode: string,
   staffId: string,
 ): Promise<{ valid: boolean; reason?: string }> {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) return { valid: false, reason: "Database error" };
 
   // Clinician role may require provider profile
@@ -124,7 +124,7 @@ export async function isLastActiveAdmin(
   staffId: string,
   organizationId: string,
 ): Promise<boolean> {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) return false;
 
   // Get admin role ID for this org
@@ -161,7 +161,7 @@ export async function staffHasRoleAssignment(
   roleId: string,
   organizationId: string,
 ): Promise<boolean> {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) return false;
 
   const { data, error } = await supabase
@@ -180,7 +180,7 @@ export async function staffHasRoleAssignment(
  * Check if permission exists globally
  */
 export async function permissionExists(permissionCode: string): Promise<boolean> {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) return false;
 
   const { data, error } = await supabase
@@ -198,7 +198,7 @@ export async function permissionExists(permissionCode: string): Promise<boolean>
 export async function getOrganizationDetails(
   organizationId: string,
 ): Promise<Database["public"]["Tables"]["organization_members"]["Row"] | null> {
-  const supabase = createServerSupabaseAdminClientTyped();
+  const supabase = createServerSupabaseAdminClient();
   if (!supabase) return null;
 
   const { data, error } = await supabase

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerSupabaseAdminClientTyped } from "@/lib/supabase/server";
+import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 
 export async function GET(
   req: NextRequest,
@@ -14,7 +14,7 @@ export async function GET(
     const includeRawRows = searchParams.get("includeRawRows") === "true";
     const offset = (pageNumber - 1) * pageSize;
 
-    const supabase = createServerSupabaseAdminClientTyped();
+    const supabase = createServerSupabaseAdminClient();
     if (!supabase) {
       return NextResponse.json(
         { error: "Database connection not available" },

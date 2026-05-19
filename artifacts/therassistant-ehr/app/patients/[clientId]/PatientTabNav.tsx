@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import styles from "@/components/layout/AppShell.module.css";
+import { DEFAULT_ORG_ID } from "@/lib/config";
 
 const PATIENT_TABS = [
   { label: "Summary",     slug: "" },
@@ -20,7 +21,7 @@ const PATIENT_TABS = [
 export default function PatientTabNav({ clientId }: { clientId: string }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const orgId = searchParams.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || "11111111-1111-1111-1111-111111111111";
+  const orgId = searchParams.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
 
   return (
     <div className={styles.patientTabs} role="navigation" aria-label="Patient chart tabs">

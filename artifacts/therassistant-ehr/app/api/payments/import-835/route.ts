@@ -1,9 +1,9 @@
 // File: app/api/payments/import-835/route.ts
 import { NextResponse } from "next/server";
 import crypto from "crypto";
-import { createServerSupabaseAdminClient as createServerSupabaseServiceRoleClientTyped } from "@/lib/supabase/server";
+import { createServerSupabaseAdminClient as createServerSupabaseServiceRoleClient } from "@/lib/supabase/server";
 import { parse835 } from "@/lib/clearinghouse/parsers/parse835";
-import type { Json } from "@/src/types/supabase";
+import type { Json } from "@/lib/supabase/database.types";
 
 function generateUuid() {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -29,7 +29,7 @@ function extractErrorMessage(error: unknown) {
 }
 
 async function resolveOrganizationId(
-  supabase: NonNullable<ReturnType<typeof createServerSupabaseServiceRoleClientTyped>>,
+  supabase: NonNullable<ReturnType<typeof createServerSupabaseServiceRoleClient>>,
   submittedOrganizationId: string,
 ) {
   if (submittedOrganizationId && isUuid(submittedOrganizationId)) {
@@ -67,7 +67,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: "835 file is required" }, { status: 400 });
     }
 
-    const supabase = createServerSupabaseServiceRoleClientTyped();
+    const supabase = createServerSupabaseServiceRoleClient();
 
     if (!supabase) {
       return NextResponse.json(
