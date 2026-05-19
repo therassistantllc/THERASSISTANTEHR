@@ -77,7 +77,7 @@ function validateField(field: keyof BillingProfile, value: string): string {
       return "";
     }
     case "billing_zip": {
-      if (!/^\d{5}(-\d{4})?$/.test(v)) return "ZIP must be 5 digits or ZIP+4 (e.g. 80202 or 80202-1234).";
+      if (!/^\d{5}(-\d{4})?$|^\d{9}$/.test(v)) return "ZIP must be 5 digits, 9 digits, or ZIP+4 (e.g. 80202, 802021234, or 80202-1234).";
       return "";
     }
     case "billing_phone": {
@@ -241,7 +241,7 @@ export default function OrganizationSettingsClient() {
     );
   }
 
-  const saveBlocked = hasErrors(errors) || saving || !organizationId;
+  const saveBlocked = hasErrors(validateAll(billing)) || saving || !organizationId;
 
   return (
     <main className="app-shell">
