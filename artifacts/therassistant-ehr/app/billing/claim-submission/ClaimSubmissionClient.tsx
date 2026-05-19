@@ -110,12 +110,14 @@ export default function ClaimSubmissionClient() {
   const readyToSubmit = readinessMetrics.readyForClaim + readinessMetrics.readyForBatch + batchMetrics.readyToGenerate + batchMetrics.generated;
   const validationErrors = readinessMetrics.validationFailed;
 
-  const submittedBatches = batches.filter((b) => String(b.status ?? "") === "submitted");
+  // "accepted" = clearinghouse accepted the submission, so it counts as submitted too
+  const SUBMITTED_STATUSES = new Set(["submitted", "accepted"]);
+  const submittedBatches = batches.filter((b) => SUBMITTED_STATUSES.has(String(b.status ?? "")));
   const rejectedBatches = batches.filter((b) => String(b.status ?? "") === "rejected");
   const submittedClaims = submittedBatches.reduce((sum, b) => sum + b.claimCount, 0);
   const rejectedClaims = rejectedBatches.reduce((sum, b) => sum + b.claimCount, 0);
 
-  const aging = batches.reduce<Record<string, number>>((acc, batch) => {
+  const aging = submittedBatches.reduce<Record<string, number>>((acc, batch) => {
     const bucket = agingBucket(batch.submittedAt);
     acc[bucket] = (acc[bucket] ?? 0) + batch.claimCount;
     return acc;
