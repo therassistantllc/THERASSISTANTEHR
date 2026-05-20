@@ -1,0 +1,22 @@
+{
+  "name": "GAD-7",
+  "description": "Generalized Anxiety Disorder-7 — anxiety screening (0-21).",
+  "loinc": "70274-6",
+  "root": {
+    "id": "9ad70000-0000-4000-8000-000000000000",
+    "name": "GAD-7 total score",
+    "datatype": "numeric",
+    "conceptClass": "LabSet",
+    "isSet": true
+  },
+  "answersRef": "phq9.answers",
+  "questions": [
+    { "id": "9ad70000-0000-4000-8000-000000000001", "name": "GAD-7 Q1 — Nervous or on edge", "prompt": "Feeling nervous, anxious, or on edge" },
+    { "id": "9ad70000-0000-4000-8000-000000000002", "name": "GAD-7 Q2 — Cannot stop worrying", "prompt": "Not being able to stop or control worrying" },
+    { "id": "9ad70000-0000-4000-8000-000000000003", "name": "GAD-7 Q3 — Worrying too much", "prompt": "Worrying too much about different things" },
+    { "id": "9ad70000-0000-4000-8000-000000000004", "name": "GAD-7 Q4 — Trouble relaxing", "prompt": "Trouble relaxing" },
+    { "id": "9ad70000-0000-4000-8000-000000000005", "name": "GAD-7 Q5 — Restless", "prompt": "Being so restless that it is hard to sit still" },
+    { "id": "9ad70000-0000-4000-8000-000000000006", "name": "GAD-7 Q6 — Easily annoyed", "prompt": "Becoming easily annoyed or irritable" },
+    { "id": "9ad70000-0000-4000-8000-000000000007", "name": "GAD-7 Q7 — Afraid", "prompt": "Feeling afraid as if something awful might happen" }
+  ]
+}

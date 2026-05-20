@@ -1,0 +1,29 @@
+{
+  "name": "PHQ-9",
+  "description": "Patient Health Questionnaire-9 — depression screening (0-27).",
+  "loinc": "44261-6",
+  "root": {
+    "id": "9c800000-0000-4000-8000-000000000000",
+    "name": "PHQ-9 total score",
+    "datatype": "numeric",
+    "conceptClass": "LabSet",
+    "isSet": true
+  },
+  "answers": [
+    { "id": "c01ce700-0000-4000-8000-000000000000", "name": "Not at all", "value": 0 },
+    { "id": "c01ce700-0000-4000-8000-000000000001", "name": "Several days", "value": 1 },
+    { "id": "c01ce700-0000-4000-8000-000000000002", "name": "More than half the days", "value": 2 },
+    { "id": "c01ce700-0000-4000-8000-000000000003", "name": "Nearly every day", "value": 3 }
+  ],
+  "questions": [
+    { "id": "9c800000-0000-4000-8000-000000000001", "loinc": "44250-9", "name": "PHQ-9 Q1 — Little interest or pleasure", "prompt": "Little interest or pleasure in doing things" },
+    { "id": "9c800000-0000-4000-8000-000000000002", "loinc": "44255-8", "name": "PHQ-9 Q2 — Feeling down or depressed", "prompt": "Feeling down, depressed, or hopeless" },
+    { "id": "9c800000-0000-4000-8000-000000000003", "loinc": "44259-0", "name": "PHQ-9 Q3 — Sleep trouble", "prompt": "Trouble falling or staying asleep, or sleeping too much" },
+    { "id": "9c800000-0000-4000-8000-000000000004", "loinc": "44254-1", "name": "PHQ-9 Q4 — Tired or low energy", "prompt": "Feeling tired or having little energy" },
+    { "id": "9c800000-0000-4000-8000-000000000005", "loinc": "44251-7", "name": "PHQ-9 Q5 — Appetite", "prompt": "Poor appetite or overeating" },
+    { "id": "9c800000-0000-4000-8000-000000000006", "loinc": "44258-2", "name": "PHQ-9 Q6 — Feeling bad about self", "prompt": "Feeling bad about yourself - or that you are a failure" },
+    { "id": "9c800000-0000-4000-8000-000000000007", "loinc": "44252-5", "name": "PHQ-9 Q7 — Concentration", "prompt": "Trouble concentrating on things" },
+    { "id": "9c800000-0000-4000-8000-000000000008", "loinc": "44253-3", "name": "PHQ-9 Q8 — Psychomotor", "prompt": "Moving or speaking slowly, or being fidgety/restless" },
+    { "id": "9c800000-0000-4000-8000-000000000009", "loinc": "44260-8", "name": "PHQ-9 Q9 — Self-harm ideation", "prompt": "Thoughts that you would be better off dead, or of hurting yourself" }
+  ]
+}
