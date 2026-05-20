@@ -1,5 +1,6 @@
+import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
-import { ORGANIZATION_ID } from "@/lib/config";
+import { requireAuthentication } from "@/lib/rbac/middleware";
 import {
   clientToFhirPatient,
   fhirJson,
@@ -29,12 +30,21 @@ function safeTerm(raw: string): string {
 
 export async function GET(request: Request) {
   try {
+    const auth = await requireAuthentication();
+    if (auth instanceof NextResponse) {
+      const status = auth.status;
+      const code = status === 401 ? "login" : "forbidden";
+      return operationOutcome("error", code, status === 401 ? "Not authenticated" : "Access denied", status);
+    }
+
     const supabase = createServerSupabaseAdminClient();
     if (!supabase) return operationOutcome("error", "exception", "Database connection not available", 500);
 
     const { searchParams, protocol, host } = new URL(request.url);
     const baseUrl = `${protocol}//${host}/api/fhir/R4`;
-    const organizationId = ORGANIZATION_ID;
+    // Organization is resolved from the authenticated staff session — query-param
+    // org ids are intentionally ignored on FHIR routes.
+    const organizationId = auth.organizationId;
 
     const identifierRaw = (searchParams.get("identifier") || "").trim();
     const identifier = safeTerm(

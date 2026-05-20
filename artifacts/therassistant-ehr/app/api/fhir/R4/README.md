@@ -60,11 +60,15 @@ each containing `fullUrl` and the matching `Patient` resource.
 
 ## Auth & org scoping
 
-For the first cut, the FHIR surface is gated by the same application auth as
-the rest of the EHR. The organization is resolved **server-side** from the
-configured `ORGANIZATION_ID` — query-string org ids are intentionally
-ignored on these routes so an outside caller cannot pivot between
-organizations by changing a URL parameter.
+For the first cut, the FHIR Patient endpoints are gated by the same
+`requireAuthentication` middleware the rest of the protected EHR APIs use
+— an unauthenticated request gets a FHIR `OperationOutcome` with HTTP 401,
+and an inactive staff account gets 403. The organization id is taken from
+the **authenticated staff session** (never from a query parameter or body),
+so an outside caller cannot pivot between organizations by changing a URL.
+
+`GET /api/fhir/R4/metadata` is intentionally unauthenticated — the
+CapabilityStatement is the standard discovery document and contains no PHI.
 
 Public partner-facing access (SMART-on-FHIR, OAuth scopes, Bulk Data) is a
 follow-up. When that lands, this README should be updated with the new auth
