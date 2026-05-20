@@ -8,6 +8,35 @@ type DashboardRole =
   | "credentialing"
   | "owner_executive";
 
+// Work/queue type values that represent clinical work (notes, signatures,
+// chart review, intake follow-ups, etc.). Anything not in this set is treated
+// as a billing/revenue-cycle item and is excluded from the Home dashboard so
+// clinicians only see work they can actually act on. Billing items continue
+// to surface in the Billing area unchanged.
+const CLINICAL_WORK_TYPES = new Set<string>([
+  "documentation_hold",
+  "documentation_needed",
+  "note_signature_needed",
+  "signature_needed",
+  "chart_review",
+  "clinical_review",
+  "intake_review",
+  "intake_followup",
+  "intake_follow_up",
+  "phq_high_risk",
+  "clinical_alert",
+]);
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function isClinicalWorkqueueItem(item: any): boolean {
+  if (!item || typeof item !== "object") return false;
+  const candidates = [item.queue_type, item.work_type, item.workType, item.category]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .map((value) => value.toLowerCase());
+  if (candidates.length === 0) return false;
+  return candidates.some((value) => CLINICAL_WORK_TYPES.has(value));
+}
+
 export function getHomeDashboardData() {
   const hasSeedData = (canonicalSeed.appointments?.length ?? 0) > 0;
 
@@ -15,7 +44,7 @@ export function getHomeDashboardData() {
     return {
       appointments: demoOperationalData.appointments,
       claims: demoOperationalData.claims,
-      workqueueItems: demoOperationalData.workqueueItems,
+      workqueueItems: demoOperationalData.workqueueItems.filter(isClinicalWorkqueueItem),
       eligibilityChecks: demoOperationalData.eligibilityChecks,
       supportTickets: demoOperationalData.supportTickets,
       clearinghouseActivity: demoOperationalData.clearinghouseActivity,
@@ -26,7 +55,7 @@ export function getHomeDashboardData() {
   return {
     appointments: canonicalSeed.appointments ?? [],
     claims: canonicalSeed.claims ?? [],
-    workqueueItems: canonicalSeed.workqueue_items ?? [],
+    workqueueItems: (canonicalSeed.workqueue_items ?? []).filter(isClinicalWorkqueueItem),
     eligibilityChecks: canonicalSeed.eligibility_checks ?? [],
     supportTickets: canonicalSeed.support_tickets ?? [],
     clearinghouseActivity: [],
@@ -66,9 +95,9 @@ export function buildHomeDashboardPayload(role: string) {
       },
       {
         key: "workqueue",
-        label: "Workqueue",
+        label: "Clinical Tasks",
         value: data.workqueueItems.length,
-        href: "/billing/workqueue",
+        href: "/workqueue",
       },
       {
         key: "claims",
