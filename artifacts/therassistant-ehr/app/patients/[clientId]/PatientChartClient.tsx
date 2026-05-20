@@ -155,10 +155,20 @@ type DetailState = {
   mailroomItems: MailroomSummary[];
 };
 
-function getOrganizationId() {
-  if (typeof window === "undefined") return DEFAULT_ORG_ID;
+function getOrganizationIdFromUrl(): string | null {
+  if (typeof window === "undefined") return null;
   const params = new URLSearchParams(window.location.search);
-  return params.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
+  return params.get("organizationId");
+}
+
+function resolveOrganizationId(initialOrganizationId?: string): string {
+  // Prefer the server-resolved org (from the authenticated staff session),
+  // then a URL query override (kept for back-compat / direct links),
+  // then the public env fallback, then the hard-coded default.
+  if (initialOrganizationId) return initialOrganizationId;
+  const fromUrl = getOrganizationIdFromUrl();
+  if (fromUrl) return fromUrl;
+  return process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
 }
 
 function formatDate(value: string | null | undefined) {
@@ -200,7 +210,13 @@ async function fetchList<T>(url: string, field: string): Promise<T[]> {
   }
 }
 
-export default function PatientChartClient({ clientId }: { clientId: string }) {
+export default function PatientChartClient({
+  clientId,
+  initialOrganizationId,
+}: {
+  clientId: string;
+  initialOrganizationId?: string;
+}) {
   const [summary, setSummary] = useState<PatientSummary | null>(null);
   const [details, setDetails] = useState<DetailState>({
     appointments: [],
@@ -218,7 +234,10 @@ export default function PatientChartClient({ clientId }: { clientId: string }) {
   const [intakeMessage, setIntakeMessage] = useState<string | null>(null);
   const [cardRefresh, setCardRefresh] = useState(0);
   const [cardBusy, setCardBusy] = useState<string | null>(null);
-  const organizationId = useMemo(() => getOrganizationId(), []);
+  const organizationId = useMemo(
+    () => resolveOrganizationId(initialOrganizationId),
+    [initialOrganizationId],
+  );
 
   async function reloadIntake() {
     try {
@@ -340,7 +359,10 @@ export default function PatientChartClient({ clientId }: { clientId: string }) {
 
     async function loadPatient() {
       if (!organizationId) {
-        setError("Missing organizationId. Add ?organizationId=... to the URL or configure NEXT_PUBLIC_ORGANIZATION_ID.");
+        // Should not happen in practice — the server now resolves the org from
+        // the authenticated session and falls back to ORGANIZATION_ID. Leave a
+        // gentler message in case both resolution paths somehow fail.
+        setError("Could not determine your organization. Please sign in again.");
         setLoading(false);
         return;
       }

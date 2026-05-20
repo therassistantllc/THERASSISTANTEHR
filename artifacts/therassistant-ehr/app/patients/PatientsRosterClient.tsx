@@ -23,10 +23,13 @@ type Payload = {
   clients?: ClientRecord[];
 };
 
-function getOrganizationId() {
-  if (typeof window === "undefined") return DEFAULT_ORG_ID;
-  const params = new URLSearchParams(window.location.search);
-  return params.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
+function resolveOrganizationId(initialOrganizationId?: string): string {
+  if (initialOrganizationId) return initialOrganizationId;
+  if (typeof window !== "undefined") {
+    const fromUrl = new URLSearchParams(window.location.search).get("organizationId");
+    if (fromUrl) return fromUrl;
+  }
+  return process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
 }
 
 function formatMoney(value: number) {
@@ -40,8 +43,15 @@ function statusClass(value: unknown) {
   return "status status-yellow";
 }
 
-export default function PatientsRosterClient() {
-  const organizationId = useMemo(() => getOrganizationId(), []);
+export default function PatientsRosterClient({
+  initialOrganizationId,
+}: {
+  initialOrganizationId?: string;
+} = {}) {
+  const organizationId = useMemo(
+    () => resolveOrganizationId(initialOrganizationId),
+    [initialOrganizationId],
+  );
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "deceased">("all");
   const [balanceFilter, setBalanceFilter] = useState<"all" | "with-balance">("all");
@@ -51,7 +61,7 @@ export default function PatientsRosterClient() {
 
   async function loadClients(search = query) {
     if (!organizationId) {
-      setError("Missing organizationId. Add ?organizationId=... to the URL or configure NEXT_PUBLIC_ORGANIZATION_ID.");
+      setError("Could not determine your organization. Please sign in again.");
       setLoading(false);
       return;
     }
