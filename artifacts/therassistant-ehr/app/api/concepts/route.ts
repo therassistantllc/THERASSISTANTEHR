@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
+import { getOrgIdFromRequest } from "@/lib/config";
 
 type DbRow = Record<string, unknown>;
 
@@ -35,10 +36,17 @@ export async function GET(request: Request) {
     const includeRetired = searchParams.get("includeRetired") === "true";
     const limit = Math.min(Math.max(Number(searchParams.get("limit") || 50), 1), 200);
     const offset = Math.max(Number(searchParams.get("offset") || 0), 0);
+    const organizationId = getOrgIdFromRequest({ url: request.url });
 
+    // Visibility: global dictionary (created_by_organization_id IS NULL) plus
+    // anything created by the caller's org. Other orgs' local concepts are hidden.
     let query = supabase
       .from("concepts")
-      .select("id, name, description, datatype, concept_class, is_set, retired, created_by_organization_id, created_at, updated_at", { count: "exact" })
+      .select(
+        "id, name, description, datatype, concept_class, is_set, retired, created_by_organization_id, created_at, updated_at",
+        { count: "exact" },
+      )
+      .or(`created_by_organization_id.is.null,created_by_organization_id.eq.${organizationId}`)
       .order("name", { ascending: true })
       .range(offset, offset + limit - 1);
 
@@ -54,6 +62,7 @@ export async function GET(request: Request) {
       total: count ?? null,
       limit,
       offset,
+      organizationId,
       concepts: ((data ?? []) as DbRow[]).map(rowToConcept),
     });
   } catch (error) {

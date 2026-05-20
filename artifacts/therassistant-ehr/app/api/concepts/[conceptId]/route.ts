@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
+import { getOrgIdFromRequest } from "@/lib/config";
 
 type DbRow = Record<string, unknown>;
 
@@ -22,7 +23,7 @@ function rowToConcept(row: DbRow) {
   };
 }
 
-export async function GET(_request: Request, context: { params: Promise<{ conceptId: string }> }) {
+export async function GET(request: Request, context: { params: Promise<{ conceptId: string }> }) {
   try {
     const supabase = createServerSupabaseAdminClient();
     if (!supabase) {
@@ -31,7 +32,11 @@ export async function GET(_request: Request, context: { params: Promise<{ concep
 
     const { conceptId } = await context.params;
     if (!conceptId) return NextResponse.json({ success: false, error: "conceptId is required" }, { status: 400 });
+    const organizationId = getOrgIdFromRequest({ url: request.url });
 
+    // Single round-trip: concept + names + mappings + answers (+ each answer's
+    // concept) + set members (+ each member concept). Org visibility is enforced
+    // on the top-level concept; child rows inherit access via the parent.
     const { data: concept, error: cErr } = await supabase
       .from("concepts")
       .select(`
@@ -42,12 +47,19 @@ export async function GET(_request: Request, context: { params: Promise<{ concep
           answer_concept_id,
           sort_weight,
           answer:concepts!concept_answers_answer_concept_id_fkey(id, name, datatype, concept_class)
+        ),
+        concept_set_members!concept_set_members_concept_set_id_fkey(
+          member_concept_id,
+          sort_weight,
+          member:concepts!concept_set_members_member_concept_id_fkey(id, name, description, datatype, concept_class)
         )
       `)
       .eq("id", conceptId)
+      .or(`created_by_organization_id.is.null,created_by_organization_id.eq.${organizationId}`)
       .order("name_type", { foreignTable: "concept_names", ascending: true })
       .order("code_system", { foreignTable: "concept_mappings", ascending: true })
       .order("sort_weight", { foreignTable: "concept_answers", ascending: true })
+      .order("sort_weight", { foreignTable: "concept_set_members", ascending: true })
       .maybeSingle();
     if (cErr) return NextResponse.json({ success: false, error: cErr.message }, { status: 422 });
     if (!concept) return NextResponse.json({ success: false, error: "Concept not found" }, { status: 404 });
@@ -56,6 +68,7 @@ export async function GET(_request: Request, context: { params: Promise<{ concep
       concept_names?: DbRow[];
       concept_mappings?: DbRow[];
       concept_answers?: (DbRow & { answer?: DbRow | DbRow[] })[];
+      concept_set_members?: (DbRow & { member?: DbRow | DbRow[] })[];
     };
 
     const names = (c.concept_names ?? []).map((row) => ({
@@ -80,17 +93,26 @@ export async function GET(_request: Request, context: { params: Promise<{ concep
         conceptClass: ans ? clean(ans.concept_class) : "",
       };
     });
+    const members = (c.concept_set_members ?? []).map((row) => {
+      const m = Array.isArray(row.member) ? row.member[0] : row.member;
+      return {
+        memberConceptId: clean(row.member_concept_id),
+        sortWeight: Number(row.sort_weight ?? 0),
+        name: m ? clean(m.name) : "",
+        description: m ? clean(m.description) : "",
+        datatype: m ? clean(m.datatype) : "",
+        conceptClass: m ? clean(m.concept_class) : "",
+      };
+    });
 
-    // For LabSet-style "is_set" concepts, also return member questions that point at this set via concept_set membership.
-    // We do not have a concept_set table yet; members are discoverable today via the seed pattern (PHQ-9 root + numbered children).
-    // Keeping the response shape forward-compatible: include a `members: []` field as a placeholder.
     return NextResponse.json({
       success: true,
+      organizationId,
       concept: rowToConcept(concept as DbRow),
       names,
       mappings,
       answers,
-      members: [],
+      members,
     });
   } catch (error) {
     console.error("Concept detail API error:", error);

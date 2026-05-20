@@ -70,6 +70,22 @@ create index if not exists idx_concept_answers_concept on public.concept_answers
 create unique index if not exists uq_concept_answers
   on public.concept_answers (concept_id, answer_concept_id);
 
+-- Concept set membership: a "set" concept (is_set = true, e.g. PHQ-9 root) has
+-- ordered member concepts (its 9 questions). Mirrors OpenMRS concept_set.
+create table if not exists public.concept_set_members (
+  id                 uuid primary key default gen_random_uuid(),
+  concept_set_id     uuid not null references public.concepts(id) on delete cascade,
+  member_concept_id  uuid not null references public.concepts(id) on delete cascade,
+  sort_weight        integer not null default 0,
+  created_at         timestamptz not null default now()
+);
+create index if not exists idx_concept_set_members on public.concept_set_members (concept_set_id, sort_weight);
+create unique index if not exists uq_concept_set_members
+  on public.concept_set_members (concept_set_id, member_concept_id);
+alter table public.concept_set_members enable row level security;
+drop policy if exists concept_set_members_read on public.concept_set_members;
+create policy concept_set_members_read on public.concept_set_members for select to authenticated using (true);
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- RLS — dictionary is globally readable to authenticated users.
 -- Writes are restricted by org match on created_by_organization_id (or null = global, admin-only via service role).
@@ -107,6 +123,9 @@ create policy concept_answers_read on public.concept_answers for select to authe
 -- Stable UUIDs so future re-runs and JSON re-imports stay aligned.
 -- ─────────────────────────────────────────────────────────────────────────────
 
+-- Helper: every seeded concept upsert updates name/description/datatype/class/is_set
+-- so re-applying the seed (or future JSON re-imports) keeps the DB aligned.
+
 -- Shared 0-3 Likert answer choices (PHQ-9/GAD-7 share these)
 insert into public.concepts (id, name, description, datatype, concept_class, is_set)
 values
@@ -114,7 +133,13 @@ values
   ('c01ce700-0000-4000-8000-000000000001', 'Several days', '1 - Several days', 'coded', 'Misc', false),
   ('c01ce700-0000-4000-8000-000000000002', 'More than half the days', '2 - More than half the days', 'coded', 'Misc', false),
   ('c01ce700-0000-4000-8000-000000000003', 'Nearly every day', '3 - Nearly every day', 'coded', 'Misc', false)
-on conflict (id) do nothing;
+on conflict (id) do update set
+  name = excluded.name,
+  description = excluded.description,
+  datatype = excluded.datatype,
+  concept_class = excluded.concept_class,
+  is_set = excluded.is_set,
+  updated_at = now();
 
 -- PHQ-9 root + 9 questions
 insert into public.concepts (id, name, description, datatype, concept_class, is_set)
@@ -129,7 +154,9 @@ values
   ('9c800000-0000-4000-8000-000000000007', 'PHQ-9 Q7 — Concentration', 'Trouble concentrating on things, such as reading the newspaper or watching television', 'numeric', 'Question', false),
   ('9c800000-0000-4000-8000-000000000008', 'PHQ-9 Q8 — Psychomotor', 'Moving or speaking so slowly that other people could have noticed; or being so fidgety or restless that you have been moving around a lot more than usual', 'numeric', 'Question', false),
   ('9c800000-0000-4000-8000-000000000009', 'PHQ-9 Q9 — Self-harm ideation', 'Thoughts that you would be better off dead, or of hurting yourself in some way', 'numeric', 'Question', false)
-on conflict (id) do nothing;
+on conflict (id) do update set
+  name = excluded.name, description = excluded.description, datatype = excluded.datatype,
+  concept_class = excluded.concept_class, is_set = excluded.is_set, updated_at = now();
 
 -- GAD-7 root + 7 questions
 insert into public.concepts (id, name, description, datatype, concept_class, is_set)
@@ -142,7 +169,9 @@ values
   ('9ad70000-0000-4000-8000-000000000005', 'GAD-7 Q5 — Restless', 'Being so restless that it is hard to sit still', 'numeric', 'Question', false),
   ('9ad70000-0000-4000-8000-000000000006', 'GAD-7 Q6 — Easily annoyed', 'Becoming easily annoyed or irritable', 'numeric', 'Question', false),
   ('9ad70000-0000-4000-8000-000000000007', 'GAD-7 Q7 — Afraid', 'Feeling afraid as if something awful might happen', 'numeric', 'Question', false)
-on conflict (id) do nothing;
+on conflict (id) do update set
+  name = excluded.name, description = excluded.description, datatype = excluded.datatype,
+  concept_class = excluded.concept_class, is_set = excluded.is_set, updated_at = now();
 
 -- Vitals starter set
 insert into public.concepts (id, name, description, datatype, concept_class, is_set)
@@ -152,13 +181,17 @@ values
   ('71ca1500-0000-4000-8000-000000000003', 'Systolic blood pressure (mmHg)', 'Systolic blood pressure', 'numeric', 'Finding', false),
   ('71ca1500-0000-4000-8000-000000000004', 'Diastolic blood pressure (mmHg)', 'Diastolic blood pressure', 'numeric', 'Finding', false),
   ('71ca1500-0000-4000-8000-000000000005', 'Heart rate (bpm)', 'Heart rate in beats per minute', 'numeric', 'Finding', false)
-on conflict (id) do nothing;
+on conflict (id) do update set
+  name = excluded.name, description = excluded.description, datatype = excluded.datatype,
+  concept_class = excluded.concept_class, is_set = excluded.is_set, updated_at = now();
 
 -- Diagnosis placeholder (text class for the picker)
 insert into public.concepts (id, name, description, datatype, concept_class, is_set)
 values
   ('d1a90000-0000-4000-8000-000000000001', 'Diagnosis (free text placeholder)', 'Holds a diagnosis until a proper ICD-10-coded concept replaces it', 'text', 'Diagnosis', false)
-on conflict (id) do nothing;
+on conflict (id) do update set
+  name = excluded.name, description = excluded.description, datatype = excluded.datatype,
+  concept_class = excluded.concept_class, is_set = excluded.is_set, updated_at = now();
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Concept names (full names — synonyms can be added later)
@@ -195,7 +228,7 @@ where id in (
   '71ca1500-0000-4000-8000-000000000005',
   'd1a90000-0000-4000-8000-000000000001'
 )
-on conflict do nothing;
+on conflict (concept_id, locale, lower(name)) do update set name_type = excluded.name_type;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- LOINC mappings
@@ -217,7 +250,7 @@ insert into public.concept_mappings (concept_id, code_system, code, display) val
   ('71ca1500-0000-4000-8000-000000000003', 'LOINC', '8480-6', 'Systolic blood pressure'),
   ('71ca1500-0000-4000-8000-000000000004', 'LOINC', '8462-4', 'Diastolic blood pressure'),
   ('71ca1500-0000-4000-8000-000000000005', 'LOINC', '8867-4', 'Heart rate')
-on conflict do nothing;
+on conflict (concept_id, code_system, code) do update set display = excluded.display;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Concept answers: PHQ-9 + GAD-7 questions all use the shared 0-3 Likert set
@@ -243,8 +276,28 @@ begin
       (q, 'c01ce700-0000-4000-8000-000000000001', 1),
       (q, 'c01ce700-0000-4000-8000-000000000002', 2),
       (q, 'c01ce700-0000-4000-8000-000000000003', 3)
-    on conflict do nothing;
+    on conflict (concept_id, answer_concept_id) do update set sort_weight = excluded.sort_weight;
   end loop;
 end $$;
+
+-- PHQ-9 + GAD-7 set membership: assessment root → ordered question members.
+insert into public.concept_set_members (concept_set_id, member_concept_id, sort_weight) values
+  ('9c800000-0000-4000-8000-000000000000', '9c800000-0000-4000-8000-000000000001', 1),
+  ('9c800000-0000-4000-8000-000000000000', '9c800000-0000-4000-8000-000000000002', 2),
+  ('9c800000-0000-4000-8000-000000000000', '9c800000-0000-4000-8000-000000000003', 3),
+  ('9c800000-0000-4000-8000-000000000000', '9c800000-0000-4000-8000-000000000004', 4),
+  ('9c800000-0000-4000-8000-000000000000', '9c800000-0000-4000-8000-000000000005', 5),
+  ('9c800000-0000-4000-8000-000000000000', '9c800000-0000-4000-8000-000000000006', 6),
+  ('9c800000-0000-4000-8000-000000000000', '9c800000-0000-4000-8000-000000000007', 7),
+  ('9c800000-0000-4000-8000-000000000000', '9c800000-0000-4000-8000-000000000008', 8),
+  ('9c800000-0000-4000-8000-000000000000', '9c800000-0000-4000-8000-000000000009', 9),
+  ('9ad70000-0000-4000-8000-000000000000', '9ad70000-0000-4000-8000-000000000001', 1),
+  ('9ad70000-0000-4000-8000-000000000000', '9ad70000-0000-4000-8000-000000000002', 2),
+  ('9ad70000-0000-4000-8000-000000000000', '9ad70000-0000-4000-8000-000000000003', 3),
+  ('9ad70000-0000-4000-8000-000000000000', '9ad70000-0000-4000-8000-000000000004', 4),
+  ('9ad70000-0000-4000-8000-000000000000', '9ad70000-0000-4000-8000-000000000005', 5),
+  ('9ad70000-0000-4000-8000-000000000000', '9ad70000-0000-4000-8000-000000000006', 6),
+  ('9ad70000-0000-4000-8000-000000000000', '9ad70000-0000-4000-8000-000000000007', 7)
+on conflict (concept_set_id, member_concept_id) do update set sort_weight = excluded.sort_weight;
 
 select pg_notify('pgrst', 'reload schema');
