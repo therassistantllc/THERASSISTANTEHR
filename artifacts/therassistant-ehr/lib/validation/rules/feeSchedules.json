@@ -1,0 +1,58 @@
+[
+  {
+    "id": "feeSchedules.has_any",
+    "category": "feeSchedules",
+    "severity": "warning",
+    "message": "No fee schedule rows are configured.",
+    "fixRoute": "/settings/billing-defaults",
+    "whyItMatters": "Without a fee schedule, expected reimbursement cannot be computed and contractual adjustments at ERA posting will be guessed.",
+    "resolution": "Load your payer fee schedule(s) on the Billing Defaults settings page.",
+    "conditions": {
+      "all": [
+        { "fact": "feeSchedules", "path": "$.total", "operator": "equal", "value": 0 }
+      ]
+    }
+  },
+  {
+    "id": "feeSchedules.non_positive_allowed",
+    "category": "feeSchedules",
+    "severity": "blocking",
+    "message": "One or more fee schedule rows have a non-positive allowed amount.",
+    "fixRoute": "/settings/billing-defaults",
+    "whyItMatters": "Allowed amounts of zero or less cause negative or zero expected payments and break contractual adjustment math at ERA posting.",
+    "resolution": "Correct the allowed amount for each procedure code listed in evidence.",
+    "conditions": {
+      "all": [
+        { "fact": "feeSchedules", "path": "$.nonPositiveAllowedCount", "operator": "greaterThan", "value": 0 }
+      ]
+    }
+  },
+  {
+    "id": "feeSchedules.duplicate_codes",
+    "category": "feeSchedules",
+    "severity": "warning",
+    "message": "One or more procedure codes appear in the fee schedule more than once.",
+    "fixRoute": "/settings/billing-defaults",
+    "whyItMatters": "Duplicate procedure codes make the chosen allowed amount ambiguous and lead to inconsistent expected-payment math.",
+    "resolution": "Consolidate or scope (by payer/modifier/POS) the duplicate codes listed in evidence.",
+    "conditions": {
+      "all": [
+        { "fact": "feeSchedules", "path": "$.duplicateCodeCount", "operator": "greaterThan", "value": 0 }
+      ]
+    }
+  },
+  {
+    "id": "feeSchedules.expired",
+    "category": "feeSchedules",
+    "severity": "info",
+    "message": "One or more fee schedule rows are past their expiration date.",
+    "fixRoute": "/settings/billing-defaults",
+    "whyItMatters": "Expired fee schedule rows can mask the lack of a current contracted rate and produce stale expected-payment values.",
+    "resolution": "Renew or archive the expired rows listed in evidence on the Billing Defaults settings page.",
+    "conditions": {
+      "all": [
+        { "fact": "feeSchedules", "path": "$.expiredCount", "operator": "greaterThan", "value": 0 }
+      ]
+    }
+  }
+]

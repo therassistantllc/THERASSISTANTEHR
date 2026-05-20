@@ -1,0 +1,73 @@
+[
+  {
+    "id": "locations.has_active",
+    "category": "locations",
+    "severity": "blocking",
+    "message": "No active service locations are configured.",
+    "fixRoute": "/settings/service-locations",
+    "whyItMatters": "Every encounter must reference a service facility location. Without at least one, claims cannot be assembled.",
+    "resolution": "Add at least one active service location on the Service Locations settings page.",
+    "conditions": {
+      "all": [
+        { "fact": "locations", "path": "$.active", "operator": "equal", "value": 0 }
+      ]
+    }
+  },
+  {
+    "id": "locations.has_exactly_one_default",
+    "category": "locations",
+    "severity": "warning",
+    "message": "There is not exactly one default service location.",
+    "fixRoute": "/settings/service-locations",
+    "whyItMatters": "Without a single default location, new encounters cannot auto-populate the place of service, leading to inconsistent claims.",
+    "resolution": "Mark exactly one service location as the default on the Service Locations settings page.",
+    "conditions": {
+      "all": [
+        { "fact": "locations", "path": "$.hasExactlyOneDefault", "operator": "equal", "value": false },
+        { "fact": "locations", "path": "$.active", "operator": "greaterThan", "value": 0 }
+      ]
+    }
+  },
+  {
+    "id": "locations.missing_address",
+    "category": "locations",
+    "severity": "blocking",
+    "message": "One or more active service locations are missing a complete address.",
+    "fixRoute": "/settings/service-locations",
+    "whyItMatters": "Service facility addresses are required on the 837P (loop 2310C). Missing or malformed addresses cause rejections.",
+    "resolution": "Provide line 1, city, two-letter state, and a valid 5- or 9-digit ZIP for each location listed in evidence.",
+    "conditions": {
+      "all": [
+        { "fact": "locations", "path": "$.missingAddressCount", "operator": "greaterThan", "value": 0 }
+      ]
+    }
+  },
+  {
+    "id": "locations.invalid_pos_code",
+    "category": "locations",
+    "severity": "blocking",
+    "message": "One or more service locations have an invalid Place of Service code.",
+    "fixRoute": "/settings/service-locations",
+    "whyItMatters": "Place of Service codes are CMS-defined values. Invalid codes cause payer rejections at the claim line level.",
+    "resolution": "Choose a CMS Place of Service code (e.g. 02, 10, 11, 21, 22) for each location listed in evidence.",
+    "conditions": {
+      "all": [
+        { "fact": "locations", "path": "$.invalidPosCount", "operator": "greaterThan", "value": 0 }
+      ]
+    }
+  },
+  {
+    "id": "locations.invalid_npi",
+    "category": "locations",
+    "severity": "warning",
+    "message": "One or more service location NPIs fail the Luhn check digit validation.",
+    "fixRoute": "/settings/service-locations",
+    "whyItMatters": "An invalid facility NPI on the 2310C loop will reject the claim.",
+    "resolution": "Correct the NPI for each location listed in evidence. Leave blank if the location does not bill under its own NPI.",
+    "conditions": {
+      "all": [
+        { "fact": "locations", "path": "$.invalidNpiCount", "operator": "greaterThan", "value": 0 }
+      ]
+    }
+  }
+]

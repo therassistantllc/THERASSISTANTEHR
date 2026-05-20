@@ -1,0 +1,72 @@
+[
+  {
+    "id": "providers.has_active",
+    "category": "providers",
+    "severity": "blocking",
+    "message": "No active providers are configured.",
+    "fixRoute": "/settings/providers",
+    "whyItMatters": "Claims require a rendering provider. Without at least one active provider, no encounters can be billed.",
+    "resolution": "Add at least one active provider on the Providers settings page.",
+    "conditions": {
+      "all": [
+        { "fact": "providers", "path": "$.active", "operator": "equal", "value": 0 }
+      ]
+    }
+  },
+  {
+    "id": "providers.has_billable",
+    "category": "providers",
+    "severity": "warning",
+    "message": "No active providers can bill independently.",
+    "fixRoute": "/settings/providers",
+    "whyItMatters": "Only providers flagged as billing-independent can appear as the rendering provider on a claim. Without one, claims will be rejected.",
+    "resolution": "Mark at least one active provider as able to bill independently.",
+    "conditions": {
+      "all": [
+        { "fact": "providers", "path": "$.billableActive", "operator": "equal", "value": 0 }
+      ]
+    }
+  },
+  {
+    "id": "providers.missing_npi",
+    "category": "providers",
+    "severity": "blocking",
+    "message": "One or more active providers are missing an NPI.",
+    "fixRoute": "/settings/providers",
+    "whyItMatters": "Every rendering provider on a claim must have a 10-digit NPI. Claims for providers without an NPI will be rejected at the clearinghouse.",
+    "resolution": "Add the NPI to each provider listed in evidence on the Providers settings page.",
+    "conditions": {
+      "all": [
+        { "fact": "providers", "path": "$.missingNpiCount", "operator": "greaterThan", "value": 0 }
+      ]
+    }
+  },
+  {
+    "id": "providers.invalid_npi",
+    "category": "providers",
+    "severity": "blocking",
+    "message": "One or more provider NPIs fail the Luhn check digit validation.",
+    "fixRoute": "/settings/providers",
+    "whyItMatters": "An NPI with a bad check digit is not a valid identifier. Claims will be rejected and eligibility lookups will fail.",
+    "resolution": "Correct the NPI for each provider listed in evidence. Verify against NPPES (https://npiregistry.cms.hhs.gov/).",
+    "conditions": {
+      "all": [
+        { "fact": "providers", "path": "$.invalidNpiCount", "operator": "greaterThan", "value": 0 }
+      ]
+    }
+  },
+  {
+    "id": "providers.missing_taxonomy",
+    "category": "providers",
+    "severity": "blocking",
+    "message": "One or more active providers are missing a taxonomy code.",
+    "fixRoute": "/settings/providers",
+    "whyItMatters": "The provider taxonomy code is required on 837P claims (PRV segment) and is used by payers to confirm the provider's specialty. Missing taxonomy causes rejections.",
+    "resolution": "Add the NUCC taxonomy code for each provider listed in evidence. See https://taxonomy.nucc.org/.",
+    "conditions": {
+      "all": [
+        { "fact": "providers", "path": "$.missingTaxonomyCount", "operator": "greaterThan", "value": 0 }
+      ]
+    }
+  }
+]

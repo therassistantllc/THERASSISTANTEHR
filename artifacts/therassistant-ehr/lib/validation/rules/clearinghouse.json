@@ -1,0 +1,90 @@
+[
+  {
+    "id": "clearinghouse.has_active",
+    "category": "clearinghouse",
+    "severity": "blocking",
+    "message": "No active clearinghouse connection is configured.",
+    "fixRoute": "/settings/clearinghouse",
+    "whyItMatters": "The clearinghouse connection holds the credentials and submitter identifiers needed to send 837 claims and run 270 eligibility checks. Nothing can be transmitted without it.",
+    "resolution": "Configure and activate the clearinghouse connection on the Clearinghouse settings page.",
+    "conditions": {
+      "all": [
+        { "fact": "clearinghouse", "path": "$.hasActive", "operator": "equal", "value": false }
+      ]
+    }
+  },
+  {
+    "id": "clearinghouse.has_submitter_id",
+    "category": "clearinghouse",
+    "severity": "blocking",
+    "message": "Clearinghouse submitter ID is not configured.",
+    "fixRoute": "/settings/clearinghouse",
+    "whyItMatters": "The submitter ID identifies your organization to the clearinghouse on every ISA/GS envelope. Without it, transactions are rejected immediately.",
+    "resolution": "Enter the submitter ID assigned by your clearinghouse on the Clearinghouse settings page.",
+    "conditions": {
+      "all": [
+        { "fact": "clearinghouse", "path": "$.hasActive", "operator": "equal", "value": true },
+        { "fact": "clearinghouse", "path": "$.hasSubmitterId", "operator": "equal", "value": false }
+      ]
+    }
+  },
+  {
+    "id": "clearinghouse.has_receiver_id",
+    "category": "clearinghouse",
+    "severity": "blocking",
+    "message": "Clearinghouse receiver ID is not configured.",
+    "fixRoute": "/settings/clearinghouse",
+    "whyItMatters": "The receiver ID identifies the clearinghouse on the ISA envelope. Without it, transactions cannot be addressed correctly.",
+    "resolution": "Enter the receiver ID provided by your clearinghouse on the Clearinghouse settings page.",
+    "conditions": {
+      "all": [
+        { "fact": "clearinghouse", "path": "$.hasActive", "operator": "equal", "value": true },
+        { "fact": "clearinghouse", "path": "$.hasReceiverId", "operator": "equal", "value": false }
+      ]
+    }
+  },
+  {
+    "id": "clearinghouse.usage_indicator_valid",
+    "category": "clearinghouse",
+    "severity": "warning",
+    "message": "ISA usage indicator is not 'T' (test) or 'P' (production).",
+    "fixRoute": "/settings/clearinghouse",
+    "whyItMatters": "The ISA usage indicator must be either T or P. Any other value will fail X12 envelope parsing at the clearinghouse.",
+    "resolution": "Set the usage indicator to 'T' for testing or 'P' for production on the Clearinghouse settings page.",
+    "conditions": {
+      "all": [
+        { "fact": "clearinghouse", "path": "$.hasActive", "operator": "equal", "value": true },
+        { "fact": "clearinghouse", "path": "$.usageIndicatorOk", "operator": "equal", "value": false }
+      ]
+    }
+  },
+  {
+    "id": "clearinghouse.has_eligibility_service_type",
+    "category": "clearinghouse",
+    "severity": "warning",
+    "message": "Eligibility service type code is missing.",
+    "fixRoute": "/settings/clearinghouse",
+    "whyItMatters": "The X12 270 service type code defaults to 98 (Health Benefit Plan Coverage). Without it, eligibility requests will be rejected or return incomplete coverage.",
+    "resolution": "Set the eligibility service type code (default 98) on the Clearinghouse settings page.",
+    "conditions": {
+      "all": [
+        { "fact": "clearinghouse", "path": "$.hasActive", "operator": "equal", "value": true },
+        { "fact": "clearinghouse", "path": "$.hasEligibilityServiceType", "operator": "equal", "value": false }
+      ]
+    }
+  },
+  {
+    "id": "clearinghouse.live_without_credentials",
+    "category": "clearinghouse",
+    "severity": "blocking",
+    "message": "Clearinghouse is in live mode but has no stored credentials.",
+    "fixRoute": "/settings/clearinghouse",
+    "whyItMatters": "Live mode submissions require real credentials. Without them, every transmission will fail authentication.",
+    "resolution": "Either switch the connection to test mode or store the live credentials on the Clearinghouse settings page.",
+    "conditions": {
+      "all": [
+        { "fact": "clearinghouse", "path": "$.isLiveModeWithoutCredentials", "operator": "equal", "value": true }
+      ]
+    }
+  }
+]

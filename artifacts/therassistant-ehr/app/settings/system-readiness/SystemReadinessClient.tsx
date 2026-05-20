@@ -5,30 +5,41 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 import { useUserRole } from "@/lib/store/userRole";
 
-type ReadinessCheck = {
-  key: string;
-  label: string;
-  pass: boolean;
-  detail: string;
+type Severity = "blocking" | "warning" | "info";
+
+type Category =
+  | "organization"
+  | "providers"
+  | "locations"
+  | "payers"
+  | "clearinghouse"
+  | "feeSchedules"
+  | "billingDefaults";
+
+type Finding = {
+  ruleId: string;
+  category: Category;
+  severity: Severity;
+  message: string;
+  fixRoute: string;
+  whyItMatters: string;
+  resolution: string;
+  evidence?: Record<string, unknown>;
 };
 
-type Warning = {
-  key: string;
-  label: string;
-  type: "info";
-  detail: string;
-};
-
-type ReadinessPayload = {
-  org_name: string | null;
-  checks: ReadinessCheck[];
-  warnings: Warning[];
+type ReadinessReport = {
+  organizationId: string;
+  organizationName: string | null;
+  generatedAt: string;
   summary: {
     total: number;
-    passed: number;
-    failed: number;
+    blocking: number;
+    warning: number;
+    info: number;
     ready: boolean;
   };
+  findings: Finding[];
+  findingsByCategory: Record<Category, Finding[]>;
 };
 
 function getOrganizationId() {
@@ -37,17 +48,36 @@ function getOrganizationId() {
   return params.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
 }
 
-const FIX_LINKS: Record<string, string> = {
-  org_billing_profile: "/settings/organization",
-  active_provider: "/settings/providers",
-  provider_npi_taxonomy: "/settings/providers",
-  service_location: "/settings/service-locations",
-  payer_profile: "/settings/payers",
-  clearinghouse_connection: "/settings/clearinghouse",
-  submitter_id: "/settings/clearinghouse",
-  receiver_id: "/settings/clearinghouse",
-  eligibility_service_type: "/settings/clearinghouse",
-  fee_schedule_or_billing_defaults: "/settings/billing-defaults",
+const CATEGORY_LABELS: Record<Category, string> = {
+  organization: "Organization",
+  providers: "Providers",
+  locations: "Service Locations",
+  payers: "Payers",
+  clearinghouse: "Clearinghouse",
+  feeSchedules: "Fee Schedules",
+  billingDefaults: "Billing Defaults",
+};
+
+const CATEGORY_ORDER: Category[] = [
+  "organization",
+  "billingDefaults",
+  "providers",
+  "locations",
+  "payers",
+  "clearinghouse",
+  "feeSchedules",
+];
+
+const SEVERITY_LABEL: Record<Severity, string> = {
+  blocking: "Blocking",
+  warning: "Warning",
+  info: "Info",
+};
+
+const SEVERITY_COLOR: Record<Severity, string> = {
+  blocking: "var(--text-danger, #c53030)",
+  warning: "var(--text-warning, #b45309)",
+  info: "var(--accent, #2563eb)",
 };
 
 type SeedResult = {
@@ -63,7 +93,7 @@ export default function SystemReadinessClient() {
   const organizationId = useMemo(() => getOrganizationId(), []);
   const { role } = useUserRole();
   const isAdmin = role === "admin_biller";
-  const [data, setData] = useState<ReadinessPayload | null>(null);
+  const [data, setData] = useState<ReadinessReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [seeding, setSeeding] = useState(false);
@@ -71,39 +101,58 @@ export default function SystemReadinessClient() {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
 
   const load = useCallback(() => {
-    if (!organizationId) { setLoading(false); return; }
+    if (!organizationId) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
+    setError(null);
     fetch(`/api/settings/system-readiness?organizationId=${encodeURIComponent(organizationId)}`)
-      .then((r) => r.json())
-      .then((json: ReadinessPayload) => setData(json))
-      .catch(() => setError("Failed to load system readiness status."))
+      .then(async (r) => {
+        const json = await r.json();
+        if (!r.ok) throw new Error(json?.error ?? "Failed to load");
+        return json as ReadinessReport;
+      })
+      .then((json) => setData(json))
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load system readiness."))
       .finally(() => setLoading(false));
   }, [organizationId]);
 
-  const runSeed = useCallback(async (force = false) => {
-    setSeeding(true);
-    setSeedResult(null);
-    setShowResetConfirm(false);
-    try {
-      const res = await fetch("/api/admin/seed-settings", {
-        method: "POST",
-        headers: force ? { "Content-Type": "application/json" } : undefined,
-        body: force ? JSON.stringify({ force: true }) : undefined,
-      });
-      const json: SeedResult = await res.json();
-      setSeedResult(json);
-      if (json.success) {
-        load();
+  const runSeed = useCallback(
+    async (force = false) => {
+      setSeeding(true);
+      setSeedResult(null);
+      setShowResetConfirm(false);
+      try {
+        const res = await fetch("/api/admin/seed-settings", {
+          method: "POST",
+          headers: force ? { "Content-Type": "application/json" } : undefined,
+          body: force ? JSON.stringify({ force: true }) : undefined,
+        });
+        const json: SeedResult = await res.json();
+        setSeedResult(json);
+        if (json.success) load();
+      } catch {
+        setSeedResult({ success: false, error: "Network error — could not reach seed endpoint." });
+      } finally {
+        setSeeding(false);
       }
-    } catch {
-      setSeedResult({ success: false, error: "Network error — could not reach seed endpoint." });
-    } finally {
-      setSeeding(false);
-    }
-  }, [load]);
+    },
+    [load],
+  );
 
   // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const fixHref = (route: string) =>
+    `${route}${organizationId ? `${route.includes("?") ? "&" : "?"}organizationId=${organizationId}` : ""}`;
+
+  const orderedCategories = useMemo(() => {
+    if (!data) return [] as Category[];
+    return CATEGORY_ORDER.filter((c) => (data.findingsByCategory[c]?.length ?? 0) > 0);
+  }, [data]);
 
   return (
     <main className="app-shell">
@@ -112,7 +161,8 @@ export default function SystemReadinessClient() {
           <p className="eyebrow">Settings</p>
           <h1>System Readiness</h1>
           <p className="hero-copy">
-            Configuration checklist — all items must pass before the system can generate and transmit claims.
+            Configuration validation — blocking items must be resolved before claims can be transmitted; warnings and
+            info items improve reliability and downstream automation.
           </p>
         </div>
         <div className="hero-actions">
@@ -125,11 +175,20 @@ export default function SystemReadinessClient() {
               >
                 {seeding ? "Seeding…" : "Seed Demo Data"}
               </button>
-
               {showResetConfirm ? (
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "var(--surface-2, #f4f6f9)", border: "1px solid var(--text-danger, #c53030)", borderRadius: "var(--radius, 6px)", padding: "6px 12px" }}>
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 8,
+                    background: "var(--surface-2, #f4f6f9)",
+                    border: "1px solid var(--text-danger, #c53030)",
+                    borderRadius: "var(--radius, 6px)",
+                    padding: "6px 12px",
+                  }}
+                >
                   <span style={{ fontSize: "var(--text-sm)", color: "var(--text-danger, #c53030)", fontWeight: 600 }}>
-                    Deletes & re-inserts all demo records — continue?
+                    Deletes &amp; re-inserts all demo records — continue?
                   </span>
                   <button
                     className="button button-danger"
@@ -162,7 +221,9 @@ export default function SystemReadinessClient() {
           <button className="button button-secondary" onClick={load} disabled={loading}>
             {loading ? "Checking…" : "Refresh"}
           </button>
-          <Link className="button button-secondary" href="/settings">← Settings</Link>
+          <Link className="button button-secondary" href="/settings">
+            ← Settings
+          </Link>
         </div>
       </section>
 
@@ -170,7 +231,12 @@ export default function SystemReadinessClient() {
       {error && <div className="alert-panel">{error}</div>}
 
       {seedResult && (
-        <section className="panel" style={{ borderLeft: `3px solid ${seedResult.success ? "var(--text-success)" : "var(--text-danger)"}` }}>
+        <section
+          className="panel"
+          style={{
+            borderLeft: `3px solid ${seedResult.success ? "var(--text-success)" : "var(--text-danger)"}`,
+          }}
+        >
           <h2 style={{ marginBottom: "var(--space-3)" }}>
             {seedResult.success
               ? seedResult.reset
@@ -178,157 +244,156 @@ export default function SystemReadinessClient() {
                 : "✓ Demo Data Seeded"
               : "⚠ Seed Encountered Issues"}
           </h2>
-          {seedResult.reset && seedResult.success && (
-            <p style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", marginBottom: "var(--space-3)" }}>
-              Existing demo records were deleted and re-inserted with clean defaults.
-            </p>
-          )}
           {seedResult.error && (
-            <p style={{ color: "var(--text-danger)", fontSize: "var(--text-sm)", marginBottom: "var(--space-3)" }}>
-              {seedResult.error}
-            </p>
-          )}
-          {seedResult.results && Object.keys(seedResult.results).length > 0 && (
-            <div style={{ marginBottom: "var(--space-3)" }}>
-              <p style={{ fontSize: "var(--text-sm)", fontWeight: 600, marginBottom: "var(--space-2)" }}>
-                {seedResult.reset ? "Tables re-seeded:" : "Tables populated:"}
-              </p>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--text-sm)" }}>
-                <thead>
-                  <tr style={{ borderBottom: "1px solid var(--border-color)", textAlign: "left" }}>
-                    <th style={{ padding: "6px 10px" }}>Table</th>
-                    <th style={{ padding: "6px 10px" }}>Result</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(seedResult.results).map(([table, status]) => {
-                    const isSkipped = status === "already exists";
-                    const isReseeded = status.startsWith("re-seeded");
-                    return (
-                      <tr key={table} style={{ borderBottom: "1px solid var(--border-color)" }}>
-                        <td style={{ padding: "6px 10px", fontFamily: "monospace" }}>{table}</td>
-                        <td style={{ padding: "6px 10px", color: isSkipped ? "var(--text-secondary)" : isReseeded ? "var(--accent, #2563eb)" : "var(--text-success)" }}>
-                          {isSkipped ? "↩ already exists" : isReseeded ? `⚡ ${status}` : `✓ ${status}`}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-          {seedResult.errors && Object.keys(seedResult.errors).length > 0 && (
-            <div>
-              <p style={{ fontSize: "var(--text-sm)", fontWeight: 600, marginBottom: "var(--space-2)", color: "var(--text-danger)" }}>Errors:</p>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--text-sm)" }}>
-                <tbody>
-                  {Object.entries(seedResult.errors).map(([table, msg]) => (
-                    <tr key={table} style={{ borderBottom: "1px solid var(--border-color)" }}>
-                      <td style={{ padding: "6px 10px", fontFamily: "monospace" }}>{table}</td>
-                      <td style={{ padding: "6px 10px", color: "var(--text-danger)" }}>{msg}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <p style={{ color: "var(--text-danger)", fontSize: "var(--text-sm)" }}>{seedResult.error}</p>
           )}
           {seedResult.seeded_at && (
-            <p style={{ fontSize: "var(--text-xs, 0.75rem)", color: "var(--text-secondary)", marginTop: "var(--space-3)" }}>
+            <p style={{ fontSize: "var(--text-xs, 0.75rem)", color: "var(--text-secondary)", marginTop: 8 }}>
               {seedResult.reset ? "Reset" : "Seeded"} at {new Date(seedResult.seeded_at).toLocaleString()}
             </p>
           )}
         </section>
       )}
 
-      {loading && <div className="panel"><div className="empty-state">Running checks…</div></div>}
+      {loading && (
+        <div className="panel">
+          <div className="empty-state">Running configuration validation…</div>
+        </div>
+      )}
 
       {!loading && data && (
         <>
           <section className="metric-grid">
             <article className="metric-card">
-              <span>Total Checks</span>
-              <strong>{data.summary.total}</strong>
-            </article>
-            <article className="metric-card">
-              <span>Passed</span>
-              <strong style={{ color: "var(--text-success)" }}>{data.summary.passed}</strong>
-            </article>
-            <article className="metric-card">
-              <span>Failed</span>
-              <strong style={{ color: data.summary.failed > 0 ? "var(--text-danger)" : undefined }}>
-                {data.summary.failed}
-              </strong>
-            </article>
-            <article className="metric-card">
-              <span>Overall Status</span>
+              <span>Overall</span>
               <strong>
                 {data.summary.ready ? (
-                  <span style={{ color: "var(--text-success)" }}>✓ Ready</span>
+                  <span style={{ color: "var(--text-success)" }}>✓ Ready to bill</span>
                 ) : (
-                  <span style={{ color: "var(--text-danger)" }}>⚠ Not Ready</span>
+                  <span style={{ color: "var(--text-danger)" }}>⚠ Not ready</span>
                 )}
               </strong>
             </article>
+            <article className="metric-card">
+              <span>Blocking</span>
+              <strong style={{ color: data.summary.blocking > 0 ? SEVERITY_COLOR.blocking : undefined }}>
+                {data.summary.blocking}
+              </strong>
+            </article>
+            <article className="metric-card">
+              <span>Warning</span>
+              <strong style={{ color: data.summary.warning > 0 ? SEVERITY_COLOR.warning : undefined }}>
+                {data.summary.warning}
+              </strong>
+            </article>
+            <article className="metric-card">
+              <span>Info</span>
+              <strong style={{ color: data.summary.info > 0 ? SEVERITY_COLOR.info : undefined }}>
+                {data.summary.info}
+              </strong>
+            </article>
           </section>
 
-          {!data.summary.ready && (
+          {data.summary.blocking > 0 && (
             <div className="alert-panel">
-              <strong>{data.summary.failed} configuration item{data.summary.failed !== 1 ? "s" : ""} must be resolved before claim submission.</strong>
-              {" "}Use the links below to fix each failing check.
+              <strong>
+                {data.summary.blocking} blocking item{data.summary.blocking !== 1 ? "s" : ""} must be resolved before
+                claim submission.
+              </strong>{" "}
+              Use the &quot;Fix&quot; links below to address each finding.
             </div>
           )}
 
-          <section className="panel">
-            <h2>Configuration Checks</h2>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ borderBottom: "1px solid var(--border-color)", textAlign: "left" }}>
-                  <th style={{ padding: "10px 12px", fontSize: "var(--text-sm)" }}>Status</th>
-                  <th style={{ padding: "10px 12px", fontSize: "var(--text-sm)" }}>Check</th>
-                  <th style={{ padding: "10px 12px", fontSize: "var(--text-sm)" }}>Detail</th>
-                  <th style={{ padding: "10px 12px", fontSize: "var(--text-sm)" }}>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.checks.map((check) => (
-                  <tr key={check.key} style={{ borderBottom: "1px solid var(--border-color)" }}>
-                    <td style={{ padding: "10px 12px" }}>
-                      {check.pass ? (
-                        <span style={{ color: "var(--text-success)", fontSize: "1.1em" }}>✓</span>
-                      ) : (
-                        <span style={{ color: "var(--text-danger)", fontSize: "1.1em" }}>✗</span>
-                      )}
-                    </td>
-                    <td style={{ padding: "10px 12px", fontWeight: check.pass ? undefined : 600 }}>{check.label}</td>
-                    <td style={{ padding: "10px 12px", color: "var(--text-secondary)", fontSize: "var(--text-sm)" }}>{check.detail}</td>
-                    <td style={{ padding: "10px 12px" }}>
-                      {!check.pass && FIX_LINKS[check.key] && (
-                        <Link
-                          href={`${FIX_LINKS[check.key]}${organizationId ? `?organizationId=${organizationId}` : ""}`}
-                          style={{ color: "var(--accent)", fontSize: "var(--text-sm)", textDecoration: "underline" }}
-                        >
-                          Fix →
-                        </Link>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </section>
+          {data.summary.total === 0 && (
+            <section className="panel">
+              <div className="empty-state">
+                <strong style={{ color: "var(--text-success)" }}>All configuration checks passed.</strong>
+                <p style={{ marginTop: 8, color: "var(--text-secondary)" }}>
+                  No blocking, warning, or informational findings for this organization.
+                </p>
+              </div>
+            </section>
+          )}
 
-          <section className="panel">
-            <h2>Schema Notices</h2>
-            <p style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)", marginBottom: "var(--space-4)" }}>
-              These are informational notices about legacy table overlap. No tables have been deleted or altered.
-            </p>
-            {data.warnings.map((w) => (
-              <article key={w.key} style={{ padding: "var(--space-4)", background: "var(--surface-2)", borderRadius: "var(--radius)", marginBottom: "var(--space-3)", borderLeft: "3px solid var(--accent)" }}>
-                <strong style={{ fontSize: "var(--text-sm)" }}>ℹ {w.label}</strong>
-                <p style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)", marginTop: "4px" }}>{w.detail}</p>
-              </article>
-            ))}
-          </section>
+          {orderedCategories.map((cat) => {
+            const findings = data.findingsByCategory[cat];
+            return (
+              <section key={cat} className="panel">
+                <h2 style={{ marginBottom: "var(--space-3)" }}>
+                  {CATEGORY_LABELS[cat]}{" "}
+                  <span style={{ color: "var(--text-secondary)", fontSize: "0.85em", fontWeight: 400 }}>
+                    ({findings.length} finding{findings.length !== 1 ? "s" : ""})
+                  </span>
+                </h2>
+                <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: "var(--space-3)" }}>
+                  {findings.map((f) => (
+                    <li
+                      key={f.ruleId}
+                      style={{
+                        padding: "var(--space-4)",
+                        background: "var(--surface-2, #f7f9fc)",
+                        borderLeft: `3px solid ${SEVERITY_COLOR[f.severity]}`,
+                        borderRadius: "var(--radius, 6px)",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: "var(--space-3)",
+                          alignItems: "baseline",
+                          flexWrap: "wrap",
+                          marginBottom: 6,
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontSize: "var(--text-xs, 0.7rem)",
+                            fontWeight: 700,
+                            letterSpacing: "0.04em",
+                            textTransform: "uppercase",
+                            padding: "2px 8px",
+                            borderRadius: 999,
+                            background: SEVERITY_COLOR[f.severity],
+                            color: "white",
+                          }}
+                        >
+                          {SEVERITY_LABEL[f.severity]}
+                        </span>
+                        <strong style={{ fontSize: "var(--text-md, 0.95rem)" }}>{f.message}</strong>
+                        <span style={{ fontSize: "var(--text-xs)", color: "var(--text-secondary)", fontFamily: "monospace" }}>
+                          {f.ruleId}
+                        </span>
+                      </div>
+                      <p style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "4px 0" }}>
+                        <strong>Why it matters: </strong>
+                        {f.whyItMatters}
+                      </p>
+                      <p style={{ fontSize: "var(--text-sm)", margin: "4px 0" }}>
+                        <strong>How to resolve: </strong>
+                        {f.resolution}
+                      </p>
+                      <div style={{ marginTop: 8 }}>
+                        <Link
+                          href={fixHref(f.fixRoute)}
+                          style={{
+                            color: "var(--accent)",
+                            fontSize: "var(--text-sm)",
+                            textDecoration: "underline",
+                          }}
+                        >
+                          Fix in {CATEGORY_LABELS[f.category]} →
+                        </Link>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            );
+          })}
+
+          <p style={{ fontSize: "var(--text-xs, 0.7rem)", color: "var(--text-secondary)", textAlign: "right" }}>
+            Generated {new Date(data.generatedAt).toLocaleString()}
+          </p>
         </>
       )}
     </main>

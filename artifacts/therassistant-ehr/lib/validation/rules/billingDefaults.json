@@ -1,0 +1,72 @@
+[
+  {
+    "id": "billingDefaults.has_profile",
+    "category": "billingDefaults",
+    "severity": "blocking",
+    "message": "Billing profile (organization billing defaults) is not configured.",
+    "fixRoute": "/settings/organization",
+    "whyItMatters": "The billing profile holds the default billing provider identity used on every 837P claim. Without it, claims cannot be built.",
+    "resolution": "Fill out the billing profile section on the Organization settings page.",
+    "conditions": {
+      "all": [
+        { "fact": "billingDefaults", "path": "$.hasProfile", "operator": "equal", "value": false }
+      ]
+    }
+  },
+  {
+    "id": "billingDefaults.has_billing_npi",
+    "category": "billingDefaults",
+    "severity": "blocking",
+    "message": "Billing provider NPI is missing or not 10 digits.",
+    "fixRoute": "/settings/organization",
+    "whyItMatters": "The billing provider NPI populates loop 2010AA on the 837P. A missing or malformed NPI rejects the entire claim.",
+    "resolution": "Enter a valid 10-digit billing provider NPI in the billing profile on the Organization settings page.",
+    "conditions": {
+      "all": [
+        { "fact": "billingDefaults", "path": "$.hasBillingNpi", "operator": "equal", "value": false }
+      ]
+    }
+  },
+  {
+    "id": "billingDefaults.has_tax_id",
+    "category": "billingDefaults",
+    "severity": "blocking",
+    "message": "Billing Tax ID (EIN) is missing or not 9 digits.",
+    "fixRoute": "/settings/organization",
+    "whyItMatters": "The billing provider Tax ID is the REF*EI segment on the 837P and is required for payer enrollment and tax reporting.",
+    "resolution": "Enter a valid 9-digit EIN in the billing profile on the Organization settings page.",
+    "conditions": {
+      "all": [
+        { "fact": "billingDefaults", "path": "$.hasBillingTaxId", "operator": "equal", "value": false }
+      ]
+    }
+  },
+  {
+    "id": "billingDefaults.has_zip",
+    "category": "billingDefaults",
+    "severity": "warning",
+    "message": "Billing address ZIP is missing or not in 5- or 9-digit format.",
+    "fixRoute": "/settings/organization",
+    "whyItMatters": "Some payers require the full ZIP+4 on the billing provider address loop and will reject 5-digit or malformed values.",
+    "resolution": "Enter the ZIP (5 or 9 digits) for the billing address in the billing profile.",
+    "conditions": {
+      "all": [
+        { "fact": "billingDefaults", "path": "$.hasBillingZip", "operator": "equal", "value": false }
+      ]
+    }
+  },
+  {
+    "id": "billingDefaults.has_phone",
+    "category": "billingDefaults",
+    "severity": "info",
+    "message": "Billing contact phone is missing or not 10 digits.",
+    "fixRoute": "/settings/organization",
+    "whyItMatters": "Payers and clearinghouses occasionally call the listed billing phone to resolve transmission issues. Missing it slows down resolution.",
+    "resolution": "Enter a 10-digit billing contact phone in the billing profile.",
+    "conditions": {
+      "all": [
+        { "fact": "billingDefaults", "path": "$.hasBillingPhone", "operator": "equal", "value": false }
+      ]
+    }
+  }
+]

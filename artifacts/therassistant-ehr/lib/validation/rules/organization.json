@@ -1,0 +1,87 @@
+[
+  {
+    "id": "organization.exists",
+    "category": "organization",
+    "severity": "blocking",
+    "message": "Organization record is missing.",
+    "fixRoute": "/settings/organization",
+    "whyItMatters": "Every claim, encounter, and configuration record is scoped to an organization. Without an organization row, no submissions can be built.",
+    "resolution": "Create the organization record on the Organization settings page.",
+    "conditions": {
+      "all": [
+        { "fact": "organization", "path": "$.exists", "operator": "equal", "value": false }
+      ]
+    }
+  },
+  {
+    "id": "organization.active",
+    "category": "organization",
+    "severity": "blocking",
+    "message": "Organization is inactive or archived.",
+    "fixRoute": "/settings/organization",
+    "whyItMatters": "Inactive organizations cannot submit claims or process enrollments.",
+    "resolution": "Re-activate the organization on the Organization settings page or restore it from the archive.",
+    "conditions": {
+      "any": [
+        { "fact": "organization", "path": "$.isActive", "operator": "equal", "value": false },
+        { "fact": "organization", "path": "$.isArchived", "operator": "equal", "value": true }
+      ]
+    }
+  },
+  {
+    "id": "organization.has_name",
+    "category": "organization",
+    "severity": "blocking",
+    "message": "Organization is missing a display name.",
+    "fixRoute": "/settings/organization",
+    "whyItMatters": "The organization name appears on claims, statements, and the application header. A missing name breaks claim formatting and confuses staff.",
+    "resolution": "Set the organization name on the Organization settings page.",
+    "conditions": {
+      "all": [
+        { "fact": "organization", "path": "$.hasName", "operator": "equal", "value": false }
+      ]
+    }
+  },
+  {
+    "id": "organization.has_legal_name",
+    "category": "organization",
+    "severity": "warning",
+    "message": "Organization is missing a legal name.",
+    "fixRoute": "/settings/organization",
+    "whyItMatters": "The legal name is used on payer enrollments and 1099s. Mismatches between the display name and the legal name can cause enrollment rejections.",
+    "resolution": "Enter the legal entity name on the Organization settings page.",
+    "conditions": {
+      "all": [
+        { "fact": "organization", "path": "$.hasLegalName", "operator": "equal", "value": false }
+      ]
+    }
+  },
+  {
+    "id": "organization.has_tax_id_last4",
+    "category": "organization",
+    "severity": "warning",
+    "message": "Organization is missing the last 4 of its Tax ID.",
+    "fixRoute": "/settings/organization",
+    "whyItMatters": "The Tax ID last-4 is used to disambiguate billing entities and to safely confirm the billing profile in audits.",
+    "resolution": "Enter the last 4 digits of the EIN on the Organization settings page.",
+    "conditions": {
+      "all": [
+        { "fact": "organization", "path": "$.hasTaxIdLast4", "operator": "equal", "value": false }
+      ]
+    }
+  },
+  {
+    "id": "organization.has_timezone",
+    "category": "organization",
+    "severity": "info",
+    "message": "Organization timezone is not set.",
+    "fixRoute": "/settings/organization",
+    "whyItMatters": "Without an organization timezone, appointment and claim dates may be computed in UTC and appear off-by-one to staff.",
+    "resolution": "Pick the organization's primary timezone on the Organization settings page.",
+    "conditions": {
+      "all": [
+        { "fact": "organization", "path": "$.hasTimezone", "operator": "equal", "value": false }
+      ]
+    }
+  }
+]

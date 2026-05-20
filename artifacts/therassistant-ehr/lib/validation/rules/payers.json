@@ -1,0 +1,58 @@
+[
+  {
+    "id": "payers.has_active",
+    "category": "payers",
+    "severity": "blocking",
+    "message": "No active payer profiles are configured.",
+    "fixRoute": "/settings/payers",
+    "whyItMatters": "Patients must be linked to a payer profile to bill any insurance. Without at least one active payer, only self-pay encounters can be billed.",
+    "resolution": "Add the payers you bill on the Payers settings page and mark them active.",
+    "conditions": {
+      "all": [
+        { "fact": "payers", "path": "$.active", "operator": "equal", "value": 0 }
+      ]
+    }
+  },
+  {
+    "id": "payers.missing_payer_id",
+    "category": "payers",
+    "severity": "blocking",
+    "message": "One or more active payers are missing their clearinghouse payer ID.",
+    "fixRoute": "/settings/payers",
+    "whyItMatters": "The Office Ally (or equivalent clearinghouse) payer ID is required for routing the claim. A missing ID causes the claim to be rejected by the clearinghouse before reaching the payer.",
+    "resolution": "Look up the payer in the Office Ally payer list and set the payer ID for each payer in evidence.",
+    "conditions": {
+      "all": [
+        { "fact": "payers", "path": "$.missingPayerIdCount", "operator": "greaterThan", "value": 0 }
+      ]
+    }
+  },
+  {
+    "id": "payers.missing_type",
+    "category": "payers",
+    "severity": "warning",
+    "message": "One or more active payers are missing a payer type.",
+    "fixRoute": "/settings/payers",
+    "whyItMatters": "Payer type (Medicaid / Medicare / Commercial) drives downstream billing rules — secondary claim rules, write-off behavior, and eligibility lookups.",
+    "resolution": "Set the payer type for each payer listed in evidence.",
+    "conditions": {
+      "all": [
+        { "fact": "payers", "path": "$.missingTypeCount", "operator": "greaterThan", "value": 0 }
+      ]
+    }
+  },
+  {
+    "id": "payers.duplicate_payer_id",
+    "category": "payers",
+    "severity": "warning",
+    "message": "Two or more active payer profiles share the same clearinghouse payer ID.",
+    "fixRoute": "/settings/payers",
+    "whyItMatters": "Duplicate payer IDs cause ambiguity in eligibility and ERA matching, leading to mis-posted payments.",
+    "resolution": "Consolidate the duplicate payers or correct the payer IDs so each active payer has a unique value.",
+    "conditions": {
+      "all": [
+        { "fact": "payers", "path": "$.duplicatePayerIdCount", "operator": "greaterThan", "value": 0 }
+      ]
+    }
+  }
+]
