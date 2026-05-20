@@ -54,7 +54,14 @@ export async function GET(_request: Request, context: { params: Promise<{ concep
         concept_set_members!concept_set_members_concept_set_id_fkey(
           member_concept_id,
           sort_weight,
-          member:concepts!concept_set_members_member_concept_id_fkey(id, name, description, datatype, concept_class)
+          member:concepts!concept_set_members_member_concept_id_fkey(
+            id, name, description, datatype, concept_class,
+            concept_answers!concept_answers_concept_id_fkey(
+              answer_concept_id,
+              sort_weight,
+              answer:concepts!concept_answers_answer_concept_id_fkey(id, name, datatype, concept_class)
+            )
+          )
         )
       `)
       .eq("id", conceptId)
@@ -98,6 +105,19 @@ export async function GET(_request: Request, context: { params: Promise<{ concep
     });
     const members = (c.concept_set_members ?? []).map((row) => {
       const m = Array.isArray(row.member) ? row.member[0] : row.member;
+      const memberAnswersRaw = (m && (m as DbRow & { concept_answers?: (DbRow & { answer?: DbRow | DbRow[] })[] }).concept_answers) || [];
+      const memberAnswers = memberAnswersRaw
+        .map((ar) => {
+          const ans = Array.isArray(ar.answer) ? ar.answer[0] : ar.answer;
+          return {
+            answerConceptId: clean(ar.answer_concept_id),
+            sortWeight: Number(ar.sort_weight ?? 0),
+            name: ans ? clean(ans.name) : "",
+            datatype: ans ? clean(ans.datatype) : "",
+            conceptClass: ans ? clean(ans.concept_class) : "",
+          };
+        })
+        .sort((a, b) => a.sortWeight - b.sortWeight);
       return {
         memberConceptId: clean(row.member_concept_id),
         sortWeight: Number(row.sort_weight ?? 0),
@@ -105,6 +125,7 @@ export async function GET(_request: Request, context: { params: Promise<{ concep
         description: m ? clean(m.description) : "",
         datatype: m ? clean(m.datatype) : "",
         conceptClass: m ? clean(m.concept_class) : "",
+        answers: memberAnswers,
       };
     });
 
