@@ -6,10 +6,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 /**
  * Per-claim "Claim Readiness" panel.
  *
- * Reuses the same Configuration Validation Engine output the claim
- * submission gate (lib/validation/claimSubmissionGate.ts) consults. Fetches
- * GET /api/settings/system-readiness?organizationId=... — the exact engine
- * report — so this panel and the gate can never disagree.
+ * Renders two grouped sections — System Readiness and Claim Content — from
+ * the combined report served by GET /api/claims/readiness-report. The same
+ * combined report is enforced by the claim submission gate
+ * (lib/validation/claimSubmissionGate.ts → assertClaimReadyForSubmission),
+ * so panel verdict and gate verdict can never disagree.
  */
 
 type Severity = "blocking" | "warning" | "info";
@@ -24,17 +25,29 @@ type Finding = {
   resolution: string;
 };
 
-type ReadinessReport = {
+type Summary = {
+  total: number;
+  blocking: number;
+  warning: number;
+  info: number;
+  ready: boolean;
+};
+
+type Report = {
   organizationId: string;
   generatedAt: string;
-  summary: {
-    total: number;
-    blocking: number;
-    warning: number;
-    info: number;
-    ready: boolean;
-  };
+  summary: Summary;
   findings: Finding[];
+};
+
+type CombinedResponse = {
+  organizationId: string;
+  claimId: string | null;
+  encounterId: string | null;
+  generatedAt: string;
+  systemReadiness: Report;
+  claimContent: Report | null;
+  combined: Summary;
 };
 
 const SEVERITY_COLOR: Record<Severity, string> = {
@@ -57,6 +70,12 @@ const CATEGORY_LABEL: Record<string, string> = {
   clearinghouse: "Clearinghouse",
   feeSchedules: "Fee Schedules",
   billingDefaults: "Billing Defaults",
+  claimDiagnoses: "Diagnoses",
+  claimServiceLines: "Service Lines",
+  claimParties: "Claim Parties",
+  claimDates: "Service Dates",
+  claimTelehealth: "Telehealth",
+  claimAuthorization: "Authorization",
 };
 
 function fixHref(route: string, organizationId: string) {
@@ -66,15 +85,20 @@ function fixHref(route: string, organizationId: string) {
 
 export interface ClaimSubmissionReadinessPanelProps {
   organizationId: string;
+  /** Identify the claim by id, or by encounter id (the latest claim on that encounter will be resolved). */
+  claimId?: string;
+  encounterId?: string;
   /** Optional — for display only ("Claim #ABC123") */
   claimLabel?: string;
 }
 
 export default function ClaimSubmissionReadinessPanel({
   organizationId,
+  claimId,
+  encounterId,
   claimLabel,
 }: ClaimSubmissionReadinessPanelProps) {
-  const [report, setReport] = useState<ReadinessReport | null>(null);
+  const [data, setData] = useState<CombinedResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -87,45 +111,38 @@ export default function ClaimSubmissionReadinessPanel({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(
-        `/api/settings/system-readiness?organizationId=${encodeURIComponent(organizationId)}`,
-        { cache: "no-store" },
-      );
+      const params = new URLSearchParams({ organizationId });
+      if (claimId) params.set("claimId", claimId);
+      else if (encounterId) params.set("encounterId", encounterId);
+      const res = await fetch(`/api/claims/readiness-report?${params.toString()}`, { cache: "no-store" });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error ?? "Failed to load claim readiness");
-      setReport(json as ReadinessReport);
+      setData(json as CombinedResponse);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load claim readiness.");
     } finally {
       setLoading(false);
     }
-  }, [organizationId]);
+  }, [organizationId, claimId, encounterId]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  const blocking = useMemo(
-    () => (report?.findings ?? []).filter((f) => f.severity === "blocking"),
-    [report],
-  );
-  const warnings = useMemo(
-    () => (report?.findings ?? []).filter((f) => f.severity === "warning"),
-    [report],
-  );
+  const sysFindings = useMemo(() => data?.systemReadiness.findings ?? [], [data]);
+  const claimFindings = useMemo(() => data?.claimContent?.findings ?? [], [data]);
 
-  const ready = report?.summary.ready === true;
-  const statusColor = ready
-    ? "var(--text-success, #15803d)"
-    : "var(--text-danger, #c53030)";
+  const sysBlocking = sysFindings.filter((f) => f.severity === "blocking");
+  const sysWarnings = sysFindings.filter((f) => f.severity === "warning");
+  const claimBlocking = claimFindings.filter((f) => f.severity === "blocking");
+  const claimWarnings = claimFindings.filter((f) => f.severity === "warning");
+
+  const ready = data?.combined.ready === true;
+  const totalBlocking = data?.combined.blocking ?? 0;
+  const statusColor = ready ? "var(--text-success, #15803d)" : "var(--text-danger, #c53030)";
 
   return (
-    <section
-      className="panel"
-      style={{
-        borderLeft: `3px solid ${statusColor}`,
-      }}
-    >
+    <section className="panel" style={{ borderLeft: `3px solid ${statusColor}` }}>
       <header
         style={{
           display: "flex",
@@ -139,13 +156,11 @@ export default function ClaimSubmissionReadinessPanel({
         <h2 style={{ margin: 0 }}>
           Claim Readiness{claimLabel ? ` — ${claimLabel}` : ""}{" "}
           {loading ? (
-            <span style={{ color: "var(--text-secondary)", fontSize: "0.85em", fontWeight: 400 }}>
-              checking…
-            </span>
+            <span style={{ color: "var(--text-secondary)", fontSize: "0.85em", fontWeight: 400 }}>checking…</span>
           ) : ready ? (
             <span style={{ color: statusColor }}>· ✓ Ready to Submit</span>
           ) : (
-            <span style={{ color: statusColor }}>· ⚠ Blocked</span>
+            <span style={{ color: statusColor }}>· ⚠ Blocked ({totalBlocking})</span>
           )}
         </h2>
         <button
@@ -161,46 +176,36 @@ export default function ClaimSubmissionReadinessPanel({
 
       {error && <div className="alert-panel">{error}</div>}
 
-      {!error && report && (
+      {!error && data && (
         <>
           {!ready && (
             <p style={{ fontSize: "var(--text-sm)", margin: "0 0 var(--space-3)" }}>
-              <strong>This claim cannot be generated or transmitted</strong> while blocking
-              configuration findings exist. The same rules are enforced by the submission gate.
+              <strong>This claim cannot be generated or transmitted</strong> while blocking findings exist in either
+              section. The same rules are enforced by the submission gate.
             </p>
           )}
 
-          {blocking.length > 0 && (
-            <div style={{ marginBottom: "var(--space-3)" }}>
-              <h3 style={{ fontSize: "var(--text-sm)", margin: "0 0 var(--space-2)", color: SEVERITY_COLOR.blocking }}>
-                {blocking.length} Blocking finding{blocking.length === 1 ? "" : "s"}
-              </h3>
-              <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: "var(--space-2)" }}>
-                {blocking.map((f) => (
-                  <FindingRow key={f.ruleId} finding={f} organizationId={organizationId} />
-                ))}
-              </ul>
-            </div>
-          )}
+          <ReportSection
+            title="Claim Content"
+            subtitle={
+              data.claimContent
+                ? `${data.claimContent.summary.blocking} blocking · ${data.claimContent.summary.warning} warning`
+                : "No claim linked to this encounter yet — content rules will run once a claim is created."
+            }
+            blocking={claimBlocking}
+            warnings={claimWarnings}
+            organizationId={organizationId}
+            emptyOk={data.claimContent != null && claimBlocking.length === 0 && claimWarnings.length === 0}
+          />
 
-          {warnings.length > 0 && (
-            <div style={{ marginBottom: "var(--space-3)" }}>
-              <h3 style={{ fontSize: "var(--text-sm)", margin: "0 0 var(--space-2)", color: SEVERITY_COLOR.warning }}>
-                {warnings.length} Warning{warnings.length === 1 ? "" : "s"}
-              </h3>
-              <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: "var(--space-2)" }}>
-                {warnings.map((f) => (
-                  <FindingRow key={f.ruleId} finding={f} organizationId={organizationId} />
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {ready && (
-            <p style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: 0 }}>
-              No blocking configuration findings. Submission gate will permit this claim.
-            </p>
-          )}
+          <ReportSection
+            title="System Readiness"
+            subtitle={`${data.systemReadiness.summary.blocking} blocking · ${data.systemReadiness.summary.warning} warning`}
+            blocking={sysBlocking}
+            warnings={sysWarnings}
+            organizationId={organizationId}
+            emptyOk={sysBlocking.length === 0 && sysWarnings.length === 0}
+          />
 
           <p
             style={{
@@ -211,11 +216,53 @@ export default function ClaimSubmissionReadinessPanel({
               marginBottom: 0,
             }}
           >
-            Last validated {new Date(report.generatedAt).toLocaleString()}
+            Last validated {new Date(data.generatedAt).toLocaleString()}
           </p>
         </>
       )}
     </section>
+  );
+}
+
+function ReportSection({
+  title,
+  subtitle,
+  blocking,
+  warnings,
+  organizationId,
+  emptyOk,
+}: {
+  title: string;
+  subtitle: string;
+  blocking: Finding[];
+  warnings: Finding[];
+  organizationId: string;
+  emptyOk: boolean;
+}) {
+  return (
+    <div style={{ marginBottom: "var(--space-3)" }}>
+      <h3 style={{ fontSize: "var(--text-sm)", margin: "0 0 4px" }}>{title}</h3>
+      <p
+        style={{
+          fontSize: "var(--text-xs, 0.7rem)",
+          color: "var(--text-secondary)",
+          margin: "0 0 var(--space-2)",
+        }}
+      >
+        {subtitle}
+      </p>
+      {blocking.length === 0 && warnings.length === 0 ? (
+        <p style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: 0 }}>
+          {emptyOk ? "All checks passed." : "—"}
+        </p>
+      ) : (
+        <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: "var(--space-2)" }}>
+          {[...blocking, ...warnings].map((f) => (
+            <FindingRow key={f.ruleId} finding={f} organizationId={organizationId} />
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

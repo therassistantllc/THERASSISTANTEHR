@@ -5,6 +5,7 @@ import type { Category, FactContext, FactLoader, RuleSpec, ValidationFinding } f
  *  blocking "data unavailable" finding if a loader throws. Keeping this
  *  alongside the engine avoids duplicating the mapping at the call site. */
 const LOADER_CATEGORY: Record<string, Category> = {
+  // System readiness loaders
   organization: "organization",
   providers: "providers",
   locations: "locations",
@@ -12,6 +13,13 @@ const LOADER_CATEGORY: Record<string, Category> = {
   clearinghouse: "clearinghouse",
   feeSchedules: "feeSchedules",
   billingDefaults: "billingDefaults",
+  // Claim content loaders (lib/validation/claim/facts.ts)
+  claim: "claimParties",
+  serviceLines: "claimServiceLines",
+  claimDates: "claimDates",
+  parties: "claimParties",
+  telehealth: "claimTelehealth",
+  authorization: "claimAuthorization",
 };
 
 /**

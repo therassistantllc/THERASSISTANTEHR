@@ -168,7 +168,11 @@ export default function BillingDetailsClient({ encounterId }: { encounterId: str
       {message ? <div className="empty-state success-panel">{message}</div> : null}
       {error ? <div className="alert-panel">{error}</div> : null}
 
-      <ClaimSubmissionReadinessPanel organizationId={organizationId} claimLabel={`Encounter ${encounterId.slice(0, 8)}`} />
+      <ClaimSubmissionReadinessPanel
+        organizationId={organizationId}
+        encounterId={encounterId}
+        claimLabel={`Encounter ${encounterId.slice(0, 8)}`}
+      />
 
       <section className="panel form-panel">
         <h2>Diagnoses</h2>

@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 export type Severity = "blocking" | "warning" | "info";
 
 export const CATEGORIES = [
+  // ---- System / configuration readiness ----
   "organization",
   "providers",
   "locations",
@@ -10,9 +11,37 @@ export const CATEGORIES = [
   "clearinghouse",
   "feeSchedules",
   "billingDefaults",
+  // ---- Per-claim content (Phase 2) ----
+  "claimDiagnoses",
+  "claimServiceLines",
+  "claimParties",
+  "claimDates",
+  "claimTelehealth",
+  "claimAuthorization",
 ] as const;
 
 export type Category = (typeof CATEGORIES)[number];
+
+/** Categories that belong to system / configuration readiness. */
+export const SYSTEM_READINESS_CATEGORIES: Category[] = [
+  "organization",
+  "providers",
+  "locations",
+  "payers",
+  "clearinghouse",
+  "feeSchedules",
+  "billingDefaults",
+];
+
+/** Categories that belong to per-claim content validation. */
+export const CLAIM_CONTENT_CATEGORIES: Category[] = [
+  "claimDiagnoses",
+  "claimServiceLines",
+  "claimParties",
+  "claimDates",
+  "claimTelehealth",
+  "claimAuthorization",
+];
 
 export interface ValidationFinding {
   ruleId: string;
@@ -47,6 +76,12 @@ export interface ValidationReport {
 export interface FactContext {
   organizationId: string;
   supabase: SupabaseClient;
+  /**
+   * Optional claim-scoped context. Required by claim-content fact loaders
+   * (lib/validation/claim/facts.ts); ignored by system-readiness loaders.
+   * Eligibility (Phase 3) reuses the same canonical claim facts via this id.
+   */
+  claimId?: string | null;
 }
 
 export interface FactLoader {

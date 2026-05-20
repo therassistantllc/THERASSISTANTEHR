@@ -1,0 +1,157 @@
+[
+  {
+    "id": "claim.missing_diagnosis",
+    "category": "claimDiagnoses",
+    "severity": "blocking",
+    "message": "Claim has no diagnosis codes.",
+    "fixRoute": "/encounters",
+    "whyItMatters": "Every 837P claim must report at least one ICD-10 diagnosis. Without a diagnosis, the claim is rejected at the clearinghouse before reaching the payer.",
+    "resolution": "Open the encounter's Billing Details and add at least one ICD-10 diagnosis before generating or transmitting the claim.",
+    "conditions": {
+      "all": [
+        { "fact": "claim", "path": "$.diagnosisCount", "operator": "equal", "value": 0 }
+      ]
+    }
+  },
+  {
+    "id": "claim.missing_service_line",
+    "category": "claimServiceLines",
+    "severity": "blocking",
+    "message": "Claim has no service lines (no CPT/HCPCS codes).",
+    "fixRoute": "/encounters",
+    "whyItMatters": "An 837P claim with zero service lines is structurally invalid and cannot be priced or paid.",
+    "resolution": "Add at least one service line with a CPT/HCPCS code, DOS, units, and charge amount on the encounter's Billing Details.",
+    "conditions": {
+      "all": [
+        { "fact": "serviceLines", "path": "$.count", "operator": "equal", "value": 0 }
+      ]
+    }
+  },
+  {
+    "id": "claim.service_line_missing_cpt",
+    "category": "claimServiceLines",
+    "severity": "blocking",
+    "message": "One or more service lines are missing a procedure code (CPT/HCPCS).",
+    "fixRoute": "/encounters",
+    "whyItMatters": "Lines without a procedure code cannot be adjudicated. The clearinghouse will reject the whole claim.",
+    "resolution": "Open Billing Details and fill in the procedure code for every service line.",
+    "conditions": {
+      "all": [
+        { "fact": "serviceLines", "path": "$.missingProcedureCount", "operator": "greaterThan", "value": 0 }
+      ]
+    }
+  },
+  {
+    "id": "claim.future_dos",
+    "category": "claimDates",
+    "severity": "blocking",
+    "message": "Claim has one or more service lines with a date of service in the future.",
+    "fixRoute": "/encounters",
+    "whyItMatters": "Payers reject claims whose DOS is after today; this is a hard 837P validation. It also indicates a data-entry error before the service occurred.",
+    "resolution": "Correct the service date(s) on the encounter's Billing Details so every line has a DOS today or earlier.",
+    "conditions": {
+      "all": [
+        { "fact": "claimDates", "path": "$.futureDosCount", "operator": "greaterThan", "value": 0 }
+      ]
+    }
+  },
+  {
+    "id": "claim.missing_rendering_provider",
+    "category": "claimParties",
+    "severity": "blocking",
+    "message": "Claim is missing the rendering provider NPI.",
+    "fixRoute": "/settings/providers",
+    "whyItMatters": "The rendering provider (Loop 2310B) identifies who performed the service. A missing or non-10-digit NPI causes a clearinghouse rejection.",
+    "resolution": "Set the rendering provider NPI on the encounter's clinician profile, then re-generate the claim party snapshot.",
+    "conditions": {
+      "all": [
+        { "fact": "parties", "path": "$.hasRenderingProviderNpi", "operator": "equal", "value": false }
+      ]
+    }
+  },
+  {
+    "id": "claim.missing_subscriber_member_id",
+    "category": "claimParties",
+    "severity": "blocking",
+    "message": "Claim is missing the subscriber / member ID.",
+    "fixRoute": "/patients",
+    "whyItMatters": "The subscriber's payer member ID is required for the payer to identify the policy. Without it, the claim cannot be matched to coverage.",
+    "resolution": "Open the patient chart, edit the insurance policy, and enter the subscriber's member ID.",
+    "conditions": {
+      "all": [
+        { "fact": "parties", "path": "$.hasSubscriberMemberId", "operator": "equal", "value": false }
+      ]
+    }
+  },
+  {
+    "id": "claim.missing_payer",
+    "category": "claimParties",
+    "severity": "blocking",
+    "message": "Claim is missing an active payer profile.",
+    "fixRoute": "/settings/payers",
+    "whyItMatters": "The payer determines routing and adjudication rules. A claim with no active payer cannot be submitted.",
+    "resolution": "Link the claim to an active payer profile (Settings → Payers), then re-validate.",
+    "conditions": {
+      "all": [
+        { "fact": "claim", "path": "$.hasPayerProfile", "operator": "equal", "value": false }
+      ]
+    }
+  },
+  {
+    "id": "claim.missing_service_location",
+    "category": "claimParties",
+    "severity": "blocking",
+    "message": "Claim is missing the service facility (location).",
+    "fixRoute": "/settings/locations",
+    "whyItMatters": "The service facility (Loop 2310C) is required whenever services are not provided at the billing provider's address. Many payers reject in-clinic claims with no facility either.",
+    "resolution": "Set the service location on the encounter and regenerate the claim party snapshot, or configure a default service facility under Settings → Locations.",
+    "conditions": {
+      "all": [
+        { "fact": "parties", "path": "$.hasServiceFacility", "operator": "equal", "value": false }
+      ]
+    }
+  },
+  {
+    "id": "claim.missing_place_of_service",
+    "category": "claimServiceLines",
+    "severity": "blocking",
+    "message": "Claim is missing place of service (POS) on the claim or on one or more lines.",
+    "fixRoute": "/encounters",
+    "whyItMatters": "POS tells the payer where the service occurred (office, telehealth, hospital). It directly drives reimbursement and benefit-tier rules.",
+    "resolution": "Set the place-of-service code on every service line and on the claim header.",
+    "conditions": {
+      "any": [
+        { "fact": "claim", "path": "$.hasPlaceOfService", "operator": "equal", "value": false },
+        { "fact": "serviceLines", "path": "$.missingPosCount", "operator": "greaterThan", "value": 0 }
+      ]
+    }
+  },
+  {
+    "id": "claim.telehealth_missing_modifier",
+    "category": "claimTelehealth",
+    "severity": "blocking",
+    "message": "One or more telehealth service lines (POS 02 / 10) are missing a telehealth modifier (95, GT, GQ, or FQ).",
+    "fixRoute": "/encounters",
+    "whyItMatters": "Most payers require an explicit telehealth modifier when POS is 02 (telehealth other than home) or 10 (telehealth in patient's home). Claims without the modifier are denied as missing required information.",
+    "resolution": "Add the appropriate telehealth modifier (typically 95 for synchronous audio/video) to every service line on this claim.",
+    "conditions": {
+      "all": [
+        { "fact": "telehealth", "path": "$.requiresModifier", "operator": "equal", "value": true }
+      ]
+    }
+  },
+  {
+    "id": "claim.payer_requires_authorization_missing",
+    "category": "claimAuthorization",
+    "severity": "blocking",
+    "message": "Payer requires prior authorization, but no authorization number is attached to this claim.",
+    "fixRoute": "/settings/payers",
+    "whyItMatters": "Submitting a claim to a payer that requires prior authorization without the auth number results in an immediate denial and may trigger a retro-auth process or full write-off.",
+    "resolution": "Obtain the prior authorization, enter the authorization number on the claim (or on the encounter), then re-run validation.",
+    "conditions": {
+      "all": [
+        { "fact": "authorization", "path": "$.missing", "operator": "equal", "value": true }
+      ]
+    }
+  }
+]
