@@ -134,13 +134,32 @@ export default function WorkqueueClient() {
       }),
     });
 
-    const json = (await response.json()) as { ok?: boolean; success?: boolean; error?: string; errors?: Array<{ message: string }> };
-    if (!response.ok || (!json.ok && !json.success)) {
-      const msg = json.errors?.[0]?.message || json.error || "Workqueue action failed.";
+    const json = (await response.json()) as {
+      ok?: boolean;
+      success?: boolean;
+      error?: string;
+      errors?: Array<{ message: string }>;
+      result?: { ok?: boolean; errors?: Array<{ message: string }> };
+    };
+    const innerOk = json.result?.ok;
+    const succeeded = response.ok && (json.ok ?? json.success ?? innerOk) === true;
+    if (!succeeded) {
+      const msg =
+        json.result?.errors?.[0]?.message ||
+        json.errors?.[0]?.message ||
+        json.error ||
+        "Workqueue action failed.";
       setActionFeedback({ type: "error", message: msg });
     } else {
       setComment("");
       setActionFeedback({ type: "success", message: `Action "${action}" completed successfully.` });
+      const terminalAction = action === "resolve" || action === "close";
+      const removeFromActiveView = terminalAction && (status === "active" || status === "open" || status === "in_progress");
+      if (removeFromActiveView) {
+        const removedId = selected.id;
+        setItems((prev) => prev.filter((item) => item.id !== removedId));
+        setSelectedId((current) => (current === removedId ? null : current));
+      }
       await loadItems();
     }
     setActing(false);
