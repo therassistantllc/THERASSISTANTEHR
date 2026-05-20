@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { mapLegacyClaimInputToProfessionalClaim } from "@/lib/claims/createProfessionalClaimFromLegacyInput";
+import { assertClaimSubmissionReady, gateResponse } from "@/lib/validation/claimSubmissionGate";
 
 function generateUuid() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
@@ -25,6 +26,12 @@ export async function POST(request: Request) {
     if (encounter.encounter_status !== "signed") {
       return NextResponse.json({ error: "Encounter must be signed before claim creation" }, { status: 422 });
     }
+
+    const gate = await assertClaimSubmissionReady(
+      typeof encounter.organization_id === "string" ? encounter.organization_id : null,
+    );
+    const blocked = gateResponse(gate);
+    if (blocked) return blocked;
 
     const { data: existingClaim } = await supabase
       .from("professional_claims")

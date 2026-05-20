@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
+import { assertClaimSubmissionReady, gateResponse } from "@/lib/validation/claimSubmissionGate";
 
 type DbRow = Record<string, unknown>;
 
@@ -27,6 +28,10 @@ export async function POST(request: Request) {
     if (!organizationId) {
       return NextResponse.json({ success: false, error: "organizationId is required" }, { status: 400 });
     }
+
+    const gate = await assertClaimSubmissionReady(organizationId);
+    const blocked = gateResponse(gate);
+    if (blocked) return blocked;
 
     const { data: claims, error: claimsError } = await supabase
       .from("professional_claims")

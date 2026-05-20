@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { convertChargeCaptureToProfessionalClaim } from "@/lib/charges/chargeToProfessionalClaimService";
+import { assertClaimSubmissionReady, gateResponse } from "@/lib/validation/claimSubmissionGate";
 
 export async function POST(request: Request) {
   try {
@@ -10,6 +11,10 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
+
+    const gate = await assertClaimSubmissionReady(String(body.organizationId));
+    const blocked = gateResponse(gate);
+    if (blocked) return blocked;
 
     const result = await convertChargeCaptureToProfessionalClaim({
       organizationId: String(body.organizationId),

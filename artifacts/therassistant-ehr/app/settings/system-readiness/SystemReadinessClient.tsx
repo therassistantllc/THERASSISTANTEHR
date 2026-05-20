@@ -89,6 +89,51 @@ type SeedResult = {
   error?: string;
 };
 
+type SimulationCheck = {
+  id: string;
+  label: string;
+  status: "pass" | "fail" | "skipped";
+  detail: string;
+};
+
+type SimulationReport = {
+  organizationId: string;
+  generatedAt: string;
+  transmitted: false;
+  containsPhi: false;
+  configReady: boolean;
+  configBlocking: number;
+  simulationReady: boolean;
+  checks: SimulationCheck[];
+  chosenEntities: {
+    providerName: string | null;
+    locationName: string | null;
+    payerName: string | null;
+    feeScheduleCpt: string | null;
+    clearinghouseVendor: string | null;
+  };
+  syntheticClaim: {
+    patientName: string;
+    patientDob: string;
+    memberId: string;
+    serviceDate: string;
+    cpt: string | null;
+    diagnosisCode: string;
+  };
+};
+
+const SIM_STATUS_COLOR: Record<SimulationCheck["status"], string> = {
+  pass: "var(--text-success, #15803d)",
+  fail: "var(--text-danger, #c53030)",
+  skipped: "var(--text-secondary, #6b7280)",
+};
+
+const SIM_STATUS_LABEL: Record<SimulationCheck["status"], string> = {
+  pass: "PASS",
+  fail: "FAIL",
+  skipped: "SKIP",
+};
+
 export default function SystemReadinessClient() {
   const organizationId = useMemo(() => getOrganizationId(), []);
   const { role } = useUserRole();
@@ -99,6 +144,30 @@ export default function SystemReadinessClient() {
   const [seeding, setSeeding] = useState(false);
   const [seedResult, setSeedResult] = useState<SeedResult | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [simulating, setSimulating] = useState(false);
+  const [simulation, setSimulation] = useState<SimulationReport | null>(null);
+  const [simulationError, setSimulationError] = useState<string | null>(null);
+
+  const runSimulation = useCallback(async () => {
+    if (!organizationId) return;
+    setSimulating(true);
+    setSimulationError(null);
+    setSimulation(null);
+    try {
+      const res = await fetch("/api/settings/system-readiness/simulate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ organizationId }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error ?? "Simulation failed");
+      setSimulation(json as SimulationReport);
+    } catch (e) {
+      setSimulationError(e instanceof Error ? e.message : "Simulation failed.");
+    } finally {
+      setSimulating(false);
+    }
+  }, [organizationId]);
 
   const load = useCallback(() => {
     if (!organizationId) {
@@ -218,6 +287,14 @@ export default function SystemReadinessClient() {
               )}
             </>
           )}
+          <button
+            className="button button-secondary"
+            onClick={runSimulation}
+            disabled={simulating || loading || !organizationId}
+            title="Synthesise a non-PHI test claim and verify every dependency. Nothing is transmitted."
+          >
+            {simulating ? "Simulating…" : "Run Test Claim Simulation"}
+          </button>
           <button className="button button-secondary" onClick={load} disabled={loading}>
             {loading ? "Checking…" : "Refresh"}
           </button>
@@ -229,6 +306,78 @@ export default function SystemReadinessClient() {
 
       {!organizationId && <div className="alert-panel">No organization context.</div>}
       {error && <div className="alert-panel">{error}</div>}
+      {simulationError && <div className="alert-panel">Simulation: {simulationError}</div>}
+
+      {simulation && (
+        <section
+          className="panel"
+          style={{
+            borderLeft: `3px solid ${
+              simulation.simulationReady ? "var(--text-success, #15803d)" : "var(--text-danger, #c53030)"
+            }`,
+          }}
+        >
+          <h2 style={{ marginBottom: "var(--space-2)" }}>
+            Test Claim Simulation —{" "}
+            {simulation.simulationReady ? (
+              <span style={{ color: "var(--text-success, #15803d)" }}>✓ Would succeed</span>
+            ) : (
+              <span style={{ color: "var(--text-danger, #c53030)" }}>⚠ Would fail</span>
+            )}
+          </h2>
+          <p style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 var(--space-3)" }}>
+            Synthetic claim — no PHI, never transmitted. Patient &quot;{simulation.syntheticClaim.patientName}&quot;,
+            DOB {simulation.syntheticClaim.patientDob}, member {simulation.syntheticClaim.memberId}, service date{" "}
+            {simulation.syntheticClaim.serviceDate}, CPT {simulation.syntheticClaim.cpt ?? "—"}, dx{" "}
+            {simulation.syntheticClaim.diagnosisCode}.
+          </p>
+          <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: "var(--space-2)" }}>
+            {simulation.checks.map((c) => (
+              <li
+                key={c.id}
+                style={{
+                  display: "flex",
+                  gap: "var(--space-3)",
+                  alignItems: "baseline",
+                  padding: "var(--space-2) var(--space-3)",
+                  background: "var(--surface-2, #f7f9fc)",
+                  borderRadius: "var(--radius, 6px)",
+                  borderLeft: `3px solid ${SIM_STATUS_COLOR[c.status]}`,
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: "var(--text-xs, 0.7rem)",
+                    fontWeight: 700,
+                    letterSpacing: "0.05em",
+                    padding: "2px 8px",
+                    borderRadius: 999,
+                    background: SIM_STATUS_COLOR[c.status],
+                    color: "white",
+                    minWidth: 48,
+                    textAlign: "center",
+                  }}
+                >
+                  {SIM_STATUS_LABEL[c.status]}
+                </span>
+                <span style={{ minWidth: 200, fontWeight: 600 }}>{c.label}</span>
+                <span style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)" }}>{c.detail}</span>
+              </li>
+            ))}
+          </ul>
+          <p
+            style={{
+              fontSize: "var(--text-xs, 0.7rem)",
+              color: "var(--text-secondary)",
+              textAlign: "right",
+              marginTop: "var(--space-3)",
+            }}
+          >
+            Simulation generated {new Date(simulation.generatedAt).toLocaleString()} · transmitted=false ·
+            containsPhi=false
+          </p>
+        </section>
+      )}
 
       {seedResult && (
         <section

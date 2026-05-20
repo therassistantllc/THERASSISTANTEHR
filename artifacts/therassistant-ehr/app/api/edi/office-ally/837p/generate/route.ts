@@ -9,6 +9,7 @@ import type {
   ProfessionalClaimServiceLine,
 } from "@/lib/edi/officeAlly837p/types";
 import { validateOfficeAlly837PClaim } from "@/lib/edi/officeAlly837p/validate837p";
+import { assertClaimSubmissionReady, gateResponse } from "@/lib/validation/claimSubmissionGate";
 
 function asString(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
@@ -213,6 +214,10 @@ export async function POST(request: Request) {
     }
 
     const claim = normalizeClaim(claimRow as unknown as Record<string, unknown>);
+
+    const gate = await assertClaimSubmissionReady(claim.organization_id);
+    const blocked = gateResponse(gate);
+    if (blocked) return blocked;
 
     const [{ data: serviceRows, error: serviceError }, { data: partiesRow, error: partiesError }] = await Promise.all([
       supabase

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClaimDraftFromChargeCapture } from "@/lib/claims/chargeCaptureClaimBridgeService";
+import { assertClaimSubmissionReady, gateResponse } from "@/lib/validation/claimSubmissionGate";
 
 interface ReleaseRequestBody {
   organizationId?: string;
@@ -20,6 +21,10 @@ export async function POST(request: Request) {
     if (ids.length === 0) {
       return NextResponse.json({ success: false, error: "chargeCaptureIds is required" }, { status: 400 });
     }
+
+    const gate = await assertClaimSubmissionReady(organizationId);
+    const blocked = gateResponse(gate);
+    if (blocked) return blocked;
 
     const results = await Promise.all(
       ids.map(async (chargeCaptureId) => {

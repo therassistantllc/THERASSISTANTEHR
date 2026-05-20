@@ -3,6 +3,7 @@ import {
   createProfessionalClaimDraft,
   validateProfessionalClaimReadiness,
 } from "@/lib/claims/claimReadinessService";
+import { assertClaimSubmissionReady, gateResponse } from "@/lib/validation/claimSubmissionGate";
 
 export async function POST(request: Request) {
   try {
@@ -24,6 +25,10 @@ export async function POST(request: Request) {
         return NextResponse.json({ success: false, error: `${field} is required` }, { status: 400 });
       }
     }
+
+    const gate = await assertClaimSubmissionReady(String(body.organizationId));
+    const blocked = gateResponse(gate);
+    if (blocked) return blocked;
 
     const result = await createProfessionalClaimDraft({
       organizationId: String(body.organizationId),

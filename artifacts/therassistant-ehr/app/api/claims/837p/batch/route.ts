@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { generate837PBatch } from "@/lib/claims/edi837pBatchService";
+import { assertClaimSubmissionReady, gateResponse } from "@/lib/validation/claimSubmissionGate";
 
 export async function POST(request: Request) {
   try {
@@ -7,6 +8,10 @@ export async function POST(request: Request) {
     if (!body.organizationId) {
       return NextResponse.json({ success: false, error: "organizationId is required" }, { status: 400 });
     }
+
+    const gate = await assertClaimSubmissionReady(String(body.organizationId));
+    const blocked = gateResponse(gate);
+    if (blocked) return blocked;
 
     const result = await generate837PBatch({
       organizationId: String(body.organizationId),
