@@ -136,28 +136,60 @@ export async function POST(
       "data:image/webp;base64,",
       "data:image/gif;base64,",
     ];
+    const CARD_BUCKET = "intake-card-images";
 
-    function sanitizeCard(input: unknown): { name: string | null; type: string | null; content: string } | null {
+    type SanitizedCard = {
+      name: string | null;
+      type: string | null;
+      content: string;
+      bytes: Buffer;
+      extension: string;
+    };
+
+    function sanitizeCard(input: unknown): SanitizedCard | null {
       if (!input || typeof input !== "object") return null;
       const obj = input as Row;
       const content = typeof obj.content === "string" ? obj.content : "";
       if (!content) return null;
       if (content.length > MAX_CARD_BYTES) return null;
       const lower = content.toLowerCase();
-      if (!ALLOWED_IMAGE_PREFIXES.some((prefix) => lower.startsWith(prefix))) return null;
+      const matched = ALLOWED_IMAGE_PREFIXES.find((prefix) => lower.startsWith(prefix));
+      if (!matched) return null;
+      const commaIdx = content.indexOf(",");
+      if (commaIdx < 0) return null;
+      const base64 = content.slice(commaIdx + 1);
+      let bytes: Buffer;
+      try {
+        bytes = Buffer.from(base64, "base64");
+      } catch {
+        return null;
+      }
+      if (bytes.length === 0) return null;
       const type = typeof obj.type === "string" && obj.type.startsWith("image/") ? obj.type : null;
       const rawName = typeof obj.name === "string" ? obj.name : null;
       const name = rawName ? rawName.replace(/[\r\n<>"'`]/g, "").slice(0, 200) : null;
-      return { name, type, content };
+      const extension = matched.includes("png")
+        ? "png"
+        : matched.includes("webp")
+          ? "webp"
+          : matched.includes("gif")
+            ? "gif"
+            : "jpg";
+      return { name, type, content, bytes, extension };
     }
+
+    const cardFrontSanitized = sanitizeCard(insuranceInput.cardFront);
+    const cardBackSanitized = sanitizeCard(insuranceInput.cardBack);
 
     const insurance: Row = {
       planName: value(insuranceInput.planName),
       policyNumber: value(insuranceInput.policyNumber),
       groupNumber: value(insuranceInput.groupNumber),
       subscriberRelationship: value(insuranceInput.subscriberRelationship) || "self",
-      cardFront: sanitizeCard(insuranceInput.cardFront),
-      cardBack: sanitizeCard(insuranceInput.cardBack),
+      // cardFront/cardBack are populated below after the storage upload so
+      // we never persist base64 image content in the database.
+      cardFront: null as unknown,
+      cardBack: null as unknown,
     };
 
     if (!signatureName) {
@@ -223,6 +255,63 @@ export async function POST(
         { success: false, error: "Intake link has already been used" },
         { status: 410 },
       );
+    }
+
+    // Upload insurance card photos (if any) to private object storage and
+    // record the storage references inside the submission's insurance JSON.
+    // We do this AFTER the link is claimed so a failed/duplicate submission
+    // never leaves orphaned blobs in the bucket.
+    type StoredCard = {
+      bucket: string;
+      path: string;
+      name: string | null;
+      type: string | null;
+      uploadedAt: string;
+    };
+    async function uploadCard(
+      side: "front" | "back",
+      card: SanitizedCard | null,
+    ): Promise<StoredCard | null> {
+      if (!card) return null;
+      const objectPath = `${organizationId}/${submissionId}/${side}.${card.extension}`;
+      const contentType = card.type ?? `image/${card.extension === "jpg" ? "jpeg" : card.extension}`;
+      const { error: uploadErr } = await supabase!.storage
+        .from(CARD_BUCKET)
+        .upload(objectPath, card.bytes, {
+          contentType,
+          upsert: true,
+        });
+      if (uploadErr) {
+        console.error(`Intake card upload failed (${side}):`, uploadErr.message);
+        return null;
+      }
+      return {
+        bucket: CARD_BUCKET,
+        path: objectPath,
+        name: card.name,
+        type: contentType,
+        uploadedAt: now,
+      };
+    }
+
+    const [storedFront, storedBack] = await Promise.all([
+      uploadCard("front", cardFrontSanitized),
+      uploadCard("back", cardBackSanitized),
+    ]);
+
+    if (storedFront || storedBack) {
+      const updatedInsurance: Row = {
+        ...insurance,
+        cardFront: storedFront,
+        cardBack: storedBack,
+      };
+      const { error: insUpdateErr } = await supabase!
+        .from("intake_submissions")
+        .update({ insurance: updatedInsurance })
+        .eq("id", submissionId);
+      if (insUpdateErr) {
+        console.error("Failed to attach card references to submission:", insUpdateErr.message);
+      }
     }
 
     // Patch client demographics & address from intake answers (only when provided)

@@ -396,14 +396,19 @@ export default function PatientChartClient({ clientId }: { clientId: string }) {
           <div className="stack-list">
             {intakeSubmissions.slice(0, 3).map((submission) => {
               const insurance = (submission.insurance ?? {}) as Record<string, unknown>;
-              const safeCard = (raw: unknown): string | null => {
-                if (!raw || typeof raw !== "object") return null;
-                const content = (raw as { content?: unknown }).content;
-                if (typeof content !== "string") return null;
-                return /^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(content) ? content : null;
+              const hasCard = (raw: unknown): boolean => {
+                if (!raw || typeof raw !== "object") return false;
+                const obj = raw as { path?: unknown; content?: unknown };
+                if (typeof obj.path === "string" && obj.path.length > 0) return true;
+                if (typeof obj.content === "string" && obj.content.startsWith("data:image/")) return true;
+                return false;
               };
-              const front = safeCard((insurance as Record<string, unknown>).cardFront);
-              const back = safeCard((insurance as Record<string, unknown>).cardBack);
+              const frontUrl = hasCard(insurance.cardFront)
+                ? `/api/intake/card/${encodeURIComponent(submission.id)}/front`
+                : null;
+              const backUrl = hasCard(insurance.cardBack)
+                ? `/api/intake/card/${encodeURIComponent(submission.id)}/back`
+                : null;
               const consents = (submission.consents ?? {}) as Record<string, unknown>;
               const consentList = [
                 consents.hipaa ? "HIPAA" : null,
@@ -419,14 +424,36 @@ export default function PatientChartClient({ clientId }: { clientId: string }) {
                     GAD-7: {submission.gad7Score ?? "—"} ({submission.gad7Severity ?? "—"})
                   </span>
                   <span>Consents on file: {consentList || "—"}</span>
-                  {front || back ? (
-                    <div style={{ display: "flex", gap: "8px", marginTop: "6px" }}>
-                      {front ? (
-                        <img src={front} alt="Insurance card front" style={{ height: "70px", border: "1px solid var(--border, #ddd)", borderRadius: "4px" }} />
-                      ) : null}
-                      {back ? (
-                        <img src={back} alt="Insurance card back" style={{ height: "70px", border: "1px solid var(--border, #ddd)", borderRadius: "4px" }} />
-                      ) : null}
+                  {frontUrl || backUrl ? (
+                    <div style={{ marginTop: "6px" }}>
+                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                        {frontUrl ? (
+                          <a href={frontUrl} target="_blank" rel="noreferrer" title="View insurance card front">
+                            <img
+                              src={frontUrl}
+                              alt="Insurance card front"
+                              style={{ height: "70px", border: "1px solid var(--border, #ddd)", borderRadius: "4px", display: "block" }}
+                            />
+                          </a>
+                        ) : null}
+                        {backUrl ? (
+                          <a href={backUrl} target="_blank" rel="noreferrer" title="View insurance card back">
+                            <img
+                              src={backUrl}
+                              alt="Insurance card back"
+                              style={{ height: "70px", border: "1px solid var(--border, #ddd)", borderRadius: "4px", display: "block" }}
+                            />
+                          </a>
+                        ) : null}
+                      </div>
+                      <div style={{ marginTop: "4px", fontSize: "12px" }}>
+                        {frontUrl ? (
+                          <a href={frontUrl} target="_blank" rel="noreferrer" style={{ marginRight: "12px" }}>View original front</a>
+                        ) : null}
+                        {backUrl ? (
+                          <a href={backUrl} target="_blank" rel="noreferrer">View original back</a>
+                        ) : null}
+                      </div>
                     </div>
                   ) : null}
                 </div>
