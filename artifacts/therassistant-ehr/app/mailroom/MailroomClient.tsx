@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 import styles from "./mailroom.module.css";
 
-type DocStatus = "needs_review" | "filed" | "attached" | "new";
+type DocStatus = "needs_review" | "filed" | "attached" | "new" | "pending";
 
 interface MailroomDoc {
   id: string;
@@ -18,9 +18,15 @@ interface MailroomDoc {
   notes: string;
   createdAt: string;
   source: string;
+  storagePath?: string;
 }
 
-interface Comment { id: string; author: string; text: string; date: string; }
+interface Comment {
+  id: string;
+  author: string;
+  text: string;
+  date: string;
+}
 
 const DOC_TYPE_LABELS: Record<string, string> = {
   payer_correspondence: "Payer Correspondence",
@@ -32,21 +38,6 @@ const DOC_TYPE_LABELS: Record<string, string> = {
   insurance_card: "Insurance Card",
   id: "ID Document",
   other: "Other",
-};
-
-const DEMO_DOCS: MailroomDoc[] = [
-  { id: "doc-1", fileName: "BCBS_ERA_2026-0234.pdf", mimeType: "application/pdf", documentType: "eob", status: "needs_review", clientName: "Avery Morgan", clientId: "cc100001-0000-0000-0000-000000000002", notes: "ERA received 05/19 — partial payment noted for 3 claims. Denial reason: CO-4.", createdAt: "2026-05-19T09:00:00Z", source: "clearinghouse" },
-  { id: "doc-2", fileName: "Aetna_EOB_05-18.pdf", mimeType: "application/pdf", documentType: "eob", status: "filed", clientName: "Dana Patel", clientId: "cc100001-0000-0000-0000-000000000001", notes: "EOB for May 12 session. Payment posted.", createdAt: "2026-05-18T14:00:00Z", source: "clearinghouse" },
-  { id: "doc-3", fileName: "SofiaM_intake_consent.pdf", mimeType: "application/pdf", documentType: "consent", status: "needs_review", clientName: "Sofia Martinez", clientId: "cc100001-0000-0000-0000-000000000003", notes: "", createdAt: "2026-05-17T10:30:00Z", source: "uploaded" },
-  { id: "doc-4", fileName: "UHC_PriorAuth_MarcusT.pdf", mimeType: "application/pdf", documentType: "prior_auth", status: "attached", clientName: "Marcus Thompson", clientId: "cc100001-0000-0000-0000-000000000005", notes: "Prior auth approved for 20 sessions. Expires 12/31/2026.", createdAt: "2026-05-15T08:00:00Z", source: "fax" },
-  { id: "doc-5", fileName: "ElenaR_InsuranceCard_front.jpg", mimeType: "image/jpeg", documentType: "insurance_card", status: "needs_review", clientName: "Elena Rodriguez", clientId: "cc100001-0000-0000-0000-000000000001", notes: "", createdAt: "2026-05-14T16:00:00Z", source: "uploaded" },
-  { id: "doc-6", fileName: "Medicaid_denial_JamesR.pdf", mimeType: "application/pdf", documentType: "payer_correspondence", status: "needs_review", clientName: "James Rivera", clientId: "cc100001-0000-0000-0000-000000000004", notes: "Denial code: CO-97. See notes for appeal instructions.", createdAt: "2026-05-13T11:00:00Z", source: "clearinghouse" },
-  { id: "doc-7", fileName: "BCBS_bulk_ERA_may2026.pdf", mimeType: "application/pdf", documentType: "eob", status: "new", notes: "Bulk ERA received. Not yet matched to claims.", createdAt: "2026-05-19T07:00:00Z", source: "clearinghouse" },
-];
-
-const DEMO_COMMENTS: Record<string, Comment[]> = {
-  "doc-1": [{ id: "c1", author: "Lena Ortiz", text: "Reviewed — denial is for incorrect place of service. Correcting and resubmitting.", date: "05/19/2026 9:14 AM" }],
-  "doc-2": [{ id: "c2", author: "Noah Kim", text: "EOB received. Payment posted to ledger. Remaining balance sent to patient.", date: "05/18/2026 2:30 PM" }],
 };
 
 function getOrg() {
@@ -66,11 +57,11 @@ function iconClass(mime: string): string {
 }
 
 function statusClass(s: DocStatus): string {
-  return { needs_review: styles.statusNeedsReview, filed: styles.statusFiled, attached: styles.statusAttached, new: styles.statusNew }[s] ?? styles.statusNeedsReview;
+  return ({ needs_review: styles.statusNeedsReview, filed: styles.statusFiled, attached: styles.statusAttached, new: styles.statusNew, pending: styles.statusNew } as Record<string, string>)[s] ?? styles.statusNeedsReview;
 }
 
 function statusLabel(s: DocStatus): string {
-  return { needs_review: "Needs Review", filed: "Filed", attached: "Attached to Chart", new: "New" }[s] ?? s;
+  return ({ needs_review: "Needs Review", filed: "Filed", attached: "Attached to Chart", new: "New", pending: "Pending" } as Record<string, string>)[s] ?? s;
 }
 
 function fmtDate(v: string) {
@@ -79,54 +70,68 @@ function fmtDate(v: string) {
   return Number.isNaN(d.getTime()) ? v : d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-type FilterType = "all" | DocStatus;
+function fmtDateTime(v: string) {
+  if (!v) return "—";
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? v : d.toLocaleString();
+}
+
+type FilterType = "active" | "all" | DocStatus;
 
 export default function MailroomClient() {
   const orgId = useMemo(() => getOrg(), []);
   const [docs, setDocs] = useState<MailroomDoc[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<FilterType>("all");
+  const [filter, setFilter] = useState<FilterType>("active");
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [comments, setComments] = useState<Record<string, Comment[]>>(DEMO_COMMENTS);
+  const [comments, setComments] = useState<Record<string, Comment[]>>({});
+  const [commentsLoading, setCommentsLoading] = useState(false);
   const [newComment, setNewComment] = useState("");
+  const [postingComment, setPostingComment] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [filing, setFiling] = useState(false);
+  const [filingError, setFilingError] = useState<string | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    async function load() {
-      setLoading(true);
-      try {
-        const res = await fetch(`/api/mailroom/items?organizationId=${encodeURIComponent(orgId)}&status=all&limit=50`);
-        const json = await res.json() as { success?: boolean; items?: Array<Record<string, unknown>> };
-        if (json.success && Array.isArray(json.items) && json.items.length > 0) {
-          setDocs(json.items.map((item) => ({
-            id: String(item.id ?? ""),
-            fileName: String(item.fileName ?? item.file_name ?? "Untitled"),
-            mimeType: String(item.mimeType ?? item.mime_type ?? "application/octet-stream"),
-            documentType: String(item.documentType ?? item.document_type ?? "other"),
-            status: (String(item.status ?? "needs_review")) as DocStatus,
-            clientId: item.clientId ? String(item.clientId) : undefined,
-            clientName: item.clientName ? String(item.clientName) : undefined,
-            notes: String(item.notes ?? ""),
-            createdAt: String(item.createdAt ?? item.created_at ?? ""),
-            source: String(item.source ?? "uploaded"),
-          })));
-        } else {
-          setDocs(DEMO_DOCS);
-        }
-      } catch {
-        setDocs(DEMO_DOCS);
+  const loadDocs = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/mailroom/items?organizationId=${encodeURIComponent(orgId)}&status=all&limit=100`);
+      const json = (await res.json()) as { success?: boolean; items?: Array<Record<string, unknown>> };
+      if (json.success && Array.isArray(json.items)) {
+        setDocs(json.items.map((item) => ({
+          id: String(item.id ?? ""),
+          fileName: String(item.fileName ?? item.file_name ?? "Untitled"),
+          mimeType: String(item.mimeType ?? item.mime_type ?? "application/octet-stream"),
+          documentType: String(item.documentType ?? item.document_type ?? "other"),
+          status: (String(item.status ?? "needs_review")) as DocStatus,
+          clientId: item.clientId ? String(item.clientId) : undefined,
+          clientName: item.clientName ? String(item.clientName) : undefined,
+          notes: String(item.notes ?? ""),
+          createdAt: String(item.createdAt ?? item.created_at ?? ""),
+          source: String(item.source ?? "uploaded"),
+          storagePath: item.storagePath ? String(item.storagePath) : undefined,
+        })));
+      } else {
+        setDocs([]);
       }
-      setLoading(false);
+    } catch {
+      setDocs([]);
     }
-    load();
+    setLoading(false);
   }, [orgId]);
+
+  useEffect(() => {
+    void loadDocs();
+  }, [loadDocs]);
 
   const filtered = useMemo(() => {
     let list = docs;
-    if (filter !== "all") list = list.filter((d) => d.status === filter);
+    if (filter === "active") list = list.filter((d) => d.status !== "filed");
+    else if (filter !== "all") list = list.filter((d) => d.status === filter);
     if (search.trim()) {
       const q = search.toLowerCase();
       list = list.filter((d) =>
@@ -140,12 +145,91 @@ export default function MailroomClient() {
 
   const selected = useMemo(() => docs.find((d) => d.id === selectedId) ?? null, [docs, selectedId]);
   const selectedComments = useMemo(() => (selectedId ? (comments[selectedId] ?? []) : []), [comments, selectedId]);
+  const previewUrl = useMemo(() => {
+    if (!selected) return null;
+    if (!selected.storagePath || selected.id.startsWith("doc-upload-")) return null;
+    return `/api/mailroom/items/${encodeURIComponent(selected.id)}/file?organizationId=${encodeURIComponent(orgId)}`;
+  }, [selected, orgId]);
+  const isImagePreview = selected?.mimeType.startsWith("image/") ?? false;
+  const isPdfPreview = selected?.mimeType.includes("pdf") ?? false;
 
-  function addComment() {
-    if (!selectedId || !newComment.trim()) return;
-    const c: Comment = { id: `c-${Date.now()}`, author: "You", text: newComment.trim(), date: new Date().toLocaleString() };
-    setComments((prev) => ({ ...prev, [selectedId]: [...(prev[selectedId] ?? []), c] }));
-    setNewComment("");
+  useEffect(() => {
+    setPreviewOpen(false);
+    setFilingError(null);
+    if (!selectedId) return;
+    let cancelled = false;
+    async function loadNotes() {
+      setCommentsLoading(true);
+      try {
+        const res = await fetch(`/api/mailroom/items/${encodeURIComponent(selectedId!)}/notes?organizationId=${encodeURIComponent(orgId)}`);
+        const json = (await res.json()) as { success?: boolean; notes?: Array<{ id: string; authorName: string; body: string; createdAt: string }> };
+        if (cancelled) return;
+        if (json.success && Array.isArray(json.notes)) {
+          setComments((prev) => ({
+            ...prev,
+            [selectedId!]: json.notes!.map((n) => ({ id: n.id, author: n.authorName || "Staff", text: n.body, date: fmtDateTime(n.createdAt) })),
+          }));
+        }
+      } catch {
+        // leave existing
+      }
+      if (!cancelled) setCommentsLoading(false);
+    }
+    void loadNotes();
+    return () => { cancelled = true; };
+  }, [selectedId, orgId]);
+
+  async function addComment() {
+    if (!selectedId || !newComment.trim() || postingComment) return;
+    setPostingComment(true);
+    const body = newComment.trim();
+    try {
+      const res = await fetch(`/api/mailroom/items/${encodeURIComponent(selectedId)}/notes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ organizationId: orgId, body, authorName: "You" }),
+      });
+      const json = (await res.json()) as { success?: boolean; note?: { id: string; authorName: string; body: string; createdAt: string } };
+      if (json.success && json.note) {
+        const note = json.note;
+        setComments((prev) => ({
+          ...prev,
+          [selectedId]: [...(prev[selectedId] ?? []), { id: note.id, author: note.authorName || "You", text: note.body, date: fmtDateTime(note.createdAt) }],
+        }));
+        setNewComment("");
+      }
+    } catch {
+      // ignore — input retained so user can retry
+    }
+    setPostingComment(false);
+  }
+
+  async function fileToDestination(destination: "patient_chart" | "practice_documents") {
+    if (!selected || filing) return;
+    setFiling(true);
+    setFilingError(null);
+    try {
+      const res = await fetch("/api/mailroom/file", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          organization_id: orgId,
+          mailroom_item_id: selected.id,
+          filing_destination: destination,
+          target_id: destination === "patient_chart" ? (selected.clientId ?? null) : null,
+          admin_comments: selected.notes || "",
+        }),
+      });
+      const json = (await res.json()) as { success?: boolean; error?: string };
+      if (!res.ok || !json.success) {
+        setFilingError(json.error || "Unable to file document.");
+      } else {
+        setDocs((prev) => prev.map((d) => (d.id === selected.id ? { ...d, status: "filed" } : d)));
+      }
+    } catch (err) {
+      setFilingError(err instanceof Error ? err.message : "Unable to file document.");
+    }
+    setFiling(false);
   }
 
   function handleDrop(e: React.DragEvent) {
@@ -180,10 +264,6 @@ export default function MailroomClient() {
     }, 800);
   }
 
-  function markStatus(id: string, status: DocStatus) {
-    setDocs((prev) => prev.map((d) => d.id === id ? { ...d, status } : d));
-  }
-
   return (
     <div className={styles.page}>
       {/* Header */}
@@ -200,9 +280,9 @@ export default function MailroomClient() {
           <input className={styles.searchInput} placeholder="Search documents…" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
         <div className={styles.filterRow}>
-          {(["all", "new", "needs_review", "attached", "filed"] as FilterType[]).map((f) => (
+          {(["active", "all", "new", "needs_review", "attached", "filed"] as FilterType[]).map((f) => (
             <button key={f} type="button" className={filter === f ? `${styles.filterChip} ${styles.filterChipActive}` : styles.filterChip} onClick={() => setFilter(f)}>
-              {f === "all" ? "All" : f === "needs_review" ? "Needs Review" : statusLabel(f as DocStatus)}
+              {f === "active" ? "Active" : f === "all" ? "All" : f === "needs_review" ? "Needs Review" : statusLabel(f as DocStatus)}
             </button>
           ))}
         </div>
@@ -317,20 +397,45 @@ export default function MailroomClient() {
               <div className={styles.previewArea}>
                 <div className={styles.previewHeader}>
                   <span className={styles.previewTitle}>Document Preview</span>
+                  {previewUrl ? (
+                    <a href={previewUrl} target="_blank" rel="noreferrer" className={styles.previewBtn} style={{ marginLeft: "auto" }}>
+                      Open in new tab
+                    </a>
+                  ) : null}
                 </div>
-                <div className={styles.previewPlaceholder}>
-                  <div className={styles.previewIcon}>
-                    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /></svg>
+                {previewUrl && previewOpen ? (
+                  isImagePreview ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={previewUrl} alt={selected.fileName} style={{ width: "100%", maxHeight: 520, objectFit: "contain", background: "#0F172A", borderRadius: 8 }} />
+                  ) : isPdfPreview ? (
+                    <iframe src={previewUrl} title={selected.fileName} style={{ width: "100%", height: 520, border: "none", borderRadius: 8, background: "#0F172A" }} />
+                  ) : (
+                    <div className={styles.previewPlaceholder}>
+                      <div className={styles.previewPlaceholderText}>{selected.fileName}</div>
+                      <a href={previewUrl} target="_blank" rel="noreferrer" className={styles.previewBtn}>Download Document</a>
+                    </div>
+                  )
+                ) : (
+                  <div className={styles.previewPlaceholder}>
+                    <div className={styles.previewIcon}>
+                      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /></svg>
+                    </div>
+                    <div className={styles.previewPlaceholderText}>{selected.fileName}</div>
+                    {previewUrl ? (
+                      <button type="button" className={styles.previewBtn} onClick={() => setPreviewOpen(true)}>Open Full Document</button>
+                    ) : (
+                      <div style={{ fontSize: 12, color: "#94A3B8" }}>No file attached to this item.</div>
+                    )}
                   </div>
-                  <div className={styles.previewPlaceholderText}>{selected.fileName}</div>
-                  <button type="button" className={styles.previewBtn}>Open Full Document</button>
-                </div>
+                )}
               </div>
 
               {/* Comments */}
               <div className={styles.commentSection}>
                 <div className={styles.commentHeader}>Comments &amp; Notes</div>
-                {selectedComments.length > 0 ? (
+                {commentsLoading ? (
+                  <div style={{ padding: "12px 16px", color: "#94A3B8", fontSize: 13 }}>Loading notes…</div>
+                ) : selectedComments.length > 0 ? (
                   <div className={styles.commentList}>
                     {selectedComments.map((c) => (
                       <div key={c.id} className={styles.comment}>
@@ -348,28 +453,48 @@ export default function MailroomClient() {
                     placeholder="Add a comment or note…"
                     value={newComment}
                     onChange={(e) => setNewComment(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter") addComment(); }}
+                    onKeyDown={(e) => { if (e.key === "Enter") void addComment(); }}
+                    disabled={postingComment}
                   />
-                  <button type="button" className={styles.commentSubmit} onClick={addComment}>Add</button>
+                  <button type="button" className={styles.commentSubmit} onClick={() => void addComment()} disabled={postingComment || !newComment.trim()}>
+                    {postingComment ? "Saving…" : "Add"}
+                  </button>
                 </div>
               </div>
 
               {/* Attach / File Actions */}
               <div className={styles.attachSection}>
                 <div className={styles.attachHeader}>File or Attach</div>
+                {filingError ? <div style={{ color: "#DC2626", fontSize: 12.5, marginBottom: 8 }}>{filingError}</div> : null}
                 <div className={styles.attachActions}>
                   {selected.clientId ? (
-                    <Link className={`${styles.attachBtn} ${styles.attachBtnPrimary}`} href={`/clients/${selected.clientId}/documents`}>
-                      Attach to Chart
-                    </Link>
+                    <button
+                      type="button"
+                      className={`${styles.attachBtn} ${styles.attachBtnPrimary}`}
+                      onClick={() => void fileToDestination("patient_chart")}
+                      disabled={filing || selected.status === "filed"}
+                    >
+                      {filing ? "Filing…" : "File to Patient Chart"}
+                    </button>
                   ) : (
-                    <button type="button" className={`${styles.attachBtn} ${styles.attachBtnPrimary}`}>Link to Patient Chart</button>
+                    <Link className={`${styles.attachBtn} ${styles.attachBtnPrimary}`} href={`/mailroom/${selected.id}`}>
+                      Link to Patient Chart
+                    </Link>
                   )}
-                  <button type="button" className={styles.attachBtn}>File to Provider Profile</button>
-                  <button type="button" className={styles.attachBtn}>File to Practice</button>
-                  <button type="button" className={`${styles.attachBtn} ${styles.markFiledBtn}`} onClick={() => markStatus(selected.id, "filed")}>
-                    Mark as Filed
+                  <button
+                    type="button"
+                    className={styles.attachBtn}
+                    onClick={() => void fileToDestination("practice_documents")}
+                    disabled={filing || selected.status === "filed"}
+                  >
+                    File to Practice
                   </button>
+                  <Link className={styles.attachBtn} href={`/mailroom/${selected.id}`}>
+                    Advanced Filing…
+                  </Link>
+                  {selected.status === "filed" ? (
+                    <span className={`${styles.attachBtn} ${styles.markFiledBtn}`} style={{ cursor: "default" }}>Filed</span>
+                  ) : null}
                 </div>
               </div>
             </div>

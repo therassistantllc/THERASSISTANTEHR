@@ -13,16 +13,20 @@ function getSupabase() {
   return createClient(supabaseUrl, supabaseServiceRoleKey);
 }
 
+function clean(value: unknown) {
+  return String(value ?? "").trim();
+}
+
 export async function POST(req: NextRequest) {
   try {
     const supabase = getSupabase();
     const body = await req.json();
-    const { 
-      mailroom_item_id, 
+    const {
+      mailroom_item_id,
       filing_destination,
       target_id,
       admin_comments,
-      organization_id
+      organization_id,
     } = body;
 
     if (!mailroom_item_id || !filing_destination || !organization_id) {
@@ -32,11 +36,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Get mailroom item
+    // Get mailroom item, enforcing org ownership
     const { data: mailroomItem, error: mailroomError } = await supabase
       .from("mailroom_items")
       .select("*")
       .eq("id", mailroom_item_id)
+      .eq("organization_id", organization_id)
       .single();
 
     if (mailroomError || !mailroomItem) {
@@ -46,15 +51,30 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Create document record
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const documentData: any = {
+    const mimeType =
+      clean((mailroomItem as Record<string, unknown>).mime_type) ||
+      clean((mailroomItem as Record<string, unknown>).file_mime_type) ||
+      "application/pdf";
+
+    const scope =
+      filing_destination === "patient_chart" ? "client"
+      : filing_destination === "claim" ? "claim"
+      : filing_destination === "encounter" ? "encounter"
+      : "practice";
+
+    // Create document record using actual schema columns
+    const documentData: Record<string, unknown> = {
       organization_id,
-      storage_path: mailroomItem.storage_path,
-      file_name: mailroomItem.file_name || "mailroom_document",
-      file_type: mailroomItem.mime_type || "application/pdf",
-      uploaded_by: mailroomItem.uploaded_by_user_id,
-      uploaded_at: new Date().toISOString(),
+      mailroom_item_id,
+      document_scope: scope,
+      document_type: clean((mailroomItem as Record<string, unknown>).document_type) || "other",
+      file_name: clean((mailroomItem as Record<string, unknown>).file_name) || "mailroom_document",
+      mime_type: mimeType,
+      storage_bucket: clean((mailroomItem as Record<string, unknown>).storage_bucket) || null,
+      storage_path: clean((mailroomItem as Record<string, unknown>).storage_path) || null,
+      uploaded_by_user_id: (mailroomItem as Record<string, unknown>).uploaded_by_user_id || null,
+      filed_at: new Date().toISOString(),
+      notes: admin_comments || null,
     };
 
     // Set appropriate FK based on filing destination
@@ -65,7 +85,6 @@ export async function POST(req: NextRequest) {
     } else if (filing_destination === "encounter" && target_id) {
       documentData.encounter_id = target_id;
     }
-    // practice_documents doesn't need a target_id
 
     const { data: document, error: documentError } = await supabase
       .from("documents")
@@ -80,15 +99,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Update mailroom item status to filed
+    // Update mailroom item status to filed (with org guard)
     const { error: updateError } = await supabase
       .from("mailroom_items")
       .update({
         status: "filed",
-        admin_comments,
+        admin_comments: admin_comments ?? null,
         updated_at: new Date().toISOString(),
       })
-      .eq("id", mailroom_item_id);
+      .eq("id", mailroom_item_id)
+      .eq("organization_id", organization_id);
 
     if (updateError) {
       return NextResponse.json(
@@ -97,10 +117,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    return NextResponse.json({ 
+    return NextResponse.json({
       success: true,
       document_id: document.id,
-      message: "Document filed successfully"
+      message: "Document filed successfully",
     });
   } catch (error: unknown) {
     console.error("Mailroom filing error:", error);

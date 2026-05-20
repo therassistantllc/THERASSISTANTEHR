@@ -14,7 +14,7 @@ function itemDto(row: DbRow) {
     organizationId: clean(row.organization_id),
     clientId: clean(row.client_id),
     fileName: clean(row.file_name),
-    mimeType: clean(row.mime_type),
+    mimeType: clean(row.mime_type) || clean(row.file_mime_type),
     storagePath: clean(row.storage_path),
     status: clean(row.status),
     documentType: clean(row.document_type),
@@ -34,7 +34,7 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url);
     const organizationId = searchParams.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
-    const status = searchParams.get("status") || "pending";
+    const status = searchParams.get("status") || "active";
     const clientId = searchParams.get("clientId") || null;
     const limit = Math.min(Math.max(Number(searchParams.get("limit") || 50), 1), 100);
 
@@ -42,12 +42,13 @@ export async function GET(request: Request) {
 
     let query = supabase
       .from("mailroom_items")
-      .select("id, organization_id, client_id, file_name, mime_type, storage_path, status, document_type, source, notes, admin_comments, uploaded_by_user_id, created_at, updated_at")
+      .select("id, organization_id, client_id, file_name, mime_type, file_mime_type, storage_bucket, storage_path, status, document_type, source, notes, admin_comments, uploaded_by_user_id, created_at, updated_at")
       .eq("organization_id", organizationId)
       .order("created_at", { ascending: false })
       .limit(limit);
 
-    if (status !== "all") query = query.eq("status", status);
+    if (status === "active") query = query.neq("status", "filed");
+    else if (status !== "all") query = query.eq("status", status);
     if (clientId) query = query.eq("client_id", clientId);
 
     const { data, error } = await query;
