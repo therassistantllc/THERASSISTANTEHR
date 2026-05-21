@@ -355,6 +355,12 @@ export default function Batches837PClient() {
                 </div>
 
                 <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                  <Link
+                    className="button"
+                    href={`/billing/batches/${encodeURIComponent(batch.id)}?organizationId=${encodeURIComponent(organizationId)}`}
+                  >
+                    Open lifecycle
+                  </Link>
                   <button
                     type="button"
                     className="button button-secondary"
