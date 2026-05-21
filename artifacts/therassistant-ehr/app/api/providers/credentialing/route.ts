@@ -3,7 +3,7 @@ import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 
 const CREDENTIALING_SELECT =
-  "id, provider_name, credential_display, individual_npi, email, practice_name, practice_address, practice_tax_id, group_npi, group_medicaid_id, phone, taxonomy_code, individual_medicaid_id, caqh_id, other_payer_id, primary_license_number, primary_license_effective_date, payer_effective_date, payer_revalidation_date, secondary_license_number, secondary_license_effective_date, is_active, updated_at";
+  "id, provider_name, credential_display, individual_npi, email, practice_name, practice_address, practice_tax_id, group_npi, group_medicaid_id, phone, taxonomy_code, individual_medicaid_id, caqh_id, other_payer_id, primary_license_number, primary_license_effective_date, payer_effective_date, payer_revalidation_date, secondary_license_number, secondary_license_effective_date, telehealth_url, stripe_payment_link_url, is_active, updated_at";
 
 export async function GET(request: Request) {
   try {
@@ -133,7 +133,8 @@ export async function PATCH(request: NextRequest) {
       "caqh_id", "other_payer_id", "primary_license_number",
       "primary_license_effective_date", "secondary_license_number",
       "secondary_license_effective_date", "payer_effective_date",
-      "payer_revalidation_date", "is_active",
+      "payer_revalidation_date", "telehealth_url", "stripe_payment_link_url",
+      "is_active",
     ] as const;
 
     const updates: Record<string, unknown> = {};

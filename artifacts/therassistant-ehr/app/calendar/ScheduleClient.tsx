@@ -667,6 +667,13 @@ type EligibilityFreshness = {
 
 const STALE_DAYS = 30;
 
+type ProviderBillingConfig = {
+  id: string;
+  displayName: string;
+  telehealthUrl: string | null;
+  stripePaymentLinkUrl: string | null;
+};
+
 function ContextPanel({ appt, onClose }: { appt: ScheduleAppointment; onClose: () => void }) {
   const organizationId = useMemo(() => getOrganizationId(), []);
   const [eligibilityRunning, setEligibilityRunning] = useState(false);
@@ -677,6 +684,42 @@ function ContextPanel({ appt, onClose }: { appt: ScheduleAppointment; onClose: (
     daysSince: null,
     lastStatus: null,
   });
+  const [providerConfigs, setProviderConfigs] = useState<ProviderBillingConfig[]>([]);
+  const [copayModalOpen, setCopayModalOpen] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/providers/credentialing?organizationId=${encodeURIComponent(organizationId)}`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((json: { success?: boolean; providers?: Array<{ id: string; provider_name: string; credential_display?: string | null; telehealth_url?: string | null; stripe_payment_link_url?: string | null }> }) => {
+        if (cancelled || !json.success) return;
+        setProviderConfigs(
+          (json.providers ?? []).map((p) => ({
+            id: String(p.id),
+            displayName: p.credential_display ? `${p.provider_name}, ${p.credential_display}` : String(p.provider_name),
+            telehealthUrl: p.telehealth_url ?? null,
+            stripePaymentLinkUrl: p.stripe_payment_link_url ?? null,
+          })),
+        );
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [organizationId]);
+
+  const matchedProvider = useMemo(() => {
+    const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const target = norm(appt.provider);
+    return (
+      providerConfigs.find((p) => norm(p.displayName) === target) ??
+      providerConfigs.find((p) => norm(p.displayName).startsWith(target) || target.startsWith(norm(p.displayName))) ??
+      null
+    );
+  }, [appt.provider, providerConfigs]);
+
+  const resolvedTelehealthUrl = appt.telehealthUrl ?? matchedProvider?.telehealthUrl ?? null;
+  const resolvedStripeUrl = matchedProvider?.stripePaymentLinkUrl ?? null;
 
   // Reset and re-fetch freshness whenever the selected appointment changes.
   useEffect(() => {
@@ -1043,23 +1086,37 @@ function ContextPanel({ appt, onClose }: { appt: ScheduleAppointment; onClose: (
             Open full chart
             <ChevronRight className="w-4 h-4 text-slate-400" />
           </Link>
-          {appt.telehealthUrl &&
+          {appt.location === "Telehealth" &&
           (appt.status === "scheduled" || appt.status === "checked_in" || appt.status === "in_session") ? (
-            <a
-              href={appt.telehealthUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="w-full inline-flex items-center justify-between px-3 py-2 rounded-lg border border-purple-200 bg-purple-50 hover:bg-purple-100 text-sm font-semibold text-purple-900"
-            >
-              <span className="inline-flex items-center gap-2">
-                <Video className="w-4 h-4" /> Join Telehealth
-              </span>
-              <ChevronRight className="w-4 h-4 text-purple-400" />
-            </a>
+            resolvedTelehealthUrl ? (
+              <a
+                href={resolvedTelehealthUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full inline-flex items-center justify-between px-3 py-2 rounded-lg border border-purple-200 bg-purple-50 hover:bg-purple-100 text-sm font-semibold text-purple-900"
+              >
+                <span className="inline-flex items-center gap-2">
+                  <Video className="w-4 h-4" /> Join Telehealth
+                </span>
+                <ChevronRight className="w-4 h-4 text-purple-400" />
+              </a>
+            ) : (
+              <Link
+                href="/settings/providers"
+                className="w-full inline-flex items-center justify-between px-3 py-2 rounded-lg border border-amber-200 bg-amber-50 hover:bg-amber-100 text-sm font-medium text-amber-900"
+                title={`No telehealth URL set for ${appt.provider}`}
+              >
+                <span className="inline-flex items-center gap-2">
+                  <Video className="w-4 h-4" /> Set telehealth URL for {appt.provider.split(",")[0]}
+                </span>
+                <ChevronRight className="w-4 h-4 text-amber-500" />
+              </Link>
+            )
           ) : null}
           {appt.copay ? (
             <button
               type="button"
+              onClick={() => setCopayModalOpen(true)}
               className="w-full text-left px-3 py-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-sm font-medium text-slate-800"
             >
               Collect copay {appt.copay}
@@ -1067,7 +1124,173 @@ function ContextPanel({ appt, onClose }: { appt: ScheduleAppointment; onClose: (
           ) : null}
         </section>
       </div>
+      {copayModalOpen ? (
+        <CollectCopayModal
+          appt={appt}
+          organizationId={organizationId}
+          providerId={matchedProvider?.id ?? null}
+          stripePaymentLinkUrl={resolvedStripeUrl}
+          onClose={() => setCopayModalOpen(false)}
+        />
+      ) : null}
     </aside>
+  );
+}
+
+function CollectCopayModal({
+  appt,
+  organizationId,
+  providerId,
+  stripePaymentLinkUrl,
+  onClose,
+}: {
+  appt: ScheduleAppointment;
+  organizationId: string;
+  providerId: string | null;
+  stripePaymentLinkUrl: string | null;
+  onClose: () => void;
+}) {
+  const defaultAmount = useMemo(() => {
+    if (!appt.copay) return "";
+    const cleaned = appt.copay.replace(/[^0-9.]/g, "");
+    return cleaned || "";
+  }, [appt.copay]);
+
+  const [amount, setAmount] = useState(defaultAmount);
+  const [method, setMethod] = useState<string>(stripePaymentLinkUrl ? "stripe_link" : "card_terminal");
+  const [reference, setReference] = useState("");
+  const [note, setNote] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+
+  const handleSubmit = async () => {
+    setError(null);
+    setSuccess(null);
+    const dollars = Number.parseFloat(amount);
+    if (!Number.isFinite(dollars) || dollars < 0) {
+      setError("Enter a valid amount.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/billing/copay-transactions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          organizationId,
+          appointmentId: appt.id.startsWith("appt-") ? null : appt.id,
+          clientId: appt.clientId,
+          providerId,
+          amountDollars: dollars,
+          paymentMethod: method,
+          externalReference: reference.trim() || null,
+          stripePaymentLinkUrl: method === "stripe_link" ? stripePaymentLinkUrl : null,
+          note: note.trim() || null,
+        }),
+      });
+      const json = (await res.json()) as { success?: boolean; error?: string };
+      if (!res.ok || !json.success) throw new Error(json.error ?? "Failed to log transaction");
+      setSuccess(`Logged $${dollars.toFixed(2)} ${method.replace(/_/g, " ")}.`);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to log transaction");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        zIndex: 1100, padding: 16,
+      }}
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ background: "#fff", borderRadius: 8, width: "100%", maxWidth: 460, boxShadow: "0 20px 50px rgba(15,23,42,0.3)", overflow: "hidden" }}
+      >
+        <div style={{ padding: "14px 18px", borderBottom: "1px solid #e2e8f0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontWeight: 700, color: "#0f172a" }}>Collect copay — {appt.patientName}</div>
+            <div style={{ fontSize: 12, color: "#64748b" }}>{appt.type} · {appt.provider}</div>
+          </div>
+          <button type="button" onClick={onClose} style={{ border: "none", background: "transparent", fontSize: 22, color: "#64748b", cursor: "pointer" }}>×</button>
+        </div>
+        <div style={{ padding: "16px 18px", display: "grid", gap: 12 }}>
+          {stripePaymentLinkUrl ? (
+            <a
+              href={stripePaymentLinkUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ display: "inline-flex", justifyContent: "center", alignItems: "center", gap: 8, padding: "10px 14px", background: "#635bff", color: "#fff", borderRadius: 6, fontWeight: 600, textDecoration: "none", fontSize: 14 }}
+            >
+              Open Stripe Payment Link →
+            </a>
+          ) : (
+            <div style={{ padding: 10, background: "#fef3c7", border: "1px solid #fde68a", borderRadius: 6, fontSize: 12, color: "#92400e" }}>
+              No Stripe Payment Link set for {appt.provider}.{" "}
+              <Link href="/settings/providers" style={{ color: "#92400e", textDecoration: "underline" }}>Configure in Provider Settings</Link> to enable one-click checkout. You can still log the transaction below.
+            </div>
+          )}
+
+          <label style={{ fontSize: 12, display: "block" }}>
+            <span style={{ fontWeight: 600, display: "block", marginBottom: 4 }}>Amount (USD)</span>
+            <input
+              type="number" step="0.01" min="0" value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              style={{ width: "100%", padding: "8px 10px", border: "1px solid #cbd5e1", borderRadius: 4, fontSize: 14 }}
+            />
+          </label>
+
+          <label style={{ fontSize: 12, display: "block" }}>
+            <span style={{ fontWeight: 600, display: "block", marginBottom: 4 }}>Payment method</span>
+            <select
+              value={method}
+              onChange={(e) => setMethod(e.target.value)}
+              style={{ width: "100%", padding: "8px 10px", border: "1px solid #cbd5e1", borderRadius: 4, fontSize: 14, background: "#fff" }}
+            >
+              <option value="stripe_link">Stripe Payment Link</option>
+              <option value="card_terminal">Card terminal (in-person)</option>
+              <option value="cash">Cash</option>
+              <option value="check">Check</option>
+              <option value="hsa_fsa">HSA / FSA</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
+
+          <label style={{ fontSize: 12, display: "block" }}>
+            <span style={{ fontWeight: 600, display: "block", marginBottom: 4 }}>Reference / confirmation #</span>
+            <input
+              type="text" value={reference}
+              onChange={(e) => setReference(e.target.value)}
+              placeholder="Stripe pi_… or terminal ref"
+              style={{ width: "100%", padding: "8px 10px", border: "1px solid #cbd5e1", borderRadius: 4, fontSize: 14 }}
+            />
+          </label>
+
+          <label style={{ fontSize: 12, display: "block" }}>
+            <span style={{ fontWeight: 600, display: "block", marginBottom: 4 }}>Note (optional)</span>
+            <textarea
+              rows={2} value={note}
+              onChange={(e) => setNote(e.target.value)}
+              style={{ width: "100%", padding: "8px 10px", border: "1px solid #cbd5e1", borderRadius: 4, fontSize: 14, fontFamily: "inherit", resize: "vertical" }}
+            />
+          </label>
+
+          {error ? <div style={{ color: "#dc2626", fontSize: 12 }}>{error}</div> : null}
+          {success ? <div style={{ color: "#059669", fontSize: 12, fontWeight: 600 }}>{success}</div> : null}
+        </div>
+        <div style={{ padding: "12px 18px", borderTop: "1px solid #e2e8f0", display: "flex", justifyContent: "flex-end", gap: 8, background: "#f8fafc" }}>
+          <button type="button" onClick={onClose} className="button button-secondary">Close</button>
+          <button type="button" onClick={handleSubmit} disabled={submitting} className="button button-primary">
+            {submitting ? "Logging…" : "Log transaction"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

@@ -138,6 +138,18 @@ export async function POST(request: Request) {
     const seriesId = recurrenceFrequency === "none" ? null : generateUuid();
     const now = new Date().toISOString();
 
+    let providerTelehealthUrl: string | null = null;
+    if (serviceLocation === "telehealth") {
+      const { data: profile } = await supabase
+        .from("provider_credentialing_profiles")
+        .select("telehealth_url")
+        .eq("organization_id", organizationId)
+        .eq("id", providerId)
+        .is("archived_at", null)
+        .maybeSingle();
+      providerTelehealthUrl = (profile as { telehealth_url?: string | null } | null)?.telehealth_url ?? null;
+    }
+
     if (seriesId) {
       const { error: seriesError } = await supabase.from("appointment_series").insert({
         id: seriesId,
@@ -187,8 +199,10 @@ export async function POST(request: Request) {
         );
       }
 
-      const teleToken = serviceLocation === "telehealth" ? generateUuid() : null;
-      const teleUrl = teleToken ? telehealthUrlFor(teleToken) : null;
+      const teleToken = serviceLocation === "telehealth" && !providerTelehealthUrl ? generateUuid() : null;
+      const teleUrl = serviceLocation === "telehealth"
+        ? providerTelehealthUrl ?? (teleToken ? telehealthUrlFor(teleToken) : null)
+        : null;
 
       const appointmentId = generateUuid();
       const appointmentPayload = {
