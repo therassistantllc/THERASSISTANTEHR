@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
+import { requireAuthenticatedStaff } from "@/lib/rbac/auth";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 
 type DbRow = Record<string, unknown>;
@@ -26,8 +27,16 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: false, error: "Database connection not available" }, { status: 500 });
     }
     const url = new URL(request.url);
+
+    // Per-clinician scoping: signed-in staff see only inbound email that is
+    // stamped with their auth_user_id as owner. If no session is present we
+    // fall back to org scope so dev/local flows keep working.
+    const ctx = await requireAuthenticatedStaff();
     const organizationId =
-      url.searchParams.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
+      ctx?.organizationId ||
+      url.searchParams.get("organizationId") ||
+      process.env.NEXT_PUBLIC_ORGANIZATION_ID ||
+      DEFAULT_ORG_ID;
     const filter = (url.searchParams.get("filter") || "all").toLowerCase();
     const userId = url.searchParams.get("userId") || "";
     const search = (url.searchParams.get("search") || "").trim();
@@ -46,6 +55,10 @@ export async function GET(request: Request) {
       .is("archived_at", null)
       .order("received_at", { ascending: false, nullsFirst: false })
       .limit(limit);
+
+    if (ctx?.userId) {
+      query = query.eq("owner_user_id", ctx.userId);
+    }
 
     if (filter === "mine" && userId) {
       query = query.eq("matched_profile_id", userId);

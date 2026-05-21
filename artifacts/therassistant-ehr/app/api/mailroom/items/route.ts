@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
+import { requireAuthenticatedStaff } from "@/lib/rbac/auth";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 
 type DbRow = Record<string, unknown>;
@@ -33,7 +34,16 @@ export async function GET(request: Request) {
     if (!supabase) return NextResponse.json({ success: false, error: "Database connection not available" }, { status: 500 });
 
     const { searchParams } = new URL(request.url);
-    const organizationId = searchParams.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
+
+    // Per-clinician scoping: signed-in staff see only their own email-derived
+    // mailroom items, plus any org-scoped items (owner_user_id IS NULL) such
+    // as manually uploaded documents that aren't tied to a clinician.
+    const ctx = await requireAuthenticatedStaff();
+    const organizationId =
+      ctx?.organizationId ||
+      searchParams.get("organizationId") ||
+      process.env.NEXT_PUBLIC_ORGANIZATION_ID ||
+      DEFAULT_ORG_ID;
     const status = searchParams.get("status") || "active";
     const clientId = searchParams.get("clientId") || null;
     const limit = Math.min(Math.max(Number(searchParams.get("limit") || 50), 1), 100);
@@ -46,6 +56,10 @@ export async function GET(request: Request) {
       .eq("organization_id", organizationId)
       .order("created_at", { ascending: false })
       .limit(limit);
+
+    if (ctx?.userId) {
+      query = query.or(`owner_user_id.is.null,owner_user_id.eq.${ctx.userId}`);
+    }
 
     if (status === "active") query = query.neq("status", "filed");
     else if (status !== "all") query = query.eq("status", status);

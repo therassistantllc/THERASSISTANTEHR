@@ -81,6 +81,7 @@ serve(async () => {
     .select(`
       id,
       organization_id,
+      owner_user_id,
       external_account_email,
       last_history_id,
       gmail_oauth_tokens!inner(refresh_token)
@@ -154,6 +155,7 @@ serve(async () => {
         const { error: rpcError } = await supabase.rpc("route_inbound_gmail_message", {
           p_organization_id: connection.organization_id,
           p_integration_connection_id: connection.id,
+          p_owner_user_id: connection.owner_user_id,
           p_gmail_message_id: message.id,
           p_gmail_thread_id: message.threadId,
           p_gmail_history_id: String(message.historyId ?? newHistoryId ?? ""),

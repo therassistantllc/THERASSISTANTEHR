@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
+import { requireAuthenticatedStaff } from "@/lib/rbac/auth";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 
 type DbRow = Record<string, unknown>;
@@ -15,15 +16,29 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: false, error: "Database connection not available" }, { status: 500 });
     }
     const url = new URL(request.url);
-    const organizationId =
-      url.searchParams.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
 
-    const { data, error } = await supabase
+    // Per-clinician scoping: a logged-in staff member sees only their own
+    // Gmail connection. If no session is present (dev/local), fall back to
+    // org scope so the existing UI keeps working.
+    const ctx = await requireAuthenticatedStaff();
+    const organizationId =
+      ctx?.organizationId ||
+      url.searchParams.get("organizationId") ||
+      process.env.NEXT_PUBLIC_ORGANIZATION_ID ||
+      DEFAULT_ORG_ID;
+
+    let query = supabase
       .from("integration_connections")
-      .select("id, integration_type, connection_status, display_name, external_account_email, last_sync_at, sync_error")
+      .select("id, integration_type, connection_status, display_name, external_account_email, last_sync_at, sync_error, owner_user_id")
       .eq("organization_id", organizationId)
-      .in("integration_type", ["gmail", "outlook", "microsoft365"])
+      .in("integration_type", ["gmail"])
       .order("created_at", { ascending: false });
+
+    if (ctx?.userId) {
+      query = query.eq("owner_user_id", ctx.userId);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       return NextResponse.json({ success: false, error: error.message }, { status: 422 });

@@ -171,23 +171,30 @@ export default function EmailClient() {
     setActing(false);
   }
 
-  function connectProvider(provider: "gmail" | "outlook") {
+  function connectGmail() {
     setConnecting(true);
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-    if (!supabaseUrl) {
-      setError(`Cannot start ${provider} connect: NEXT_PUBLIC_SUPABASE_URL is not configured.`);
+    window.location.href = "/api/integrations/gmail/start";
+  }
+
+  async function disconnectGmail() {
+    if (!confirm("Disconnect your Gmail account? Inbound email routing will stop.")) return;
+    setConnecting(true);
+    try {
+      const res = await fetch("/api/integrations/gmail/disconnect", { method: "POST" });
+      const json = (await res.json()) as { success?: boolean; error?: string };
+      if (!res.ok || !json.success) {
+        setError(json.error || "Failed to disconnect Gmail.");
+      } else {
+        await loadConnections();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to disconnect Gmail.");
+    } finally {
       setConnecting(false);
-      return;
     }
-    const fn = provider === "gmail" ? "gmail-oauth-start" : "outlook-oauth-start";
-    const url = `${supabaseUrl.replace(/\/$/, "")}/functions/v1/${fn}?organization_id=${encodeURIComponent(organizationId)}`;
-    window.location.href = url;
   }
 
   const gmailConn = connections.find((c) => c.integrationType === "gmail");
-  const outlookConn = connections.find(
-    (c) => c.integrationType === "outlook" || c.integrationType === "microsoft365",
-  );
 
   return (
     <main className="app-shell">
@@ -196,35 +203,31 @@ export default function EmailClient() {
           <p className="eyebrow">Email</p>
           <h1>Inbound email</h1>
           <p className="hero-copy">
-            Patient-facing email routed into the EHR. Auto-matched to patients when possible, AI-summarized,
+            Your patient-facing email, routed into the EHR. Each clinician connects their own Gmail —
+            messages are visible only to you. Auto-matched to patients when possible, AI-summarized,
             and one click to send to <Link className="inline-link" href="/mailroom">Mailroom</Link> or your
             <Link className="inline-link" href="/inbox"> Inbox</Link>.
           </p>
         </div>
         <div className="hero-actions">
           {gmailConn && gmailConn.connectionStatus === "connected" ? (
-            <span className="muted-text">
-              Gmail: {gmailConn.externalAccountEmail || gmailConn.displayName || "Connected"}
-              {gmailConn.lastSyncAt ? ` · last sync ${formatDateTime(gmailConn.lastSyncAt)}` : ""}
-            </span>
+            <>
+              <span className="muted-text">
+                Gmail: {gmailConn.externalAccountEmail || gmailConn.displayName || "Connected"}
+                {gmailConn.lastSyncAt ? ` · last sync ${formatDateTime(gmailConn.lastSyncAt)}` : ""}
+              </span>
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={() => void disconnectGmail()}
+                disabled={connecting}
+              >
+                {connecting ? "Working…" : "Disconnect"}
+              </button>
+            </>
           ) : (
-            <button className="button" type="button" onClick={() => connectProvider("gmail")} disabled={connecting}>
-              {connecting ? "Redirecting…" : "Connect Gmail"}
-            </button>
-          )}
-          {outlookConn && outlookConn.connectionStatus === "connected" ? (
-            <span className="muted-text">
-              Outlook: {outlookConn.externalAccountEmail || outlookConn.displayName || "Connected"}
-              {outlookConn.lastSyncAt ? ` · last sync ${formatDateTime(outlookConn.lastSyncAt)}` : ""}
-            </span>
-          ) : (
-            <button
-              className="button button-secondary"
-              type="button"
-              onClick={() => connectProvider("outlook")}
-              disabled={connecting}
-            >
-              {connecting ? "Redirecting…" : "Connect Outlook"}
+            <button className="button" type="button" onClick={connectGmail} disabled={connecting}>
+              {connecting ? "Redirecting…" : "Connect my Gmail"}
             </button>
           )}
         </div>
@@ -282,9 +285,9 @@ export default function EmailClient() {
           {loading ? <div className="empty-state">Loading…</div> : null}
           {!loading && messages.length === 0 ? (
             <div className="empty-state">
-              {gmailConn?.connectionStatus === "connected" || outlookConn?.connectionStatus === "connected"
+              {gmailConn?.connectionStatus === "connected"
                 ? "No emails match the current filter."
-                : "No emails yet. Connect Gmail or Outlook to start receiving patient mail."}
+                : "No emails yet. Connect your Gmail to start receiving patient mail."}
             </div>
           ) : null}
           {messages.map((m) => (

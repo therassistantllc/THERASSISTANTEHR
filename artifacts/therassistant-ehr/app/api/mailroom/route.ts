@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
+import { requireAuthenticatedStaff } from "@/lib/rbac/auth";
 
 type Row = Record<string, unknown>;
 
@@ -22,7 +23,12 @@ export async function GET(request: Request) {
     if (!supabase) return NextResponse.json({ success: false, error: "Database connection not available" }, { status: 500 });
 
     const { searchParams } = new URL(request.url);
-    const organizationId = searchParams.get("organizationId");
+
+    // Per-clinician scoping: signed-in staff see their own email-derived
+    // mailroom items plus any org-scoped (owner_user_id IS NULL) items such
+    // as paper-mail uploads that don't belong to a single clinician.
+    const ctx = await requireAuthenticatedStaff();
+    const organizationId = ctx?.organizationId || searchParams.get("organizationId");
     const status = value(searchParams.get("status"));
     const clientId = value(searchParams.get("clientId"));
 
@@ -35,6 +41,10 @@ export async function GET(request: Request) {
       .is("archived_at", null)
       .order("created_at", { ascending: false })
       .limit(150);
+
+    if (ctx?.userId) {
+      query = query.or(`owner_user_id.is.null,owner_user_id.eq.${ctx.userId}`);
+    }
 
     if (status && status !== "all") query = query.eq("mail_status", status);
     if (clientId) query = query.eq("client_id", clientId);

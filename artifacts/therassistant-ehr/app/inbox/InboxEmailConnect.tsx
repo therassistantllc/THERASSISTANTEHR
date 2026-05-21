@@ -10,6 +10,11 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
+
+// Note: MicrosoftGlyph and the "other" provider option are intentionally
+// retained in the file so existing parent components (e.g. InboxClient) that
+// still reference the ProviderKey union compile. Only Gmail is offered in
+// the onboarding UI.
 import styles from "./inbox.module.css";
 
 type ProviderKey = "google" | "microsoft" | "other";
@@ -91,11 +96,12 @@ export function InboxEmptyOnboarding({
         </div>
 
         <div>
-          <h2 className={styles.onboardTitle}>Connect your email</h2>
+          <h2 className={styles.onboardTitle}>Connect your Gmail</h2>
           <p className={styles.onboardCopy}>
-            Sync your Gmail, Outlook, or practice email to manage clinical
-            communications, documentation requests, signatures, and
-            patient-related messages in one place.
+            Sync your personal Gmail to manage clinical communications,
+            documentation requests, signatures, and patient-related messages
+            in one place. Each clinician connects their own mailbox — messages
+            are visible only to you.
           </p>
         </div>
 
@@ -107,29 +113,6 @@ export function InboxEmptyOnboarding({
           >
             <span className={styles.providerIcon}><GoogleGlyph /></span>
             Continue with Google
-            <ChevronRight size={16} className={styles.providerArrow} />
-          </button>
-          <button
-            type="button"
-            className={styles.providerBtn}
-            onClick={() => onProviderPick("microsoft")}
-          >
-            <span className={styles.providerIcon}><MicrosoftGlyph /></span>
-            Continue with Microsoft
-            <ChevronRight size={16} className={styles.providerArrow} />
-          </button>
-
-          <div className={styles.divider}>or</div>
-
-          <button
-            type="button"
-            className={styles.providerBtn}
-            onClick={() => onProviderPick("other")}
-          >
-            <span className={styles.providerIcon}>
-              <Mail size={18} color="#0F172A" />
-            </span>
-            Connect other email
             <ChevronRight size={16} className={styles.providerArrow} />
           </button>
         </div>
@@ -236,8 +219,10 @@ export function InboxConnectModal({
 
   function authorize() {
     setStep("connecting");
-    // Simulate OAuth roundtrip — wire to your real OAuth flow when ready.
-    window.setTimeout(() => setStep("success"), 1100);
+    // Real OAuth flow. The Next.js API route gates on the current signed-in
+    // staff member and signs an HMAC state with their user_id, so the
+    // returning connection is attributed to this clinician only.
+    window.location.href = "/api/integrations/gmail/start";
   }
 
   function finish() {
