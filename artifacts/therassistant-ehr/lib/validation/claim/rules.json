@@ -153,5 +153,89 @@
         { "fact": "authorization", "path": "$.missing", "operator": "equal", "value": true }
       ]
     }
+  },
+  {
+    "id": "claim.payer_disallowed_pos",
+    "category": "claimPayerRules",
+    "severity": "blocking",
+    "message": "Claim uses a place-of-service code that is not allowed by this payer.",
+    "fixRoute": "/encounters",
+    "whyItMatters": "Payers contractually restrict the POS codes they will reimburse. Submitting a claim with a disallowed POS results in a denial and cannot be auto-corrected by the clearinghouse.",
+    "resolution": "Update the service location / POS on the encounter to a code the payer accepts, or update the payer's allowed POS list under Settings → Payers.",
+    "conditions": {
+      "all": [
+        { "fact": "payerRules", "path": "$.disallowedPosCount", "operator": "greaterThan", "value": 0 }
+      ]
+    }
+  },
+  {
+    "id": "claim.payer_denied_cpt",
+    "category": "claimPayerRules",
+    "severity": "blocking",
+    "message": "Claim contains a CPT/HCPCS code that this payer has explicitly denied.",
+    "fixRoute": "/encounters",
+    "whyItMatters": "Sending a code the payer never reimburses guarantees a denial, wastes a submission window, and may count against your timely-filing clock.",
+    "resolution": "Remove or replace the denied procedure code on the encounter, or update the payer's denied-CPT list under Settings → Payers.",
+    "conditions": {
+      "all": [
+        { "fact": "payerRules", "path": "$.deniedCptCount", "operator": "greaterThan", "value": 0 }
+      ]
+    }
+  },
+  {
+    "id": "claim.payer_disallowed_cpt",
+    "category": "claimPayerRules",
+    "severity": "blocking",
+    "message": "Claim contains a CPT/HCPCS code that is not in this payer's allowed list.",
+    "fixRoute": "/encounters",
+    "whyItMatters": "When a payer is configured with an allow-list, any code outside the list will be denied. The allow-list is the contractual fee-schedule for this payer.",
+    "resolution": "Replace the procedure code with one in the payer's allowed list, or extend the allowed-CPT list under Settings → Payers.",
+    "conditions": {
+      "all": [
+        { "fact": "payerRules", "path": "$.disallowedCptCount", "operator": "greaterThan", "value": 0 }
+      ]
+    }
+  },
+  {
+    "id": "claim.payer_timely_filing_exceeded",
+    "category": "claimPayerRules",
+    "severity": "blocking",
+    "message": "Oldest date of service exceeds this payer's timely-filing window.",
+    "fixRoute": "/billing/claims",
+    "whyItMatters": "Once a payer's timely-filing window closes, the claim is permanently denied with no appeal — it becomes a contractual write-off.",
+    "resolution": "If the DOS is correct, write off the claim. If the payer's filing window has changed, update Timely Filing Days under Settings → Payers.",
+    "conditions": {
+      "all": [
+        { "fact": "payerRules", "path": "$.timelyFilingExceeded", "operator": "equal", "value": true }
+      ]
+    }
+  },
+  {
+    "id": "claim.payer_subscriber_relationship_missing",
+    "category": "claimPayerRules",
+    "severity": "blocking",
+    "message": "Payer requires subscriber-relationship details, but patient identity on the claim is incomplete.",
+    "fixRoute": "/patients",
+    "whyItMatters": "When the patient is not the subscriber (e.g. a dependent), the payer needs the patient's name and DOB to adjudicate against the right policy. Missing fields cause denials for incorrect patient identification.",
+    "resolution": "On the patient chart, confirm whether the patient is the subscriber. If not, enter the patient's last name and DOB, then regenerate the claim party snapshot.",
+    "conditions": {
+      "all": [
+        { "fact": "payerRules", "path": "$.subscriberRelationshipMissing", "operator": "equal", "value": true }
+      ]
+    }
+  },
+  {
+    "id": "claim.payer_rendering_taxonomy_missing",
+    "category": "claimPayerRules",
+    "severity": "blocking",
+    "message": "Payer requires the rendering provider's taxonomy code, but it is missing on this claim.",
+    "fixRoute": "/settings/providers",
+    "whyItMatters": "Some payers (especially Medicaid plans) reject 837P claims that omit the rendering provider taxonomy in Loop 2310B.",
+    "resolution": "Set the rendering provider's taxonomy code under Settings → Providers, then regenerate the claim party snapshot.",
+    "conditions": {
+      "all": [
+        { "fact": "payerRules", "path": "$.renderingTaxonomyMissing", "operator": "equal", "value": true }
+      ]
+    }
   }
 ]

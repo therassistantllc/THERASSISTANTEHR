@@ -1,5 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
+import { normalizePayerBillingRules } from "@/lib/validation/claim/facts";
+
+/**
+ * Coerce arbitrary client input into the canonical billing-rules shape so we
+ * never persist unexpected keys / types into the jsonb column. Re-uses the
+ * same normalizer the validation engine consumes, guaranteeing the rules
+ * surface in the engine exactly as written here.
+ */
+function sanitizeBillingRules(raw: unknown): Record<string, unknown> {
+  const r = normalizePayerBillingRules(raw);
+  return {
+    requires_telehealth_modifier: r.requires_telehealth_modifier,
+    allowed_pos_codes: r.allowed_pos_codes,
+    requires_rendering_provider_taxonomy: r.requires_rendering_provider_taxonomy,
+    requires_subscriber_relationship: r.requires_subscriber_relationship,
+    timely_filing_days: r.timely_filing_days,
+    allowed_cpt_codes: r.allowed_cpt_codes,
+    denied_cpt_codes: r.denied_cpt_codes,
+  };
+}
 
 function getOrgId(req: NextRequest) {
   return (
@@ -22,7 +42,9 @@ export async function GET(req: NextRequest) {
 
   const { data, error } = await supabase
     .from("payer_profiles")
-    .select("id, payer_name, office_ally_payer_id, payer_type, is_active, notes, created_at, updated_at")
+    .select(
+      "id, payer_name, office_ally_payer_id, payer_type, is_active, notes, requires_authorization, billing_rules, created_at, updated_at",
+    )
     .eq("organization_id", organizationId)
     .order("payer_name", { ascending: true });
 
@@ -66,6 +88,8 @@ export async function POST(req: NextRequest) {
       payer_type: body.payer_type ? String(body.payer_type) : null,
       is_active: Boolean(body.is_active ?? true),
       notes: body.notes ? String(body.notes) : null,
+      requires_authorization: Boolean(body.requires_authorization ?? false),
+      billing_rules: sanitizeBillingRules(body.billing_rules),
       created_at: now,
       updated_at: now,
     })
@@ -103,10 +127,20 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const allowedFields = ["payer_name", "office_ally_payer_id", "payer_type", "is_active", "notes"] as const;
+  const allowedFields = [
+    "payer_name",
+    "office_ally_payer_id",
+    "payer_type",
+    "is_active",
+    "notes",
+    "requires_authorization",
+  ] as const;
   const updates: Record<string, unknown> = {};
   for (const field of allowedFields) {
     if (field in body) updates[field] = body[field];
+  }
+  if ("billing_rules" in body) {
+    updates.billing_rules = sanitizeBillingRules(body.billing_rules);
   }
   updates.updated_at = new Date().toISOString();
 

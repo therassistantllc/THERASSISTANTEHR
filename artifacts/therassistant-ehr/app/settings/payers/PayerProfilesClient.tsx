@@ -4,6 +4,16 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 
+type BillingRules = {
+  requires_telehealth_modifier?: boolean;
+  allowed_pos_codes?: string[] | null;
+  requires_rendering_provider_taxonomy?: boolean;
+  requires_subscriber_relationship?: boolean;
+  timely_filing_days?: number | null;
+  allowed_cpt_codes?: string[] | null;
+  denied_cpt_codes?: string[] | null;
+};
+
 type Payer = {
   id: string;
   payer_name: string;
@@ -11,6 +21,8 @@ type Payer = {
   payer_type: string | null;
   is_active: boolean;
   notes: string | null;
+  requires_authorization: boolean | null;
+  billing_rules: BillingRules | null;
   updated_at: string;
 };
 
@@ -20,6 +32,16 @@ type FormState = {
   payer_type: string;
   is_active: boolean;
   notes: string;
+  requires_authorization: boolean;
+  // Billing-rules edit fields. Lists are entered as comma-separated text
+  // and split server-side so the UI stays simple.
+  requires_telehealth_modifier: boolean;
+  allowed_pos_codes_text: string;
+  requires_rendering_provider_taxonomy: boolean;
+  requires_subscriber_relationship: boolean;
+  timely_filing_days_text: string;
+  allowed_cpt_codes_text: string;
+  denied_cpt_codes_text: string;
 };
 
 const EMPTY_FORM: FormState = {
@@ -28,7 +50,27 @@ const EMPTY_FORM: FormState = {
   payer_type: "",
   is_active: true,
   notes: "",
+  requires_authorization: false,
+  requires_telehealth_modifier: false,
+  allowed_pos_codes_text: "",
+  requires_rendering_provider_taxonomy: false,
+  requires_subscriber_relationship: false,
+  timely_filing_days_text: "",
+  allowed_cpt_codes_text: "",
+  denied_cpt_codes_text: "",
 };
+
+function splitCsv(s: string): string[] {
+  return s
+    .split(/[,\s]+/)
+    .map((x) => x.trim().toUpperCase())
+    .filter((x) => x.length > 0);
+}
+
+function joinList(arr: string[] | null | undefined): string {
+  if (!arr || arr.length === 0) return "";
+  return arr.join(", ");
+}
 
 function getOrganizationId() {
   if (typeof window === "undefined") return DEFAULT_ORG_ID;
@@ -59,12 +101,26 @@ export default function PayerProfilesClient() {
   useEffect(() => { loadPayers(); }, [loadPayers]);
 
   function startEdit(p: Payer) {
+    const br = p.billing_rules ?? {};
     setForm({
       payer_name: p.payer_name,
       office_ally_payer_id: p.office_ally_payer_id,
       payer_type: p.payer_type ?? "",
       is_active: p.is_active,
       notes: p.notes ?? "",
+      requires_authorization: p.requires_authorization === true,
+      requires_telehealth_modifier: br.requires_telehealth_modifier === true,
+      allowed_pos_codes_text: joinList(br.allowed_pos_codes ?? []),
+      requires_rendering_provider_taxonomy:
+        br.requires_rendering_provider_taxonomy === true,
+      requires_subscriber_relationship:
+        br.requires_subscriber_relationship === true,
+      timely_filing_days_text:
+        typeof br.timely_filing_days === "number" && br.timely_filing_days > 0
+          ? String(br.timely_filing_days)
+          : "",
+      allowed_cpt_codes_text: joinList(br.allowed_cpt_codes ?? []),
+      denied_cpt_codes_text: joinList(br.denied_cpt_codes ?? []),
     });
     setEditingId(p.id);
     setShowNew(false);
@@ -87,13 +143,32 @@ export default function PayerProfilesClient() {
       const url = editingId
         ? `/api/settings/payer-profiles?organizationId=${encodeURIComponent(organizationId)}&id=${encodeURIComponent(editingId)}`
         : `/api/settings/payer-profiles?organizationId=${encodeURIComponent(organizationId)}`;
+      const timely = form.timely_filing_days_text.trim();
+      const parsedTimely = timely ? Number(timely) : null;
+      const billing_rules = {
+        requires_telehealth_modifier: form.requires_telehealth_modifier,
+        allowed_pos_codes: splitCsv(form.allowed_pos_codes_text),
+        requires_rendering_provider_taxonomy:
+          form.requires_rendering_provider_taxonomy,
+        requires_subscriber_relationship: form.requires_subscriber_relationship,
+        timely_filing_days:
+          parsedTimely != null && Number.isFinite(parsedTimely) && parsedTimely > 0
+            ? Math.floor(parsedTimely)
+            : null,
+        allowed_cpt_codes: splitCsv(form.allowed_cpt_codes_text),
+        denied_cpt_codes: splitCsv(form.denied_cpt_codes_text),
+      };
       const res = await fetch(url, {
         method: editingId ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          ...form,
+          payer_name: form.payer_name,
+          office_ally_payer_id: form.office_ally_payer_id,
           payer_type: form.payer_type || null,
+          is_active: form.is_active,
           notes: form.notes || null,
+          requires_authorization: form.requires_authorization,
+          billing_rules,
         }),
       });
       if (!res.ok) throw new Error((await res.json() as { error?: string }).error ?? "Save failed");
@@ -214,7 +289,92 @@ export default function PayerProfilesClient() {
               />
               Active
             </label>
-            <div style={{ display: "flex", gap: "var(--space-3)" }}>
+
+            <fieldset style={{ marginTop: "var(--space-4)", padding: "var(--space-4)", border: "1px solid var(--border-color)", borderRadius: 6 }}>
+              <legend style={{ padding: "0 var(--space-2)", fontWeight: 600 }}>
+                Billing Rules (denial prevention)
+              </legend>
+              <p style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)", marginTop: 0 }}>
+                These rules run against every claim for this payer before submission. Blocking findings appear in the claim readiness panel.
+              </p>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-4)" }}>
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={form.requires_authorization}
+                    onChange={(e) => setForm((p) => ({ ...p, requires_authorization: e.target.checked }))}
+                  />
+                  Requires prior authorization
+                </label>
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={form.requires_telehealth_modifier}
+                    onChange={(e) => setForm((p) => ({ ...p, requires_telehealth_modifier: e.target.checked }))}
+                  />
+                  Requires telehealth modifier on telehealth lines
+                </label>
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={form.requires_subscriber_relationship}
+                    onChange={(e) => setForm((p) => ({ ...p, requires_subscriber_relationship: e.target.checked }))}
+                  />
+                  Requires subscriber relationship details
+                </label>
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={form.requires_rendering_provider_taxonomy}
+                    onChange={(e) => setForm((p) => ({ ...p, requires_rendering_provider_taxonomy: e.target.checked }))}
+                  />
+                  Requires rendering provider taxonomy
+                </label>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-4)", marginTop: "var(--space-3)" }}>
+                <label className="field-label">
+                  Timely filing days (blank = no limit)
+                  <input
+                    type="number"
+                    min={1}
+                    value={form.timely_filing_days_text}
+                    onChange={(e) => setForm((p) => ({ ...p, timely_filing_days_text: e.target.value }))}
+                    placeholder="e.g. 90"
+                  />
+                </label>
+                <label className="field-label">
+                  Allowed POS codes (comma-separated, blank = any)
+                  <input
+                    type="text"
+                    value={form.allowed_pos_codes_text}
+                    onChange={(e) => setForm((p) => ({ ...p, allowed_pos_codes_text: e.target.value }))}
+                    placeholder="e.g. 11, 02, 10"
+                  />
+                </label>
+                <label className="field-label">
+                  Allowed CPT/HCPCS codes (comma-separated, blank = any)
+                  <input
+                    type="text"
+                    value={form.allowed_cpt_codes_text}
+                    onChange={(e) => setForm((p) => ({ ...p, allowed_cpt_codes_text: e.target.value }))}
+                    placeholder="e.g. 90791, 90834, 90837"
+                  />
+                </label>
+                <label className="field-label">
+                  Denied CPT/HCPCS codes (comma-separated)
+                  <input
+                    type="text"
+                    value={form.denied_cpt_codes_text}
+                    onChange={(e) => setForm((p) => ({ ...p, denied_cpt_codes_text: e.target.value }))}
+                    placeholder="e.g. 99999"
+                  />
+                </label>
+              </div>
+            </fieldset>
+
+            <div style={{ display: "flex", gap: "var(--space-3)", marginTop: "var(--space-4)" }}>
               <button className="button button-primary" onClick={handleSave} disabled={saving}>
                 {saving ? "Saving…" : editingId ? "Update" : "Create"}
               </button>

@@ -18,6 +18,7 @@ export const CATEGORIES = [
   "claimDates",
   "claimTelehealth",
   "claimAuthorization",
+  "claimPayerRules",
 ] as const;
 
 export type Category = (typeof CATEGORIES)[number];
@@ -41,6 +42,7 @@ export const CLAIM_CONTENT_CATEGORIES: Category[] = [
   "claimDates",
   "claimTelehealth",
   "claimAuthorization",
+  "claimPayerRules",
 ];
 
 export interface ValidationFinding {
