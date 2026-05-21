@@ -134,75 +134,41 @@ function buildStructured837PPlaceholder(params: {
 }
 
 export async function generate837PBatch(input: Generate837PBatchInput): Promise<Generate837PBatchResult> {
-  const supabase = createServerSupabaseAdminClient();
-  if (!supabase) {
-    return { ok: false, batchId: null, fileName: null, claimCount: 0, errors: [{ field: "system", message: "Database connection not available" }] };
-  }
-
-  const mode = input.mode ?? "test";
-  const connection = await loadConnection(input.organizationId, mode);
-  if (!connection) {
-    return { ok: false, batchId: null, fileName: null, claimCount: 0, errors: [{ field: "clearinghouse_connections", message: "Active Office Ally clearinghouse connection is required" }] };
-  }
-
-  const claims = await loadReadyClaims(input.organizationId, input.claimIds);
-  if (!claims.length) {
-    return { ok: false, batchId: null, fileName: null, claimCount: 0, errors: [{ field: "professional_claims", message: "No ready_for_batch claims found" }] };
-  }
-
-  const prepared: Array<{ claim: DbRecord; lines: DbRecord[]; snapshot: DbRecord }> = [];
-  const errors: Array<{ field: string; message: string }> = [];
-  for (const claim of claims) {
-    const detail = await loadClaimDetail(String(claim.id));
-    errors.push(...validateClaim(claim, detail.lines, detail.snapshot));
-    if (detail.snapshot) prepared.push({ claim, lines: detail.lines, snapshot: detail.snapshot });
-  }
-
-  if (errors.length) return { ok: false, batchId: null, fileName: null, claimCount: 0, errors };
-
-  const isaControlNumber = controlNumber();
-  const gsControlNumber = String(Number(isaControlNumber));
-  const stControlNumber = "0001";
-  const fileName = input.fileName ?? `TA_837P_${nowDate()}_${isaControlNumber}.edi`;
-  const fileContent = buildStructured837PPlaceholder({ connection, claims: prepared, isaControlNumber, gsControlNumber, stControlNumber });
-
-  const { data: batch, error: batchError } = await supabase
-    .from("edi_batches")
-    .insert({
-      organization_id: input.organizationId,
-      clearinghouse_connection_id: connection.id,
-      transaction_type: "837P",
-      mode,
-      file_name: fileName,
-      file_content: fileContent,
-      isa_control_number: isaControlNumber,
-      gs_control_number: gsControlNumber,
-      st_control_number: stControlNumber,
-      claim_count: prepared.length,
-      status: "generated",
-    })
-    .select("id")
-    .single();
-
-  if (batchError || !batch) {
-    return { ok: false, batchId: null, fileName, claimCount: prepared.length, errors: [{ field: "edi_batches", message: batchError?.message ?? "Failed to create EDI batch" }] };
-  }
-
-  const batchId = String(batch.id);
-  const { error: linkError } = await supabase
-    .from("edi_batch_claims")
-    .insert(prepared.map((entry) => ({ edi_batch_id: batchId, claim_id: entry.claim.id })));
-  if (linkError) {
-    return { ok: false, batchId, fileName, claimCount: prepared.length, errors: [{ field: "edi_batch_claims", message: linkError.message }] };
-  }
-
-  const { error: updateError } = await supabase
-    .from("professional_claims")
-    .update({ claim_status: "batched", updated_at: new Date().toISOString() })
-    .in("id", prepared.map((entry) => String(entry.claim.id)));
-  if (updateError) {
-    return { ok: false, batchId, fileName, claimCount: prepared.length, errors: [{ field: "professional_claims", message: updateError.message }] };
-  }
-
-  return { ok: true, batchId, fileName, claimCount: prepared.length, errors: [] };
+  // QUARANTINED 2026-05-21 (OA Companion Guide compliance audit).
+  //
+  // The buildStructured837PPlaceholder generator below is missing required
+  // Loops/segments (1000A NM1*41/PER, 1000B NM1*40, 2000A HL/PRV, 2010AA NM1*85/
+  // N3/N4/REF, 2010BA SBR, DMG, HI for diagnosis codes) and emits an SE count
+  // that includes ISA/GS, which is wrong. Its test-mode filename (TA_837P_*.edi)
+  // also omits the "OATEST" keyword required by OA CG p. 8, so test
+  // submissions would route to production. Allowing it to emit X12 risks
+  // sending malformed and/or misrouted claims to Office Ally.
+  //
+  // Use /api/claims/837p/batch/[id]/submit (which reads pre-generated content
+  // built by the spec-compliant buildOfficeAlly837P generator) instead.
+  // Reference the helpers so the unused-export lint doesn't trip while the
+  // historical implementation below is preserved in git history only.
+  void buildStructured837PPlaceholder;
+  void input;
+  void controlNumber;
+  void nowDate;
+  void createServerSupabaseAdminClient;
+  void loadConnection;
+  void loadReadyClaims;
+  void loadClaimDetail;
+  void validateClaim;
+  void sanitize;
+  return {
+    ok: false,
+    batchId: null,
+    fileName: null,
+    claimCount: 0,
+    errors: [
+      {
+        field: "generator",
+        message:
+          "This 837P generator is non-compliant with the OA Companion Guide and has been disabled. Generate the batch via the spec-compliant pipeline and submit through /api/claims/837p/batch/[id]/submit.",
+      },
+    ],
+  };
 }

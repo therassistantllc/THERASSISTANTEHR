@@ -45,6 +45,7 @@ export async function GET(req: NextRequest) {
       "sender_qualifier, receiver_qualifier, receiver_id, receiver_name, gs_receiver_code, " +
       "x12_version, isa_usage_indicator, sftp_host, sftp_port, sftp_username, " +
       "inbound_folder, outbound_folder, api_base_url, auth_type, " +
+      "submitter_contact_phone, submitter_contact_email, " +
       "eligibility_service_type_code, eligibility_transaction_set, " +
       "is_active, encrypted_credentials, vault_secret_id, vault_secret_name, created_at, updated_at",
     )
@@ -112,6 +113,14 @@ export async function POST(req: NextRequest) {
       outbound_folder: rest.outbound_folder ? String(rest.outbound_folder) : null,
       api_base_url: rest.api_base_url ? String(rest.api_base_url) : null,
       auth_type: rest.auth_type ? String(rest.auth_type) : null,
+      // Loop 1000A PER (Submitter EDI Contact Information) — TR3 005010X222A1
+      // requires at least one of TE/EM/FX. Phone is stored digits-only.
+      submitter_contact_phone: rest.submitter_contact_phone
+        ? String(rest.submitter_contact_phone).replace(/\D/g, "").slice(0, 20) || null
+        : null,
+      submitter_contact_email: rest.submitter_contact_email
+        ? String(rest.submitter_contact_email).trim().slice(0, 80) || null
+        : null,
       eligibility_service_type_code: String(rest.eligibility_service_type_code ?? "98"),
       eligibility_transaction_set: String(rest.eligibility_transaction_set ?? "270"),
       is_active: Boolean(rest.is_active ?? true),
@@ -176,11 +185,25 @@ export async function PATCH(req: NextRequest) {
     "sftp_port", "sftp_username", "inbound_folder", "outbound_folder",
     "api_base_url", "auth_type", "eligibility_service_type_code",
     "eligibility_transaction_set", "is_active",
+    "submitter_contact_phone", "submitter_contact_email",
   ] as const;
 
   const updates: Record<string, unknown> = {};
   for (const field of allowedFields) {
     if (field in body) updates[field] = body[field];
+  }
+
+  // Normalize the new contact fields if present: digits-only phone, trimmed
+  // email. Empty strings become null so the validation gate fires correctly.
+  if ("submitter_contact_phone" in updates) {
+    const raw = updates.submitter_contact_phone;
+    const digits = typeof raw === "string" ? raw.replace(/\D/g, "").slice(0, 20) : "";
+    updates.submitter_contact_phone = digits || null;
+  }
+  if ("submitter_contact_email" in updates) {
+    const raw = updates.submitter_contact_email;
+    const trimmed = typeof raw === "string" ? raw.trim().slice(0, 80) : "";
+    updates.submitter_contact_email = trimmed || null;
   }
 
   // Handle SFTP password update: store in encrypted_credentials (legacy path).

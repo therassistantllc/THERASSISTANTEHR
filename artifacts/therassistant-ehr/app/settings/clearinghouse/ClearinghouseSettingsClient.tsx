@@ -25,6 +25,8 @@ type Connection = {
   outbound_folder: string | null;
   api_base_url: string | null;
   auth_type: string | null;
+  submitter_contact_phone: string | null;
+  submitter_contact_email: string | null;
   eligibility_service_type_code: string;
   eligibility_transaction_set: string;
   is_active: boolean;
@@ -59,6 +61,8 @@ const EMPTY_FORM: FormState = {
   outbound_folder: null,
   api_base_url: "https://edi.officeally.io",
   auth_type: "api_key",
+  submitter_contact_phone: null,
+  submitter_contact_email: null,
   eligibility_service_type_code: "98",
   eligibility_transaction_set: "270",
   is_active: true,
@@ -260,6 +264,8 @@ export default function ClearinghouseSettingsClient() {
                 {fieldStr("GS Receiver Code", form.gs_receiver_code, f("gs_receiver_code"))}
                 {fieldStr("Sender Qualifier", form.sender_qualifier, f("sender_qualifier"))}
                 {fieldStr("Receiver Qualifier", form.receiver_qualifier, f("receiver_qualifier"))}
+                {fieldStr("Submitter Contact Phone", form.submitter_contact_phone, f("submitter_contact_phone"), "(Loop 1000A PER — phone or email required)")}
+                {fieldStr("Submitter Contact Email", form.submitter_contact_email, f("submitter_contact_email"), "(Loop 1000A PER — phone or email required)")}
               </div>
 
               <h3 style={{ marginBottom: "var(--space-3)", fontSize: "var(--text-sm)", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Transmission Defaults</h3>

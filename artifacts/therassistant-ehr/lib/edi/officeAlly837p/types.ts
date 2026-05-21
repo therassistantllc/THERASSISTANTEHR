@@ -14,6 +14,11 @@ export interface OfficeAllyConnection {
   gs_receiver_code: string;
   x12_version: string;
   isa_usage_indicator: "T" | "P";
+  // Loop 1000A PER — Submitter EDI Contact Information (TR3 005010X222A1 requires
+  // at least one of TE/EM/FX). Persisted on the clearinghouse connection so the
+  // generator can emit a valid PER segment.
+  submitter_contact_phone?: string | null;
+  submitter_contact_email?: string | null;
   sftp_host?: string | null;
   sftp_port?: number | null;
   sftp_username?: string | null;

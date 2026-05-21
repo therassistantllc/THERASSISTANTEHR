@@ -79,7 +79,8 @@ export function generateOfficeAlly837PBatch(
   const segments: string[] = [];
 
   const receiverId = sanitizeX12(connection.receiver_id || "330897513") || "330897513";
-  const receiverName = sanitizeX12(connection.receiver_name || "OFFICEALLY") || "OFFICEALLY";
+  // OA Companion Guide p. 11 specifies the literal value "OFFICE ALLY" (with space).
+  const receiverName = sanitizeX12(connection.receiver_name || "OFFICE ALLY") || "OFFICE ALLY";
   const gsReceiverCode = sanitizeX12(connection.gs_receiver_code || "OA") || "OA";
   const usageIndicator = connection.mode === "test" ? "T" : "P";
 
@@ -87,13 +88,16 @@ export function generateOfficeAlly837PBatch(
   const gsDate = formatDateYYYYMMDD(now);
   const time = formatTimeHHmm(now);
 
+  // ISA02 (Authorization Info) and ISA04 (Security Info) are fixed 10-char
+  // fields per X12 005010 — an empty string is malformed and OA will reject
+  // the envelope. Pad to exactly 10 spaces.
   segments.push(
     [
       "ISA",
       "00",
-      "",
+      "          ",
       "00",
-      "",
+      "          ",
       sanitizeX12(connection.sender_qualifier || "ZZ"),
       padIsaId(sanitizeX12(connection.submitter_id)),
       sanitizeX12(connection.receiver_qualifier || "30"),
@@ -140,6 +144,17 @@ export function generateOfficeAlly837PBatch(
       sanitizeX12(connection.submitter_id),
     ]),
   );
+
+  // Loop 1000A PER — Submitter EDI Contact Information. TR3 005010X222A1
+  // requires at least one of TE/EM/FX. Validation rejects the build upstream
+  // when neither phone nor email is configured, so by the time we get here we
+  // are guaranteed at least one.
+  const perPhone = (connection.submitter_contact_phone ?? "").replace(/\D/g, "").slice(0, 20);
+  const perEmail = sanitizeX12(connection.submitter_contact_email ?? "").slice(0, 80);
+  const perEls: Array<string> = ["PER", "IC", sanitizeX12(input.submitterName)];
+  if (perPhone) { perEls.push("TE", perPhone); }
+  if (perEmail) { perEls.push("EM", perEmail); }
+  segments.push(buildSegment(perEls));
 
   segments.push(buildSegment(["NM1", "40", "2", receiverName, "", "", "", "", "46", receiverId]));
 

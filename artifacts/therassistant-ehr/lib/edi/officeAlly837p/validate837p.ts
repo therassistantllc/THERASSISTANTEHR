@@ -75,13 +75,43 @@ export function validateOfficeAlly837PClaim(
 
   if (!isNonEmptyString(connection.receiver_name)) {
     pushError(errors, "connection.receiver_name", "receiver_name is required.", "ISA/GS", "1000B");
-  } else if (connection.receiver_name.toUpperCase() !== "OFFICEALLY") {
-    pushWarning(
-      warnings,
-      "connection.receiver_name",
-      "Using an explicit Office Ally receiver_name override.",
-      "ISA/GS",
-      "1000B",
+  } else {
+    // OA Companion Guide p. 11 specifies the literal "OFFICE ALLY" (with space).
+    // We accept the legacy single-token form as a non-blocking warning so previously
+    // configured connections keep working until they're migrated.
+    const normalized = connection.receiver_name.trim().toUpperCase();
+    if (normalized !== "OFFICE ALLY" && normalized !== "OFFICEALLY") {
+      pushWarning(
+        warnings,
+        "connection.receiver_name",
+        "Using an explicit Office Ally receiver_name override.",
+        "ISA/GS",
+        "1000B",
+      );
+    } else if (normalized === "OFFICEALLY") {
+      pushWarning(
+        warnings,
+        "connection.receiver_name",
+        'OA Companion Guide specifies "OFFICE ALLY" (with space) for Loop 1000B NM103.',
+        "ISA/GS",
+        "1000B",
+      );
+    }
+  }
+
+  // Loop 1000A PER (Submitter EDI Contact Information) — TR3 005010X222A1
+  // requires at least one of TE/EM/FX. Match the emitter sanitization so
+  // values like "---" or whitespace are rejected here instead of silently
+  // becoming an empty PER02 element downstream.
+  const contactPhoneDigits = String(connection.submitter_contact_phone ?? "").replace(/\D/g, "");
+  const contactEmailTrimmed = String(connection.submitter_contact_email ?? "").trim();
+  if (!contactPhoneDigits && !contactEmailTrimmed) {
+    pushError(
+      errors,
+      "connection.submitter_contact_phone",
+      "Submitter contact phone (digits) or email is required on the clearinghouse connection (Loop 1000A PER, TR3 005010X222A1).",
+      "1000A",
+      "PER",
     );
   }
 

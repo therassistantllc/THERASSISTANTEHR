@@ -12,6 +12,10 @@ export type OfficeAlly837PConfig = {
   gsReceiverCode?: string;
   usageIndicator?: "T" | "P";
   productionTestFileNameKeyword?: "OATEST" | null;
+  // Loop 1000A PER (Submitter EDI Contact Information) — TR3 005010X222A1 requires
+  // at least one of TE/EM/FX. Supply phone (digits only) or email.
+  submitterContactPhone?: string | null;
+  submitterContactEmail?: string | null;
 };
 
 export type OfficeAllyBillingProvider = {
@@ -140,6 +144,16 @@ function validateConfig(config: OfficeAlly837PConfig) {
   const errors: string[] = [];
   if (!config.submitterId) errors.push("Office Ally submitterId is required.");
   if (!config.submitterName) errors.push("Office Ally submitterName is required.");
+  // TR3 005010X222A1 Loop 1000A PER requires at least one of TE/EM/FX.
+  // Apply the same sanitization the emitter uses so values like "---" or
+  // whitespace don't pass validation but then yield an empty PER02 element.
+  const phoneSanitized = (config.submitterContactPhone ?? "").replace(/\D/g, "").slice(0, 20);
+  const emailSanitized = (config.submitterContactEmail ?? "").trim().slice(0, 80);
+  if (!phoneSanitized && !emailSanitized) {
+    errors.push(
+      "Submitter contact phone (digits) or email is required (Loop 1000A PER, TR3 005010X222A1).",
+    );
+  }
   return errors;
 }
 
@@ -188,7 +202,8 @@ export function buildOfficeAlly837P(input: OfficeAlly837PClaimInput, config: Off
   const groupControlNumber = String(Number(interchangeControlNumber));
   const transactionSetControlNumber = "0001";
   const receiverId = config.receiverId ?? "330897513";
-  const receiverName = config.receiverName ?? "OFFICEALLY";
+  // OA Companion Guide p. 11 specifies the literal value "OFFICE ALLY" (with space).
+  const receiverName = config.receiverName ?? "OFFICE ALLY";
   const gsReceiverCode = config.gsReceiverCode ?? "OA";
   const senderQualifier = config.senderQualifier ?? "ZZ";
   const receiverQualifier = config.receiverQualifier ?? "ZZ";
@@ -225,7 +240,14 @@ export function buildOfficeAlly837P(input: OfficeAlly837PClaimInput, config: Off
 
   // 1000A Submitter
   segments.push(segment("NM1", "41", "2", clean(config.submitterName, 35), "", "", "", "", "46", submitterId));
-  segments.push(segment("PER", "IC", clean(config.submitterName, 35)));
+  // PER — Submitter EDI Contact: IC + at least one of TE/EM (TR3 005010X222A1).
+  // Digits-only sanitization for phone (TE) per X12 numeric data conventions.
+  const perPhone = (config.submitterContactPhone ?? "").replace(/\D/g, "").slice(0, 20);
+  const perEmail = clean(config.submitterContactEmail ?? "", 80);
+  const perEls: Array<string> = ["IC", clean(config.submitterName, 60)];
+  if (perPhone) { perEls.push("TE", perPhone); }
+  if (perEmail) { perEls.push("EM", perEmail); }
+  segments.push(segment("PER", ...perEls));
 
   // 1000B Receiver
   segments.push(segment("NM1", "40", "2", clean(receiverName, 35), "", "", "", "", "46", receiverId));
@@ -313,7 +335,12 @@ export function buildOfficeAlly837P(input: OfficeAlly837PClaimInput, config: Off
   segments.push(segment("IEA", "1", interchangeControlNumber));
 
   const claimKeyword = "837P";
-  const testKeyword = config.productionTestFileNameKeyword === "OATEST" ? "OATEST_" : "";
+  // OA CG p. 8: include the OATEST keyword in the filename *only* for test
+  // submissions. CG explicitly states ISA15 is ignored — the filename alone
+  // determines test vs production routing — so OATEST in a P-mode filename
+  // would route to OA's test environment.
+  const isTestFile = usageIndicator === "T" && config.productionTestFileNameKeyword === "OATEST";
+  const testKeyword = isTestFile ? "OATEST_" : "";
   const fileName = `${clean(config.submitterId)}_${testKeyword}${claimKeyword}_${input.claimNumber}_${gsDate}.837`;
 
   return {
