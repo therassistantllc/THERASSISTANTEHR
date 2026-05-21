@@ -83,7 +83,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     const { data: statusEvents } = claimIds.length
       ? await supabase
           .from("claim_status_events")
-          .select("id, claim_id, source, status, status_message, office_ally_claim_id, office_ally_file_id, created_at")
+          .select("id, claim_id, source, status, status_message, availity_claim_id, availity_file_id, created_at")
           .in("claim_id", claimIds)
           .order("created_at", { ascending: true })
       : { data: [] as DbRow[] };
@@ -106,7 +106,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
         .select("id")
         .eq("organization_id", organizationId)
         .or(
-          `isa_control_number.eq.${batchNumber},gs_control_number.eq.${batchNumber},st_control_number.eq.${batchNumber},office_ally_file_id.eq.${batchNumber}`,
+          `isa_control_number.eq.${batchNumber},gs_control_number.eq.${batchNumber},st_control_number.eq.${batchNumber},availity_file_id.eq.${batchNumber}`,
         );
       ediBatchIds = ((ediBatches ?? []) as DbRow[]).map((r) => text(r.id));
     }

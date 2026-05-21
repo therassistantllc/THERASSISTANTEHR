@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 
 /**
- * Per-payer trading-partner enrollment tracker (Office Ally Phase 1, T003).
+ * Per-payer trading-partner enrollment tracker (Availity Phase 1, T003).
  *
  * One row per (org, payer_profile_id, transaction_type, environment) — with terminated rows
  * preserved for history. The unique partial index on (...) WHERE status <> 'terminated' is what
@@ -102,7 +102,7 @@ export async function GET(req: NextRequest) {
       .order("created_at", { ascending: false }),
     supabase
       .from("payer_profiles")
-      .select("id, payer_name, office_ally_payer_id, is_active")
+      .select("id, payer_name, availity_payer_id, is_active")
       .eq("organization_id", organizationId)
       .order("payer_name"),
   ]);

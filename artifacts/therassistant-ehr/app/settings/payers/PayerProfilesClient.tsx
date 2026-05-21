@@ -17,7 +17,7 @@ type BillingRules = {
 type Payer = {
   id: string;
   payer_name: string;
-  office_ally_payer_id: string;
+  availity_payer_id: string;
   payer_type: string | null;
   is_active: boolean;
   notes: string | null;
@@ -28,7 +28,7 @@ type Payer = {
 
 type FormState = {
   payer_name: string;
-  office_ally_payer_id: string;
+  availity_payer_id: string;
   payer_type: string;
   is_active: boolean;
   notes: string;
@@ -46,7 +46,7 @@ type FormState = {
 
 const EMPTY_FORM: FormState = {
   payer_name: "",
-  office_ally_payer_id: "",
+  availity_payer_id: "",
   payer_type: "",
   is_active: true,
   notes: "",
@@ -104,7 +104,7 @@ export default function PayerProfilesClient() {
     const br = p.billing_rules ?? {};
     setForm({
       payer_name: p.payer_name,
-      office_ally_payer_id: p.office_ally_payer_id,
+      availity_payer_id: p.availity_payer_id,
       payer_type: p.payer_type ?? "",
       is_active: p.is_active,
       notes: p.notes ?? "",
@@ -133,8 +133,8 @@ export default function PayerProfilesClient() {
   }
 
   const handleSave = useCallback(async () => {
-    if (!form.payer_name.trim() || !form.office_ally_payer_id.trim()) {
-      setStatusMsg({ type: "err", text: "Payer Name and Office Ally Payer ID are required." });
+    if (!form.payer_name.trim() || !form.availity_payer_id.trim()) {
+      setStatusMsg({ type: "err", text: "Payer Name and Availity Payer ID are required." });
       return;
     }
     setSaving(true);
@@ -163,7 +163,7 @@ export default function PayerProfilesClient() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           payer_name: form.payer_name,
-          office_ally_payer_id: form.office_ally_payer_id,
+          availity_payer_id: form.availity_payer_id,
           payer_type: form.payer_type || null,
           is_active: form.is_active,
           notes: form.notes || null,
@@ -199,7 +199,7 @@ export default function PayerProfilesClient() {
         <div>
           <p className="eyebrow">Settings</p>
           <h1>Payer Profiles</h1>
-          <p className="hero-copy">Office Ally payer IDs and configuration for claim submission routing.</p>
+          <p className="hero-copy">Availity payer IDs and configuration for claim submission routing.</p>
         </div>
         <div className="hero-actions">
           <Link className="button button-secondary" href="/settings">← Settings</Link>
@@ -254,11 +254,11 @@ export default function PayerProfilesClient() {
                 />
               </label>
               <label className="field-label">
-                Office Ally Payer ID <span style={{ color: "var(--text-danger)" }}>*</span>
+                Availity Payer ID <span style={{ color: "var(--text-danger)" }}>*</span>
                 <input
                   type="text"
-                  value={form.office_ally_payer_id}
-                  onChange={(e) => setForm((p) => ({ ...p, office_ally_payer_id: e.target.value }))}
+                  value={form.availity_payer_id}
+                  onChange={(e) => setForm((p) => ({ ...p, availity_payer_id: e.target.value }))}
                 />
               </label>
               <label className="field-label">
@@ -387,7 +387,7 @@ export default function PayerProfilesClient() {
           <thead>
             <tr style={{ borderBottom: "1px solid var(--border-color)", textAlign: "left" }}>
               <th style={{ padding: "8px 12px", fontSize: "var(--text-sm)" }}>Payer Name</th>
-              <th style={{ padding: "8px 12px", fontSize: "var(--text-sm)" }}>Office Ally ID</th>
+              <th style={{ padding: "8px 12px", fontSize: "var(--text-sm)" }}>Availity ID</th>
               <th style={{ padding: "8px 12px", fontSize: "var(--text-sm)" }}>Type</th>
               <th style={{ padding: "8px 12px", fontSize: "var(--text-sm)" }}>Status</th>
               <th style={{ padding: "8px 12px", fontSize: "var(--text-sm)" }}>Notes</th>
@@ -398,7 +398,7 @@ export default function PayerProfilesClient() {
             {payers.map((p) => (
               <tr key={p.id} style={{ borderBottom: "1px solid var(--border-color)" }}>
                 <td style={{ padding: "8px 12px" }}><strong>{p.payer_name}</strong></td>
-                <td style={{ padding: "8px 12px", fontFamily: "monospace" }}>{p.office_ally_payer_id}</td>
+                <td style={{ padding: "8px 12px", fontFamily: "monospace" }}>{p.availity_payer_id}</td>
                 <td style={{ padding: "8px 12px" }}>{p.payer_type ?? "—"}</td>
                 <td style={{ padding: "8px 12px" }}>
                   <span className={p.is_active ? "status status-green" : "status status-red"}>

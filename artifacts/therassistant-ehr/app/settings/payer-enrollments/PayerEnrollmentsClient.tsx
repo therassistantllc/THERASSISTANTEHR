@@ -8,14 +8,14 @@ import { DEFAULT_ORG_ID } from "@/lib/config";
  * Per-payer trading-partner enrollment tracker.
  *
  * Displays a payer × transaction-type × environment matrix with status pills, and an inline
- * editor for the most common operator action ("Office Ally just approved this combo — mark
+ * editor for the most common operator action ("Availity just approved this combo — mark
  * it approved with the OA enrollment reference").
  *
  * Source of truth: `payer_enrollments`. Production 837P submission is hard-gated on this
  * table in the batch submit route — see lib/clearinghouse/payerEnrollmentGate.ts.
  */
 
-type Payer = { id: string; payer_name: string; office_ally_payer_id: string | null; is_active: boolean };
+type Payer = { id: string; payer_name: string; availity_payer_id: string | null; is_active: boolean };
 type Enrollment = {
   id: string;
   payer_profile_id: string;
@@ -178,7 +178,7 @@ export default function PayerEnrollmentsClient() {
           <p className="eyebrow">Settings</p>
           <h1>Payer Enrollments</h1>
           <p className="hero-copy">
-            Track the Office Ally trading-partner enrollment status for each payer × transaction type. Production
+            Track the Availity trading-partner enrollment status for each payer × transaction type. Production
             837P submission is blocked at the API layer for any payer whose production enrollment is not
             <strong> Approved</strong>. Sandbox submissions always pass.
           </p>
@@ -229,9 +229,9 @@ export default function PayerEnrollmentsClient() {
                     <tr key={p.id}>
                       <td>
                         <strong>{p.payer_name}</strong>
-                        {p.office_ally_payer_id && (
+                        {p.availity_payer_id && (
                           <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
-                            OA {p.office_ally_payer_id}
+                            OA {p.availity_payer_id}
                           </div>
                         )}
                       </td>

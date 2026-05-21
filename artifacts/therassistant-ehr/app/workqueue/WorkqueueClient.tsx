@@ -277,7 +277,7 @@ export default function WorkqueueClient() {
     setClaimStatusChecking(true);
     setClaimStatusResult(null);
     try {
-      const response = await fetch("/api/clearinghouse/office-ally/claim-status", {
+      const response = await fetch("/api/clearinghouse/availity/claim-status", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

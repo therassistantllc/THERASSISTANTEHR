@@ -155,12 +155,12 @@ export async function POST(request: Request) {
     const providerNpi = billingId.billingProvider?.npi ?? "0000000000";
     const providerName = (billingId.billingProvider?.name ?? "PROVIDER").toUpperCase().slice(0, 35);
 
-    // Get Office Ally clearinghouse connection
+    // Get Availity clearinghouse connection
     const { data: connection } = await supabase
       .from("clearinghouse_connections")
       .select("*")
       .eq("organization_id", orgId)
-      .eq("vendor", "office_ally")
+      .eq("vendor", "availity")
       .eq("is_active", true)
       .maybeSingle();
 
@@ -193,8 +193,8 @@ export async function POST(request: Request) {
         ...mockResponse,
       },
       parsed_summary: mockResponse.response_summary,
-      raw_request: `ISA*00*          *00*          *ZZ*THERASSISTANT  *ZZ*OFFICEALLY    *${now.slice(0, 6)}*${now.slice(11, 15)}*U*00401*000000001*0*T*:~
-GS*HS*THERASSISTANT*OFFICEALLY*${now.slice(0, 8)}*${now.slice(11, 15)}*1*X*004010X092~
+      raw_request: `ISA*00*          *00*          *ZZ*THERASSISTANT  *ZZ*AVAILITY    *${now.slice(0, 6)}*${now.slice(11, 15)}*U*00401*000000001*0*T*:~
+GS*HS*THERASSISTANT*AVAILITY*${now.slice(0, 8)}*${now.slice(11, 15)}*1*X*004010X092~
 ST*270*0001~
 BHT*0022*13*${eligibilityCheck.id}*${now.slice(0, 8)}*${now.slice(11, 19)}~
 HL*1**20*1~
@@ -210,8 +210,8 @@ EQ*98~
 SE*14*0001~
 GE*1*1~
 IEA*1*000000001~`,
-      raw_response: `ISA*00*          *00*          *ZZ*OFFICEALLY    *ZZ*THERASSISTANT  *${now.slice(0, 6)}*${now.slice(11, 15)}*U*00401*000000001*0*T*:~
-GS*HB*OFFICEALLY*THERASSISTANT*${now.slice(0, 8)}*${now.slice(11, 15)}*1*X*004010X092~
+      raw_response: `ISA*00*          *00*          *ZZ*AVAILITY    *ZZ*THERASSISTANT  *${now.slice(0, 6)}*${now.slice(11, 15)}*U*00401*000000001*0*T*:~
+GS*HB*AVAILITY*THERASSISTANT*${now.slice(0, 8)}*${now.slice(11, 15)}*1*X*004010X092~
 ST*271*0001~
 BHT*0022*11*${eligibilityCheck.id}*${now.slice(0, 8)}*${now.slice(11, 19)}~
 HL*1**20*1~

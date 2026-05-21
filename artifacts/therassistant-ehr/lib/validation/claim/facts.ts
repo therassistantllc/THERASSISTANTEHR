@@ -47,7 +47,7 @@ export interface CanonicalClaimFacts {
   payerProfile: {
     id: string;
     payer_name: string | null;
-    office_ally_payer_id: string | null;
+    availity_payer_id: string | null;
     payer_type: string | null;
     is_active: boolean;
     requires_authorization: boolean;
@@ -98,7 +98,7 @@ type SbServiceLineRow = {
 type SbPayerProfileRow = {
   id: string;
   payer_name: string | null;
-  office_ally_payer_id: string | null;
+  availity_payer_id: string | null;
   payer_type: string | null;
   is_active: boolean;
   requires_authorization?: boolean | null;
@@ -191,7 +191,7 @@ export async function loadCanonicalClaimFacts(
     claim.payer_profile_id
       ? supabase
           .from("payer_profiles")
-          .select("id, payer_name, office_ally_payer_id, payer_type, is_active, requires_authorization, billing_rules")
+          .select("id, payer_name, availity_payer_id, payer_type, is_active, requires_authorization, billing_rules")
           .eq("id", claim.payer_profile_id)
           .maybeSingle<SbPayerProfileRow>()
       : Promise.resolve({ data: null }),
@@ -263,7 +263,7 @@ export async function loadCanonicalClaimFacts(
       ? {
           id: payerProfileRes.data.id,
           payer_name: payerProfileRes.data.payer_name ?? null,
-          office_ally_payer_id: payerProfileRes.data.office_ally_payer_id ?? null,
+          availity_payer_id: payerProfileRes.data.availity_payer_id ?? null,
           payer_type: payerProfileRes.data.payer_type ?? null,
           is_active: payerProfileRes.data.is_active,
           requires_authorization: payerProfileRes.data.requires_authorization === true,

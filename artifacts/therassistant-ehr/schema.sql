@@ -1585,8 +1585,8 @@ CREATE TABLE IF NOT EXISTS "public"."claim_status_events" (
     "status" "text" DEFAULT 'unknown'::"text" NOT NULL,
     "status_message" "text",
     "external_claim_id" "text",
-    "office_ally_claim_id" "text",
-    "office_ally_file_id" "text",
+    "availity_claim_id" "text",
+    "availity_file_id" "text",
     "payer_reference_id" "text",
     "raw_payload" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL
@@ -1704,10 +1704,10 @@ CREATE TABLE IF NOT EXISTS "public"."clearinghouse_connections" (
     "is_active" boolean DEFAULT true NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    "clearinghouse_name" "text" DEFAULT 'office_ally'::"text" NOT NULL,
+    "clearinghouse_name" "text" DEFAULT 'availity'::"text" NOT NULL,
     "sender_qualifier" "text" DEFAULT 'ZZ'::"text" NOT NULL,
     "receiver_qualifier" "text" DEFAULT '30'::"text" NOT NULL,
-    "receiver_name" "text" DEFAULT 'OFFICEALLY'::"text" NOT NULL,
+    "receiver_name" "text" DEFAULT 'AVAILITY'::"text" NOT NULL,
     "gs_receiver_code" "text" DEFAULT 'OA'::"text" NOT NULL,
     "x12_version" "text" DEFAULT '005010X222A1'::"text" NOT NULL,
     "isa_usage_indicator" "text" DEFAULT 'T'::"text" NOT NULL,
@@ -1719,14 +1719,14 @@ CREATE TABLE IF NOT EXISTS "public"."clearinghouse_connections" (
     "eligibility_service_type_code" "text" DEFAULT '98'::"text" NOT NULL,
     "eligibility_transaction_set" "text" DEFAULT '270'::"text" NOT NULL,
     CONSTRAINT "clearinghouse_connections_mode_check" CHECK (("mode" = ANY (ARRAY['test'::"text", 'live'::"text"]))),
-    CONSTRAINT "clearinghouse_connections_vendor_check" CHECK (("vendor" = ANY (ARRAY['office_ally'::"text", 'availity'::"text", 'change_healthcare'::"text", 'mock'::"text"])))
+    CONSTRAINT "clearinghouse_connections_vendor_check" CHECK (("vendor" = ANY (ARRAY['availity'::"text", 'change_healthcare'::"text", 'mock'::"text"])))
 );
 
 
 ALTER TABLE "public"."clearinghouse_connections" OWNER TO "postgres";
 
 
-COMMENT ON COLUMN "public"."clearinghouse_connections"."eligibility_service_type_code" IS 'X12 270 service type code. 98 = Health Benefit Plan Coverage (default for Office Ally).';
+COMMENT ON COLUMN "public"."clearinghouse_connections"."eligibility_service_type_code" IS 'X12 270 service type code. 98 = Health Benefit Plan Coverage (default for Availity).';
 
 
 
@@ -2378,7 +2378,7 @@ CREATE TABLE IF NOT EXISTS "public"."edi_batches" (
     "st_control_number" "text" NOT NULL,
     "claim_count" integer DEFAULT 0 NOT NULL,
     "status" "text" DEFAULT 'generated'::"text" NOT NULL,
-    "office_ally_file_id" "text",
+    "availity_file_id" "text",
     "generated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "submitted_at" timestamp with time zone,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
@@ -3598,7 +3598,7 @@ CREATE TABLE IF NOT EXISTS "public"."payer_profiles" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "organization_id" "uuid" NOT NULL,
     "payer_name" "text" NOT NULL,
-    "office_ally_payer_id" "text" NOT NULL,
+    "availity_payer_id" "text" NOT NULL,
     "payer_type" "text",
     "is_active" boolean DEFAULT true NOT NULL,
     "notes" "text",
@@ -4349,7 +4349,7 @@ CREATE OR REPLACE VIEW "public"."system_readiness_checks" WITH ("security_invoke
             'Active clearinghouse connection exists'::"text",
                 CASE
                     WHEN ("counts"."active_clearinghouse_connections_count" > 0) THEN 'An active clearinghouse connection exists.'::"text"
-                    ELSE 'No active clearinghouse_connections record exists. Office Ally cannot function live.'::"text"
+                    ELSE 'No active clearinghouse_connections record exists. Availity cannot function live.'::"text"
                 END AS "case",
             "jsonb_build_object"('count', "counts"."active_clearinghouse_connections_count") AS "jsonb_build_object"
            FROM "counts"
@@ -6640,7 +6640,7 @@ CREATE INDEX "idx_payer_plans_org_payer" ON "public"."payer_plans" USING "btree"
 
 
 
-CREATE INDEX "idx_payer_profiles_office_ally_payer_id" ON "public"."payer_profiles" USING "btree" ("office_ally_payer_id");
+CREATE INDEX "idx_payer_profiles_availity_payer_id" ON "public"."payer_profiles" USING "btree" ("availity_payer_id");
 
 
 

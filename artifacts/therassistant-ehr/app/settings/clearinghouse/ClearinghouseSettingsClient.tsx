@@ -40,16 +40,16 @@ type FormState = Omit<Connection, "id" | "has_credentials" | "credential_source"
 };
 
 const EMPTY_FORM: FormState = {
-  vendor: "office_ally",
-  clearinghouse_name: "Office Ally",
+  vendor: "availity",
+  clearinghouse_name: "Availity",
   connection_name: null,
   mode: "production",
   submitter_id: null,
   sender_qualifier: "ZZ",
   receiver_qualifier: "ZZ",
   receiver_id: null,
-  receiver_name: "OFFICE ALLY",
-  gs_receiver_code: "",
+  receiver_name: "Availity",
+  gs_receiver_code: "030240928",
   x12_version: "005010X222A1",
   isa_usage_indicator: "P",
   sftp_host: null,
@@ -59,7 +59,7 @@ const EMPTY_FORM: FormState = {
   api_key: "",
   inbound_folder: null,
   outbound_folder: null,
-  api_base_url: "https://edi.officeally.io",
+  api_base_url: null,
   auth_type: "api_key",
   submitter_contact_phone: null,
   submitter_contact_email: null,
@@ -163,7 +163,7 @@ export default function ClearinghouseSettingsClient() {
       <section className="hero-panel">
         <div>
           <p className="eyebrow">Settings</p>
-          <h1>Clearinghouse / Office Ally</h1>
+          <h1>Clearinghouse / Availity</h1>
           <p className="hero-copy">EDI connection configuration, SFTP routing, and eligibility defaults.</p>
         </div>
         <div className="hero-actions">
@@ -297,7 +297,7 @@ export default function ClearinghouseSettingsClient() {
                     type="password"
                     value={form.api_key}
                     autoComplete="new-password"
-                    placeholder={editingId ? "•••••••• (unchanged)" : "Paste Office Ally API key"}
+                    placeholder={editingId ? "•••••••• (unchanged)" : "Paste Availity API key"}
                     onChange={(e) => setForm((p) => ({ ...p, api_key: e.target.value }))}
                   />
                 </label>

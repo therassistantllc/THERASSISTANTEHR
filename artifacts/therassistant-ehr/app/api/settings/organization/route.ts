@@ -52,7 +52,7 @@ function validateBillingProfile(profile: Record<string, unknown>): Record<string
   });
   if (phoneErr) errors.billing_phone = phoneErr;
 
-  // Authorized representative (Office Ally trading-partner agreement).
+  // Authorized representative (Availity trading-partner agreement).
   // Name is free text — no format check. Email and phone are validated when present.
   const repEmailErr = validateStringField(profile, "authorized_rep_email", "Authorized rep email", (v) =>
     /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) ? null : "Authorized rep email is not a valid address.",

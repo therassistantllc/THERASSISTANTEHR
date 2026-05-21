@@ -5,7 +5,7 @@
     "severity": "blocking",
     "message": "Billing provider NPI is missing from the trading partner profile.",
     "fixRoute": "/settings/trading-partner",
-    "whyItMatters": "Office Ally requires a valid type-2 (group) NPI on every 837P claim. Without it, every transmission rejects with 277CA category A7.",
+    "whyItMatters": "Availity requires a valid type-2 (group) NPI on every 837P claim. Without it, every transmission rejects with 277CA category A7.",
     "resolution": "Enter the billing provider NPI on the Trading Partner settings page.",
     "conditions": {
       "all": [
@@ -19,7 +19,7 @@
     "severity": "blocking",
     "message": "Billing provider NPI is present but fails the Luhn checksum.",
     "fixRoute": "/settings/trading-partner",
-    "whyItMatters": "Office Ally validates the NPI checksum before transmitting; an invalid NPI is rejected at the clearinghouse rather than the payer, costing a full re-submission cycle.",
+    "whyItMatters": "Availity validates the NPI checksum before transmitting; an invalid NPI is rejected at the clearinghouse rather than the payer, costing a full re-submission cycle.",
     "resolution": "Double-check the 10-digit NPI on the NPPES registry and correct it on the Trading Partner settings page.",
     "conditions": {
       "all": [
@@ -34,7 +34,7 @@
     "severity": "blocking",
     "message": "Billing tax ID / EIN is missing from the trading partner profile.",
     "fixRoute": "/settings/trading-partner",
-    "whyItMatters": "Office Ally's trading partner agreement and the 837P REF*EI segment both require the practice EIN. Without it, enrollments and claims cannot be processed.",
+    "whyItMatters": "Availity's trading partner agreement and the 837P REF*EI segment both require the practice EIN. Without it, enrollments and claims cannot be processed.",
     "resolution": "Enter the 9-digit EIN on the Trading Partner settings page.",
     "conditions": {
       "all": [
@@ -75,9 +75,9 @@
     "id": "tradingPartner.has_authorized_representative",
     "category": "organization",
     "severity": "warning",
-    "message": "No authorized representative listed for the Office Ally trading partner agreement.",
+    "message": "No authorized representative listed for the Availity trading partner agreement.",
     "fixRoute": "/settings/trading-partner",
-    "whyItMatters": "Office Ally requires a named authorized representative on the TPA. While claims still transmit, enrollment changes and password resets are blocked until a representative is on file.",
+    "whyItMatters": "Availity requires a named authorized representative on the TPA. While claims still transmit, enrollment changes and password resets are blocked until a representative is on file.",
     "resolution": "Enter the authorized representative's name, email, and phone on the Trading Partner settings page.",
     "conditions": {
       "any": [

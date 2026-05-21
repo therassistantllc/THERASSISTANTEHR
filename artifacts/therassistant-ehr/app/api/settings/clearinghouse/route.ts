@@ -94,8 +94,8 @@ export async function POST(req: NextRequest) {
     .from("clearinghouse_connections")
     .insert({
       organization_id: organizationId,
-      vendor: String(rest.vendor ?? "office_ally"),
-      clearinghouse_name: String(rest.clearinghouse_name ?? "Office Ally"),
+      vendor: String(rest.vendor ?? "availity"),
+      clearinghouse_name: String(rest.clearinghouse_name ?? "Availity"),
       connection_name: rest.connection_name ? String(rest.connection_name) : null,
       mode: String(rest.mode ?? "production"),
       submitter_id: rest.submitter_id ? String(rest.submitter_id) : null,

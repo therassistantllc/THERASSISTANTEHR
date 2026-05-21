@@ -7,7 +7,7 @@ import { DEFAULT_ORG_ID } from "@/lib/config";
 /**
  * Business Associate Agreement settings page.
  *
- * Displays the four mandatory BAA counterparties (Office Ally, Supabase, Google Workspace,
+ * Displays the four mandatory BAA counterparties (Availity, Supabase, Google Workspace,
  * hosting) with status pills and editable signed/effective/expires dates. The first GET for
  * an org seeds these four rows at status='not_started' so the operator always sees what's
  * outstanding.
@@ -162,7 +162,7 @@ export default function BAASettingsClient() {
           <h1>Business Associate Agreements</h1>
           <p className="hero-copy">
             HIPAA requires a signed BAA with every vendor that processes PHI on your behalf. This page tracks the
-            four mandatory counterparties (Office Ally, Supabase, Google Workspace, hosting) and any additional
+            four mandatory counterparties (Availity, Supabase, Google Workspace, hosting) and any additional
             agreements you maintain. The Trading Partner page surfaces a green/yellow/red summary of the four required BAAs.
           </p>
         </div>

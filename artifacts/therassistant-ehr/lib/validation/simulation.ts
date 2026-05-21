@@ -198,7 +198,7 @@ export async function runTestClaimSimulation(
   // 3. Payer.
   const { data: payerRows, error: payerErr } = await supabase
     .from("payer_profiles")
-    .select("id, payer_name, office_ally_payer_id, payer_type, is_active")
+    .select("id, payer_name, availity_payer_id, payer_type, is_active")
     .eq("organization_id", organizationId)
     .eq("is_active", true)
     .order("payer_name", { ascending: true })
@@ -208,7 +208,7 @@ export async function runTestClaimSimulation(
     checks.push(fail("payer", "Payer profile", `payer_profiles query failed: ${payerErr.message}`));
   } else {
     const payers = payerRows ?? [];
-    const payer = payers.find((p) => asStr(p.office_ally_payer_id).trim() && asStr(p.payer_type).trim());
+    const payer = payers.find((p) => asStr(p.availity_payer_id).trim() && asStr(p.payer_type).trim());
     if (!payer) {
       checks.push(
         fail(
@@ -226,7 +226,7 @@ export async function runTestClaimSimulation(
         pass(
           "payer",
           "Payer profile",
-          `Using "${chosen.payerName}" (payer_id ${asStr(payer.office_ally_payer_id)}, type ${asStr(payer.payer_type)}).`,
+          `Using "${chosen.payerName}" (payer_id ${asStr(payer.availity_payer_id)}, type ${asStr(payer.payer_type)}).`,
         ),
       );
     }
@@ -322,13 +322,13 @@ export async function runTestClaimSimulation(
   }
 
   // 6. Clearinghouse — mirror the real 837P generator which only ships via
-  //    the Office Ally adapter.
+  //    the Availity adapter.
   const { data: chRows, error: chErr } = await supabase
     .from("clearinghouse_connections")
     .select("id, vendor, submitter_id, receiver_id, is_active")
     .eq("organization_id", organizationId)
     .eq("is_active", true)
-    .eq("vendor", "office_ally")
+    .eq("vendor", "availity")
     .order("id", { ascending: true })
     .limit(20);
   if (chErr) {

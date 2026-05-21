@@ -29,7 +29,7 @@ function isValidPhone(value: unknown): boolean {
  * `system_settings` (where /settings/organization persists billing identifiers today) and
  * derives the boolean flags that the Trading Partner readiness rules consume.
  *
- * Surfaces both presence and format-validity for the four Office Ally trading-partner
+ * Surfaces both presence and format-validity for the four Availity trading-partner
  * essentials: billing NPI (with Luhn checksum), EIN (9 digits), billing address, and
  * authorized representative contact.
  */

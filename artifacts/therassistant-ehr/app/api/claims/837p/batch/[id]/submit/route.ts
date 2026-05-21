@@ -1,19 +1,19 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
-import { OfficeAllyJsonApiAdapter } from "@/lib/clearinghouse/adapters/OfficeAllyJsonApiAdapter";
+import { AvailityJsonApiAdapter } from "@/lib/clearinghouse/adapters/AvailityJsonApiAdapter";
 import { resolveClearinghouseCredential } from "@/lib/clearinghouse/credentials";
 import { assertPayerEnrollmentsForBatch } from "@/lib/clearinghouse/payerEnrollmentGate";
 import { assertClaimSubmissionReady, gateResponse } from "@/lib/validation/claimSubmissionGate";
 
 /**
- * Submits a generated 837P batch to Office Ally via the EDI Services JSON API.
+ * Submits a generated 837P batch to Availity via the EDI Services JSON API.
  *
  * Flow:
  *   1. Look up the batch (org-scoped) and assert it has generated X12 content.
  *   2. Reject submissions that are already in a terminal "submitted/accepted" state
  *      unless action === "retry" (which is only valid for "rejected" batches).
  *   3. Mint or reuse an idempotency key so a network retry never sends the claim twice.
- *   4. POST the X12 to Office Ally; persist the external transaction id, HTTP status,
+ *   4. POST the X12 to Availity; persist the external transaction id, HTTP status,
  *      endpoint, attempt count, and last-attempted timestamp regardless of outcome.
  *   5. Flip batch_status to "submitted" on success or "rejected" on failure and bubble
  *      the underlying error message back to the caller so the UI can surface it.
@@ -36,7 +36,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     const { data: existing, error: lookupErr } = await supabase
       .from("claim_837p_batches")
       .select(
-        "id, batch_number, batch_status, generated_file_content, submission_idempotency_key, submission_attempt_count, office_ally_transaction_id, updated_at",
+        "id, batch_number, batch_status, generated_file_content, submission_idempotency_key, submission_attempt_count, availity_transaction_id, updated_at",
       )
       .eq("id", id)
       .eq("organization_id", organizationId)
@@ -61,7 +61,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     // Hard guard against double-submission. Retries are only valid for "rejected" batches.
     if (currentStatus === "submitted" || currentStatus === "accepted") {
       return NextResponse.json(
-        { success: false, error: `Batch is already ${currentStatus} (transaction ${(existing as Record<string, unknown>).office_ally_transaction_id ?? "unknown"}). Submission blocked.` },
+        { success: false, error: `Batch is already ${currentStatus} (transaction ${(existing as Record<string, unknown>).availity_transaction_id ?? "unknown"}). Submission blocked.` },
         { status: 409 },
       );
     }
@@ -122,14 +122,14 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     // If none of these returns a key the adapter call below will throw with a clear message.
     const credential = await resolveClearinghouseCredential({
       organizationId,
-      vendor: "office_ally",
+      vendor: "availity",
     });
     if (!credential) {
       return NextResponse.json(
         {
           success: false,
           error:
-            "No Office Ally credential configured for this organization. Add an API key on /settings/clearinghouse before submitting claims.",
+            "No Availity credential configured for this organization. Add an API key on /settings/clearinghouse before submitting claims.",
         },
         { status: 412 },
       );
@@ -169,7 +169,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       );
     }
 
-    const adapter = new OfficeAllyJsonApiAdapter({
+    const adapter = new AvailityJsonApiAdapter({
       apiKey: credential.apiKey,
       baseUrl: credential.baseUrl,
     });
@@ -185,7 +185,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
         .update({
           batch_status: "submitted",
           submitted_at: submittedAt,
-          office_ally_transaction_id: externalId,
+          availity_transaction_id: externalId,
           submission_error: null,
           last_submission_endpoint: endpointUrl,
           last_submission_http_status: result.httpStatus ?? 200,
@@ -193,7 +193,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
         })
         .eq("id", id)
         .eq("organization_id", organizationId)
-        .select("id, batch_status, submitted_at, office_ally_transaction_id, submission_attempt_count")
+        .select("id, batch_status, submitted_at, availity_transaction_id, submission_attempt_count")
         .single();
 
       if (updateErr) {
@@ -203,13 +203,13 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       return NextResponse.json({
         success: true,
         batch: updated,
-        officeAllyTransactionId: externalId,
+        availityTransactionId: externalId,
         attempt: attemptCount,
       });
     } catch (transportError) {
-      const message = transportError instanceof Error ? transportError.message : "Office Ally submission failed";
+      const message = transportError instanceof Error ? transportError.message : "Availity submission failed";
       const failedAt = new Date().toISOString();
-      // The adapter throws "Office Ally API <op> failed <status>: <body>" — pull the status out if present.
+      // The adapter throws "Availity API <op> failed <status>: <body>" — pull the status out if present.
       const httpStatusMatch = message.match(/failed\s+(\d{3})/);
       const failureHttpStatus = httpStatusMatch ? Number(httpStatusMatch[1]) : null;
 
@@ -238,7 +238,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   }
 }
 
-// Office Ally's submission response shape isn't perfectly fixed across endpoints,
+// Availity's submission response shape isn't perfectly fixed across endpoints,
 // so we try a few common fields and fall back to null. The audit row in
 // `clearinghouse_api_requests` always carries the full raw response either way.
 function extractTransactionId(data: unknown): string | null {

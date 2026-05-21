@@ -96,7 +96,7 @@ export default function ClaimReadinessClient() {
     setClaimStatusChecking((prev) => ({ ...prev, [claimId]: true }));
     setClaimStatusResults((prev) => ({ ...prev, [claimId]: "" }));
     try {
-      const response = await fetch("/api/clearinghouse/office-ally/claim-status", {
+      const response = await fetch("/api/clearinghouse/availity/claim-status", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ organizationId, clientId: item.clientId, claimId }),

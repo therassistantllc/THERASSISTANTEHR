@@ -39,7 +39,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
         .from("edi_batches")
         .select("id")
         .eq("organization_id", organizationId)
-        .or(`isa_control_number.eq.${batchNumber},gs_control_number.eq.${batchNumber},st_control_number.eq.${batchNumber},office_ally_file_id.eq.${batchNumber}`);
+        .or(`isa_control_number.eq.${batchNumber},gs_control_number.eq.${batchNumber},st_control_number.eq.${batchNumber},availity_file_id.eq.${batchNumber}`);
       ediBatchIds = ((ediBatches ?? []) as Array<{ id: string }>).map((r) => String(r.id));
     }
 

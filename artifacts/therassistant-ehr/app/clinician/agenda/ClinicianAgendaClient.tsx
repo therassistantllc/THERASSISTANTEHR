@@ -115,7 +115,7 @@ export default function ClinicianAgendaClient() {
     setEligibilityChecking((prev) => ({ ...prev, [item.appointmentId]: true }));
     setEligibilityResults((prev) => ({ ...prev, [item.appointmentId]: "" }));
     try {
-      const response = await fetch("/api/clearinghouse/office-ally/eligibility", {
+      const response = await fetch("/api/clearinghouse/availity/eligibility", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

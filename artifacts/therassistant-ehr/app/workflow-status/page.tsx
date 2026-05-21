@@ -30,7 +30,7 @@ const DOMAIN_DEFINITIONS: DomainDefinition[] = [
   },
   {
     domain: "837P",
-    apiRoutePath: "app/api/edi/office-ally/837p/generate/route.ts",
+    apiRoutePath: "app/api/edi/availity/837p/generate/route.ts",
     servicePath: "lib/clearinghouse/ClearinghouseService.ts",
     migrationPattern: /837p|837/i,
   },

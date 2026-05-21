@@ -19,8 +19,8 @@
     "severity": "blocking",
     "message": "One or more active payers are missing their clearinghouse payer ID.",
     "fixRoute": "/settings/payers",
-    "whyItMatters": "The Office Ally (or equivalent clearinghouse) payer ID is required for routing the claim. A missing ID causes the claim to be rejected by the clearinghouse before reaching the payer.",
-    "resolution": "Look up the payer in the Office Ally payer list and set the payer ID for each payer in evidence.",
+    "whyItMatters": "The Availity (or equivalent clearinghouse) payer ID is required for routing the claim. A missing ID causes the claim to be rejected by the clearinghouse before reaching the payer.",
+    "resolution": "Look up the payer in the Availity payer list and set the payer ID for each payer in evidence.",
     "conditions": {
       "all": [
         { "fact": "payers", "path": "$.missingPayerIdCount", "operator": "greaterThan", "value": 0 }

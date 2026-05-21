@@ -16,7 +16,7 @@ export type PayerEnrollmentGateResult =
       missing: Array<{
         payerProfileId: string;
         payerName: string;
-        officeAllyPayerId: string | null;
+        availityPayerId: string | null;
         currentStatus: string | null;
       }>;
     };
@@ -96,7 +96,7 @@ export async function assertPayerEnrollmentsForBatch(params: {
       .in("payer_profile_id", payerIdList),
     supabase
       .from("payer_profiles")
-      .select("id, payer_name, office_ally_payer_id")
+      .select("id, payer_name, availity_payer_id")
       .eq("organization_id", organizationId)
       .in("id", payerIdList),
   ]);
@@ -123,8 +123,8 @@ export async function assertPayerEnrollmentsForBatch(params: {
   }
 
   const payerMeta = new Map<string, { name: string; oaId: string | null }>();
-  for (const p of (payerRows ?? []) as Array<{ id: string; payer_name: string; office_ally_payer_id: string | null }>) {
-    payerMeta.set(p.id, { name: p.payer_name, oaId: p.office_ally_payer_id });
+  for (const p of (payerRows ?? []) as Array<{ id: string; payer_name: string; availity_payer_id: string | null }>) {
+    payerMeta.set(p.id, { name: p.payer_name, oaId: p.availity_payer_id });
   }
 
   const missing = payerIdList
@@ -132,21 +132,21 @@ export async function assertPayerEnrollmentsForBatch(params: {
     .map((id) => ({
       payerProfileId: id,
       payerName: payerMeta.get(id)?.name ?? "(unknown payer)",
-      officeAllyPayerId: payerMeta.get(id)?.oaId ?? null,
+      availityPayerId: payerMeta.get(id)?.oaId ?? null,
       currentStatus: statusByPayer.get(id) ?? null,
     }));
 
   if (missing.length === 0) return { ok: true };
 
   const list = missing
-    .map((m) => `${m.payerName}${m.officeAllyPayerId ? ` (OA ${m.officeAllyPayerId})` : ""}: ${m.currentStatus ?? "not enrolled"}`)
+    .map((m) => `${m.payerName}${m.availityPayerId ? ` (OA ${m.availityPayerId})` : ""}: ${m.currentStatus ?? "not enrolled"}`)
     .join("; ");
 
   return {
     ok: false,
     message:
       `Production ${transactionType} submission blocked. The following payer(s) lack an approved ${environment} ${transactionType} enrollment: ${list}. ` +
-      `Open /settings/payer-enrollments to track and update the Office Ally enrollment status.`,
+      `Open /settings/payer-enrollments to track and update the Availity enrollment status.`,
     missing,
   };
 }

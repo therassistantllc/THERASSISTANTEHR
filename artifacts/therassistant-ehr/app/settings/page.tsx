@@ -22,14 +22,14 @@ const SETTINGS_SECTIONS = [
     description: "Credentialing profiles, payer enrollments, and network status.",
   },
   {
-    label: "Clearinghouse / Office Ally",
+    label: "Clearinghouse / Availity",
     href: "/settings/clearinghouse",
     description: "Clearinghouse connection settings and test submission tools.",
   },
   {
     label: "Payer Profiles",
     href: "/settings/payers",
-    description: "Payer IDs, enrollment status, and Office Ally payer mappings.",
+    description: "Payer IDs, enrollment status, and Availity payer mappings.",
   },
   {
     label: "Service Locations",

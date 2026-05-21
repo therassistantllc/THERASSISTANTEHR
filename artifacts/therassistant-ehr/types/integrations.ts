@@ -1,10 +1,10 @@
 // File: types/integrations.ts
-// New integration and external transaction types for Office Ally sandbox
+// New integration and external transaction types for Availity sandbox
 
 export interface IntegrationConnection {
   id: string;
   organization_id: string;
-  integration_name: string; // e.g., "office_ally", "availity"
+  integration_name: string; // e.g., "availity", "availity"
   connection_status: "not_configured" | "sandbox_configured" | "live_configured" | "active" | "error";
   mode: "sandbox" | "live";
   supported_transactions?: string[]; // e.g., ["270/271", "276/277", "837P", "835"]

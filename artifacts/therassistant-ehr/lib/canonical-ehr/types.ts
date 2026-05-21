@@ -65,7 +65,6 @@ export interface Payer {
   payer_name: string;
   payer_type: "medicaid" | "medicare" | "commercial" | "rae" | "tricare";
   clearinghouse_payer_id: string;
-  office_ally_payer_id: string;
   availity_payer_id: string;
   state: string;
   is_active: boolean;
@@ -276,7 +275,7 @@ export interface ClaimSubmission {
   id: ID;
   claim_id: ID;
   transaction_type: "837P";
-  submission_method: "office_ally" | "availity" | "manual" | "batch";
+  submission_method: "availity" | "availity" | "manual" | "batch";
   batch_id: ID | null;
   control_number: string;
   raw_837: Record<string, unknown>;

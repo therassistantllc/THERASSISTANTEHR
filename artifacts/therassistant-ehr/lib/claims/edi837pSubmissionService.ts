@@ -3,7 +3,7 @@ import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 export interface Mark837PBatchSubmittedInput {
   organizationId: string;
   batchId: string;
-  officeAllyFileId?: string | null;
+  availityFileId?: string | null;
   submittedAt?: string | null;
 }
 
@@ -111,7 +111,7 @@ export async function mark837PBatchSubmitted(
     .from("edi_batches")
     .update({
       status: "submitted",
-      office_ally_file_id: input.officeAllyFileId ?? undefined,
+      availity_file_id: input.availityFileId ?? undefined,
       submitted_at: submittedAt,
     })
     .eq("id", input.batchId)

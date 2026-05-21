@@ -5,18 +5,18 @@ import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
  * Business Associate Agreement tracker (T004).
  *
  * On first GET for an org, seed default rows for the four required counterparties
- * (office_ally, supabase, google_workspace, hosting) at status='not_started' so the
+ * (availity, supabase, google_workspace, hosting) at status='not_started' so the
  * operator immediately sees what's outstanding instead of an empty table.
  */
 
-const COUNTERPARTY_TYPES = ["office_ally", "supabase", "google_workspace", "hosting", "other"] as const;
+const COUNTERPARTY_TYPES = ["availity", "supabase", "google_workspace", "hosting", "other"] as const;
 const STATUSES = ["not_started", "draft", "executed", "expired", "terminated"] as const;
 
 type CounterpartyType = (typeof COUNTERPARTY_TYPES)[number];
 type Status = (typeof STATUSES)[number];
 
 const DEFAULT_SEEDS: Array<{ counterparty_type: CounterpartyType; counterparty_name: string }> = [
-  { counterparty_type: "office_ally", counterparty_name: "Office Ally, LLC" },
+  { counterparty_type: "availity", counterparty_name: "Availity, LLC" },
   { counterparty_type: "supabase", counterparty_name: "Supabase Inc." },
   { counterparty_type: "google_workspace", counterparty_name: "Google Workspace" },
   { counterparty_type: "hosting", counterparty_name: "Replit, Inc." },

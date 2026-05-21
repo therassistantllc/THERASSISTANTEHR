@@ -43,7 +43,7 @@ export async function GET(req: NextRequest) {
   const { data, error } = await supabase
     .from("payer_profiles")
     .select(
-      "id, payer_name, office_ally_payer_id, payer_type, is_active, notes, requires_authorization, billing_rules, created_at, updated_at",
+      "id, payer_name, availity_payer_id, payer_type, is_active, notes, requires_authorization, billing_rules, created_at, updated_at",
     )
     .eq("organization_id", organizationId)
     .order("payer_name", { ascending: true });
@@ -74,8 +74,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  if (!body.payer_name || !body.office_ally_payer_id) {
-    return NextResponse.json({ error: "payer_name and office_ally_payer_id are required" }, { status: 400 });
+  if (!body.payer_name || !body.availity_payer_id) {
+    return NextResponse.json({ error: "payer_name and availity_payer_id are required" }, { status: 400 });
   }
 
   const now = new Date().toISOString();
@@ -84,7 +84,7 @@ export async function POST(req: NextRequest) {
     .insert({
       organization_id: organizationId,
       payer_name: String(body.payer_name),
-      office_ally_payer_id: String(body.office_ally_payer_id),
+      availity_payer_id: String(body.availity_payer_id),
       payer_type: body.payer_type ? String(body.payer_type) : null,
       is_active: Boolean(body.is_active ?? true),
       notes: body.notes ? String(body.notes) : null,
@@ -129,7 +129,7 @@ export async function PATCH(req: NextRequest) {
 
   const allowedFields = [
     "payer_name",
-    "office_ally_payer_id",
+    "availity_payer_id",
     "payer_type",
     "is_active",
     "notes",

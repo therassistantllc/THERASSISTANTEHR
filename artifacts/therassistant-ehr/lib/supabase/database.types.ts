@@ -1201,8 +1201,8 @@ export type Database = {
           created_at: string
           external_claim_id: string | null
           id: string
-          office_ally_claim_id: string | null
-          office_ally_file_id: string | null
+          availity_claim_id: string | null
+          availity_file_id: string | null
           payer_reference_id: string | null
           raw_payload: Json
           source: string
@@ -1214,8 +1214,8 @@ export type Database = {
           created_at?: string
           external_claim_id?: string | null
           id?: string
-          office_ally_claim_id?: string | null
-          office_ally_file_id?: string | null
+          availity_claim_id?: string | null
+          availity_file_id?: string | null
           payer_reference_id?: string | null
           raw_payload?: Json
           source?: string
@@ -1227,8 +1227,8 @@ export type Database = {
           created_at?: string
           external_claim_id?: string | null
           id?: string
-          office_ally_claim_id?: string | null
-          office_ally_file_id?: string | null
+          availity_claim_id?: string | null
+          availity_file_id?: string | null
           payer_reference_id?: string | null
           raw_payload?: Json
           source?: string
@@ -3395,7 +3395,7 @@ export type Database = {
           id: string
           isa_control_number: string
           mode: string
-          office_ally_file_id: string | null
+          availity_file_id: string | null
           organization_id: string
           st_control_number: string
           status: string
@@ -3413,7 +3413,7 @@ export type Database = {
           id?: string
           isa_control_number: string
           mode: string
-          office_ally_file_id?: string | null
+          availity_file_id?: string | null
           organization_id: string
           st_control_number: string
           status?: string
@@ -3431,7 +3431,7 @@ export type Database = {
           id?: string
           isa_control_number?: string
           mode?: string
-          office_ally_file_id?: string | null
+          availity_file_id?: string | null
           organization_id?: string
           st_control_number?: string
           status?: string
@@ -6903,7 +6903,7 @@ export type Database = {
           id: string
           is_active: boolean
           notes: string | null
-          office_ally_payer_id: string
+          availity_payer_id: string
           organization_id: string
           payer_name: string
           payer_type: string | null
@@ -6914,7 +6914,7 @@ export type Database = {
           id?: string
           is_active?: boolean
           notes?: string | null
-          office_ally_payer_id: string
+          availity_payer_id: string
           organization_id: string
           payer_name: string
           payer_type?: string | null
@@ -6925,7 +6925,7 @@ export type Database = {
           id?: string
           is_active?: boolean
           notes?: string | null
-          office_ally_payer_id?: string
+          availity_payer_id?: string
           organization_id?: string
           payer_name?: string
           payer_type?: string | null

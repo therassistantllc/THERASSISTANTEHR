@@ -154,7 +154,7 @@ async function resolvePrimaryPolicy(params: {
 async function ensurePayerProfile(params: {
   organizationId: string;
   payerName: string;
-  officeAllyPayerId: string;
+  availityPayerId: string;
 }): Promise<string | null> {
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) throw new Error("Database connection not available");
@@ -163,7 +163,7 @@ async function ensurePayerProfile(params: {
     .from("payer_profiles")
     .select("id")
     .eq("organization_id", params.organizationId)
-    .eq("office_ally_payer_id", params.officeAllyPayerId)
+    .eq("availity_payer_id", params.availityPayerId)
     .eq("is_active", true)
     .limit(1)
     .maybeSingle();
@@ -175,7 +175,7 @@ async function ensurePayerProfile(params: {
     .insert({
       organization_id: params.organizationId,
       payer_name: params.payerName,
-      office_ally_payer_id: params.officeAllyPayerId,
+      availity_payer_id: params.availityPayerId,
       payer_type: "commercial",
       is_active: true,
     })
@@ -277,7 +277,7 @@ export async function createProfessionalClaimDraft(
   const payerProfileId = await ensurePayerProfile({
     organizationId: input.organizationId,
     payerName: normalizeText(payer!.payer_name),
-    officeAllyPayerId: normalizeText(payer!.payer_id),
+    availityPayerId: normalizeText(payer!.payer_id),
   });
 
   const totalCharge = money(input.serviceLines.reduce((sum, line) => sum + line.chargeAmount * (line.units ?? 1), 0));

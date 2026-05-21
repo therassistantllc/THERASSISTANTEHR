@@ -4,7 +4,7 @@
 //   1. Vault-backed secret on the active connection row (the only acceptable source for production PHI).
 //   2. Legacy plaintext fallback in `clearinghouse_connections.encrypted_credentials.api_key`
 //      (transitional only — every row with this set should be migrated and the JSONB field cleared).
-//   3. `OFFICE_ALLY_EDI_API_KEY` environment variable (legacy single-tenant fallback; logs a warning).
+//   3. `AVAILITY_EDI_API_KEY` environment variable (legacy single-tenant fallback; logs a warning).
 //
 // All resolution paths return a `source` value so callers (and audit rows) can record which mechanism
 // produced the key. A NULL return means there is no credential — the caller must reject the request.
@@ -35,7 +35,7 @@ const ENVIRONMENT_TO_MODES: Record<CredentialEnvironment, string[]> = {
 };
 
 function envFallbackKey(): string | null {
-  return process.env.OFFICE_ALLY_EDI_API_KEY ?? null;
+  return process.env.AVAILITY_EDI_API_KEY ?? null;
 }
 
 export async function resolveClearinghouseCredential(params: {
@@ -43,21 +43,21 @@ export async function resolveClearinghouseCredential(params: {
   vendor?: string;
   environment?: CredentialEnvironment;
 }): Promise<ResolvedClearinghouseCredential | null> {
-  const vendor = params.vendor ?? "office_ally";
+  const vendor = params.vendor ?? "availity";
 
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) {
     const envKey = envFallbackKey();
     if (!envKey) return null;
     console.warn(
-      "[clearinghouse/credentials] Database unavailable; falling back to OFFICE_ALLY_EDI_API_KEY env var.",
+      "[clearinghouse/credentials] Database unavailable; falling back to AVAILITY_EDI_API_KEY env var.",
     );
     return {
       apiKey: envKey,
       connectionId: null,
       vendor,
       environment: params.environment ?? "sandbox",
-      baseUrl: process.env.OFFICE_ALLY_EDI_BASE_URL ?? null,
+      baseUrl: process.env.AVAILITY_EDI_BASE_URL ?? null,
       source: "env_fallback",
     };
   }
@@ -126,7 +126,7 @@ export async function resolveClearinghouseCredential(params: {
   if (envKey) {
     console.warn(
       `[clearinghouse/credentials] No vaulted credential for org=${params.organizationId} vendor=${vendor}; ` +
-        "falling back to OFFICE_ALLY_EDI_API_KEY env var.",
+        "falling back to AVAILITY_EDI_API_KEY env var.",
     );
     return {
       apiKey: envKey,
@@ -134,7 +134,7 @@ export async function resolveClearinghouseCredential(params: {
       vendor,
       environment: params.environment ?? "sandbox",
       baseUrl:
-        (connection?.api_base_url as string | null) ?? process.env.OFFICE_ALLY_EDI_BASE_URL ?? null,
+        (connection?.api_base_url as string | null) ?? process.env.AVAILITY_EDI_BASE_URL ?? null,
       source: "env_fallback",
     };
   }

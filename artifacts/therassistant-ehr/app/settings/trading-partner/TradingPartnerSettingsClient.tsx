@@ -7,7 +7,7 @@ import { DEFAULT_ORG_ID } from "@/lib/config";
 /**
  * Trading Partner readiness page.
  *
- * Compliance dashboard that surfaces the five Office Ally trading-partner essentials
+ * Compliance dashboard that surfaces the five Availity trading-partner essentials
  * (billing NPI, EIN, pay-to address, authorized representative, contact info) with
  * green/red status pills. The underlying data lives in `system_settings.organization.billing_profile`;
  * NPI, EIN, and pay-to address are edited on /settings/organization. This page edits
@@ -180,7 +180,7 @@ export default function TradingPartnerSettingsClient() {
           <p className="eyebrow">Settings</p>
           <h1>Trading Partner Profile</h1>
           <p className="hero-copy">
-            Office Ally requires every claim submitter to register a trading-partner profile containing the billing
+            Availity requires every claim submitter to register a trading-partner profile containing the billing
             provider NPI, the practice EIN, the pay-to address, and an authorized representative. This page surfaces
             those values from your organization billing profile and lets you complete the authorized-rep fields inline.
           </p>
@@ -276,7 +276,7 @@ export default function TradingPartnerSettingsClient() {
           <section className="panel form-panel">
             <h2>Authorized representative</h2>
             <p style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)", marginBottom: "var(--space-4)" }}>
-              The person Office Ally will contact for enrollment changes, password resets, and TPA renewals. This is
+              The person Availity will contact for enrollment changes, password resets, and TPA renewals. This is
               typically the practice owner or compliance officer.
             </p>
 
@@ -324,7 +324,7 @@ export default function TradingPartnerSettingsClient() {
               HIPAA-mandated signed BAAs with PHI-processing vendors.
             </p>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "var(--space-3)", marginTop: "var(--space-3)" }}>
-              {["office_ally", "supabase", "google_workspace", "hosting"].map((type) => {
+              {["availity", "supabase", "google_workspace", "hosting"].map((type) => {
                 const baa = baas.find((b) => b.counterparty_type === type);
                 const isExecuted = baa?.status === "executed";
                 const daysLeft = baa?.expires_at

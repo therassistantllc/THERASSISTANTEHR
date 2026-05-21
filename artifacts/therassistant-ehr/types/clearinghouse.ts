@@ -1,5 +1,5 @@
 // File: types/clearinghouse.ts
-export type ClearinghouseVendor = "office_ally" | "availity" | "change_healthcare" | "mock";
+export type ClearinghouseVendor = "availity" | "change_healthcare" | "mock";
 
 export interface ClearinghouseConnection {
   id: string;

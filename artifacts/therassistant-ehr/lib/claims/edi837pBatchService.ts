@@ -38,7 +38,7 @@ async function loadConnection(organizationId: string, mode: "test" | "production
     .from("clearinghouse_connections")
     .select("id, submitter_id, receiver_id, receiver_name, isa_usage_indicator")
     .eq("organization_id", organizationId)
-    .eq("clearinghouse_name", "office_ally")
+    .eq("clearinghouse_name", "availity")
     .eq("mode", mode)
     .eq("is_active", true)
     .limit(1)
@@ -140,12 +140,13 @@ export async function generate837PBatch(input: Generate837PBatchInput): Promise<
   // Loops/segments (1000A NM1*41/PER, 1000B NM1*40, 2000A HL/PRV, 2010AA NM1*85/
   // N3/N4/REF, 2010BA SBR, DMG, HI for diagnosis codes) and emits an SE count
   // that includes ISA/GS, which is wrong. Its test-mode filename (TA_837P_*.edi)
-  // also omits the "OATEST" keyword required by OA CG p. 8, so test
-  // submissions would route to production. Allowing it to emit X12 risks
-  // sending malformed and/or misrouted claims to Office Ally.
+  // also does not set ISA15="T" (Availity Batch EDI CG: ISA15 is the test/
+  // production routing switch — "P" in QA WILL forward to the payer), so
+  // test submissions would route to production. Allowing it to emit X12
+  // risks sending malformed and/or misrouted claims to Availity.
   //
   // Use /api/claims/837p/batch/[id]/submit (which reads pre-generated content
-  // built by the spec-compliant buildOfficeAlly837P generator) instead.
+  // built by the spec-compliant buildAvaility837P generator) instead.
   // Reference the helpers so the unused-export lint doesn't trip while the
   // historical implementation below is preserved in git history only.
   void buildStructured837PPlaceholder;

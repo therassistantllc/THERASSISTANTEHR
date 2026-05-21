@@ -33,7 +33,7 @@ export interface EligibilityCheckInput {
   /**
    * Mode controls whether a live clearinghouse call is attempted.
    * "mock" stores a placeholder record without a live request.
-   * Future: "live" will submit to Office Ally 270.
+   * Future: "live" will submit to Availity 270.
    */
   mode?: "mock" | "live";
 }
@@ -269,7 +269,7 @@ export async function resolveEligibilityInput(
  *
  * In "mock" mode (default), stores a `not_checked` check record without
  * making a live 270 request. The record can later be updated by a live
- * Office Ally 270/271 round-trip.
+ * Availity 270/271 round-trip.
  */
 export async function createEligibilityCheck(
   input: EligibilityCheckInput

@@ -609,7 +609,7 @@ export function submitClaim(state: CanonicalEhrState, claimId: ID): CanonicalEhr
     id: makeId("sub"),
     claim_id: claim.id,
     transaction_type: "837P",
-    submission_method: "office_ally",
+    submission_method: "availity",
     batch_id: null,
     control_number: `837P-${Date.now()}`,
     raw_837: { claim_id: claim.id, transaction: "837P" },

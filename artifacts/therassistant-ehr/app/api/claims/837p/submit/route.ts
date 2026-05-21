@@ -20,7 +20,7 @@ export async function POST(request: Request) {
       : await mark837PBatchSubmitted({
           organizationId: String(body.organizationId),
           batchId: String(body.batchId),
-          officeAllyFileId: body.officeAllyFileId ?? null,
+          availityFileId: body.availityFileId ?? null,
           submittedAt: body.submittedAt ?? null,
         });
 
