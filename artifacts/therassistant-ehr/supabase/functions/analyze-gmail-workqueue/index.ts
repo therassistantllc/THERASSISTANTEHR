@@ -1,6 +1,7 @@
 // @ts-expect-error - Deno edge runtime URL import is valid at runtime but not resolvable by this TS config.
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
-import { createClient } from "@supabase/supabase-js";
+// @ts-expect-error - Deno npm: specifier is valid at runtime but not resolvable by this TS config.
+import { createClient } from "npm:@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SERVICE_ROLE_KEY")!;
