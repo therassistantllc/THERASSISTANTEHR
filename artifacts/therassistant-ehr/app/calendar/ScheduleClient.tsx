@@ -1410,7 +1410,7 @@ function NewAppointmentModal({
   useEffect(() => {
     let cancelled = false;
     setProvidersLoading(true);
-    fetch(`/api/providers/credentialing?organizationId=${encodeURIComponent(organizationId)}`, { cache: "no-store" })
+    fetch(`/api/providers?organizationId=${encodeURIComponent(organizationId)}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((json: { success?: boolean; providers?: Array<{ id: string; provider_name: string; credential_display?: string | null; is_active?: boolean }>; error?: string }) => {
         if (cancelled) return;
