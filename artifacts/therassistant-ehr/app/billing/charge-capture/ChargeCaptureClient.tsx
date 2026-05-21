@@ -197,6 +197,7 @@ export default function ChargeCaptureClient() {
   }, [charges, filter, search]);
 
   const readySelected = filtered.filter((c) => selected.has(c.id) && c.status === "ready");
+  const [rowBusy, setRowBusy] = useState<string | null>(null);
 
   function toggleRow(id: string) {
     setSelected((prev) => {
@@ -215,6 +216,37 @@ export default function ChargeCaptureClient() {
   }
 
   const allChecked = filtered.length > 0 && filtered.every((c) => selected.has(c.id));
+
+  async function releaseOne(id: string) {
+    if (rowBusy) return;
+    if (usingDemo) {
+      setReleaseMessage({ tone: "error", text: "Cannot release demo charges. Connect a real organization to release to billing." });
+      return;
+    }
+    setRowBusy(id);
+    setReleaseMessage(null);
+    try {
+      const res = await fetch(`/api/billing/charge-capture/release`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ organizationId, chargeCaptureIds: [id] }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.success) throw new Error(json?.error || "Release to billing failed");
+      const firstResult = json.results?.[0];
+      if (firstResult && firstResult.ok === false) {
+        const firstErr = firstResult.errors?.[0]?.message ?? "Release failed";
+        setReleaseMessage({ tone: "error", text: firstErr });
+      } else {
+        setReleaseMessage({ tone: "success", text: "Released to billing." });
+      }
+      setReloadKey((k) => k + 1);
+    } catch (error) {
+      setReleaseMessage({ tone: "error", text: error instanceof Error ? error.message : "Release to billing failed" });
+    } finally {
+      setRowBusy(null);
+    }
+  }
 
   async function releaseSelected() {
     if (releasing) return;
@@ -382,20 +414,27 @@ export default function ChargeCaptureClient() {
                 </td>
                 <td>
                   <div className={styles.rowActions}>
-                    <Link className={styles.actionBtn} href={`/clients/${row.clientId}`}>Open Chart</Link>
+                    <Link className={styles.actionBtn} href={`/patients/${row.clientId}`}>Open Chart</Link>
                     {row.status === "missing_dx" ? (
-                      <Link className={styles.actionBtn} href={`/clients/${row.clientId}/notes`}>Attach DX</Link>
+                      <Link className={styles.actionBtn} href={`/patients/${row.clientId}/notes`}>Attach DX</Link>
                     ) : null}
                     {row.status === "unsigned" ? (
-                      <Link className={styles.actionBtn} href={`/clients/${row.clientId}/notes`}>Sign Note</Link>
+                      <Link className={styles.actionBtn} href={`/patients/${row.clientId}/notes`}>Sign Note</Link>
                     ) : null}
                     {row.status === "hold" ? (
-                      <button type="button" className={styles.actionBtn}>Review Auth</button>
+                      <Link className={styles.actionBtn} href={`/patients/${row.clientId}/eligibility`}>Review Auth</Link>
                     ) : null}
                     {row.status === "ready" ? (
-                      <button type="button" className={`${styles.actionBtn} ${styles.actionBtnGreen}`}>Release</button>
+                      <button
+                        type="button"
+                        className={`${styles.actionBtn} ${styles.actionBtnGreen}`}
+                        disabled={rowBusy === row.id || releasing}
+                        onClick={() => releaseOne(row.id)}
+                      >
+                        {rowBusy === row.id ? "Releasing…" : "Release"}
+                      </button>
                     ) : null}
-                    <button type="button" className={styles.actionBtn}>Edit</button>
+                    <Link className={styles.actionBtn} href={`/patients/${row.clientId}/claims`}>Edit</Link>
                   </div>
                 </td>
               </tr>
