@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseServiceRoleClient } from "@/lib/supabase/server";
 import { DEFAULT_ORG_ID } from "@/lib/config";
-import { requireAuthenticatedStaff } from "@/lib/rbac/auth";
+import { requireAuthenticatedStaff, type StaffAuthContext } from "@/lib/rbac/auth";
 import {
   isValidStateCode,
   isValidSexAtBirth,
@@ -15,15 +15,15 @@ function extractMessage(error: unknown) {
 }
 
 async function resolveOrgForMutation(): Promise<
-  | { ok: true; organizationId: string }
+  | { ok: true; organizationId: string; staff: StaffAuthContext | null }
   | { ok: false; status: number; error: string }
 > {
   const staff = await requireAuthenticatedStaff();
-  if (staff) return { ok: true, organizationId: staff.organizationId };
+  if (staff) return { ok: true, organizationId: staff.organizationId, staff };
   if (process.env.NODE_ENV === "production") {
     return { ok: false, status: 401, error: "Authentication required" };
   }
-  return { ok: true, organizationId: DEFAULT_ORG_ID };
+  return { ok: true, organizationId: DEFAULT_ORG_ID, staff: null };
 }
 
 type IncomingUpdates = {
@@ -65,6 +65,28 @@ const FIELD_MAP: Record<keyof IncomingUpdates, string> = {
   email: "email",
   preferredLanguage: "preferred_language",
 };
+
+const COLUMN_LABELS: Record<string, string> = {
+  first_name: "First name",
+  middle_name: "Middle name",
+  last_name: "Last name",
+  preferred_name: "Preferred name",
+  mrn: "MRN",
+  date_of_birth: "Date of birth",
+  sex_at_birth: "Sex at birth",
+  gender_identity: "Gender identity",
+  pronouns: "Pronouns",
+  address_line_1: "Address line 1",
+  address_line_2: "Address line 2",
+  city: "City",
+  state: "State",
+  postal_code: "Postal code",
+  phone: "Phone",
+  email: "Email",
+  preferred_language: "Preferred language",
+};
+
+const AUDIT_COLUMNS = Object.values(FIELD_MAP);
 
 function normalizeString(value: unknown): string | null | undefined {
   if (value === undefined) return undefined;
@@ -113,6 +135,63 @@ function validate(updates: Record<string, string | null>): string | null {
   return null;
 }
 
+type AuditClient = ReturnType<typeof createServerSupabaseServiceRoleClient>;
+
+async function writeDemographicsAuditLogs(params: {
+  supabase: NonNullable<AuditClient>;
+  organizationId: string;
+  clientId: string;
+  staff: StaffAuthContext | null;
+  before: Record<string, string | null>;
+  after: Record<string, string | null>;
+}): Promise<void> {
+  const { supabase, organizationId, clientId, staff, before, after } = params;
+  const rows: Array<Record<string, unknown>> = [];
+  const userId = staff?.userId || null;
+  const userRole = staff?.roles?.[0] ?? null;
+  const actorEmail = staff?.email ?? null;
+  const actorName = staff
+    ? [staff.firstName, staff.lastName].filter(Boolean).join(" ") || null
+    : null;
+
+  for (const column of Object.keys(after)) {
+    const priorValue = before[column] ?? null;
+    const newValue = after[column] ?? null;
+    if (priorValue === newValue) continue;
+
+    const label = COLUMN_LABELS[column] ?? column;
+    rows.push({
+      organization_id: organizationId,
+      patient_id: clientId,
+      user_id: userId,
+      user_role: userRole,
+      action: "demographic_field_updated",
+      object_type: "client",
+      object_id: clientId,
+      before_value: { [column]: priorValue },
+      after_value: { [column]: newValue },
+      event_type: "demographic_field_updated",
+      event_summary: `${label} changed`,
+      event_metadata: {
+        field: column,
+        field_label: label,
+        actor_email: actorEmail,
+        actor_name: actorName,
+      },
+    });
+  }
+
+  if (rows.length === 0) return;
+
+  const { error } = await supabase.from("audit_logs").insert(rows as never);
+  if (error) {
+    console.error("[patients.PATCH] audit_logs insert failed", error.message);
+    throw new Error(
+      "Demographic change could not be recorded in the audit log. The update was not saved.",
+    );
+  }
+}
+
 export async function PATCH(
   request: Request,
   context: { params: Promise<{ clientId: string }> | { clientId: string } },
@@ -140,6 +219,7 @@ export async function PATCH(
       );
     }
     const organizationId = orgResolution.organizationId;
+    const staff = orgResolution.staff;
 
     const body = (await request.json().catch(() => ({}))) as {
       updates?: IncomingUpdates;
@@ -173,7 +253,7 @@ export async function PATCH(
 
     const { data: existing, error: existingError } = await supabase
       .from("clients")
-      .select("id")
+      .select(["id", ...AUDIT_COLUMNS].join(", "))
       .eq("id", clientId)
       .eq("organization_id", organizationId)
       .is("archived_at", null)
@@ -182,6 +262,24 @@ export async function PATCH(
     if (!existing) {
       return NextResponse.json({ success: false, error: "Patient not found." }, { status: 404 });
     }
+
+    const beforeSnapshot: Record<string, string | null> = {};
+    for (const column of Object.keys(allowed)) {
+      const raw = (existing as unknown as Record<string, unknown>)[column];
+      beforeSnapshot[column] = raw == null ? null : String(raw);
+    }
+
+    // Write the audit trail FIRST. If audit persistence fails we refuse to
+    // mutate the patient row — HIPAA requires every demographic change to be
+    // recorded, so a silent un-audited update is unacceptable.
+    await writeDemographicsAuditLogs({
+      supabase,
+      organizationId,
+      clientId,
+      staff,
+      before: beforeSnapshot,
+      after: allowed,
+    });
 
     const updatePayload: Record<string, unknown> = {
       ...allowed,
@@ -194,7 +292,15 @@ export async function PATCH(
       .eq("id", clientId)
       .eq("organization_id", organizationId)
       .is("archived_at", null);
-    if (updateError) throw updateError;
+    if (updateError) {
+      // Audit rows were already written; record a compensating note so the
+      // trail isn't misleading.
+      console.error(
+        "[patients.PATCH] update failed after audit write — audit rows describe an unapplied change",
+        updateError.message,
+      );
+      throw updateError;
+    }
 
     return NextResponse.json({ success: true });
   } catch (error) {

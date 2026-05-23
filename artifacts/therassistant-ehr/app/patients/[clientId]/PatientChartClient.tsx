@@ -303,6 +303,18 @@ function statusClass(value: string | null | undefined) {
   return "status";
 }
 
+type DemographicAuditEntry = {
+  id: string;
+  createdAt: string;
+  field: string | null;
+  fieldLabel: string;
+  beforeValue: string | null;
+  afterValue: string | null;
+  actorName: string | null;
+  actorEmail: string | null;
+  userRole: string | null;
+};
+
 async function fetchList<T>(url: string, field: string): Promise<T[]> {
   try {
     const response = await fetch(url, { cache: "no-store" });
@@ -345,6 +357,10 @@ export default function PatientChartClient({
   const [demoMessage, setDemoMessage] = useState<string | null>(null);
   const [demoDraft, setDemoDraft] = useState<Record<string, string>>({});
   const [demoOriginal, setDemoOriginal] = useState<Record<string, string>>({});
+  const [auditEntries, setAuditEntries] = useState<DemographicAuditEntry[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState<string | null>(null);
+  const [auditExpanded, setAuditExpanded] = useState(false);
   const organizationId = useMemo(
     () => resolveOrganizationId(initialOrganizationId),
     [initialOrganizationId],
@@ -411,6 +427,29 @@ export default function PatientChartClient({
     setDemoDraft((prev) => ({ ...prev, [field]: value }));
   }
 
+  async function reloadDemoAudit() {
+    setAuditLoading(true);
+    setAuditError(null);
+    try {
+      const response = await fetch(`/api/patients/${clientId}/audit?limit=50`, {
+        cache: "no-store",
+      });
+      const json = (await response.json().catch(() => ({}))) as {
+        success?: boolean;
+        error?: string;
+        entries?: DemographicAuditEntry[];
+      };
+      if (!response.ok || !json.success) {
+        throw new Error(json.error ?? "Failed to load recent changes.");
+      }
+      setAuditEntries(json.entries ?? []);
+    } catch (err) {
+      setAuditError(err instanceof Error ? err.message : "Failed to load recent changes.");
+    } finally {
+      setAuditLoading(false);
+    }
+  }
+
   async function saveDemoEdit() {
     if (!summary?.patient) return;
     setDemoSaving(true);
@@ -455,6 +494,7 @@ export default function PatientChartClient({
       setDemoDraft({});
       setDemoOriginal({});
       setDemoMessage("Demographics saved.");
+      void reloadDemoAudit();
     } catch (err) {
       setDemoError(err instanceof Error ? err.message : "Failed to save demographics");
     } finally {
@@ -628,6 +668,7 @@ export default function PatientChartClient({
 
     void loadPatient();
     void reloadIntake();
+    void reloadDemoAudit();
     return () => {
       cancelled = true;
     };
@@ -1067,6 +1108,73 @@ export default function PatientChartClient({
                 </div>
               </div>
             )}
+
+            <div style={{ marginTop: 16, borderTop: "1px solid var(--border, #e5e7eb)", paddingTop: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <h4 style={{ margin: 0, fontSize: 14 }}>
+                  Recent changes{auditEntries.length > 0 ? ` (${auditEntries.length})` : ""}
+                </h4>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    onClick={() => void reloadDemoAudit()}
+                    disabled={auditLoading}
+                  >
+                    {auditLoading ? "Loading…" : "Refresh"}
+                  </button>
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    onClick={() => setAuditExpanded((prev) => !prev)}
+                    aria-expanded={auditExpanded}
+                  >
+                    {auditExpanded ? "Hide" : "Show"}
+                  </button>
+                </div>
+              </div>
+              {auditError ? (
+                <div className="alert-panel" role="alert" style={{ marginTop: 8 }}>
+                  {auditError}
+                </div>
+              ) : null}
+              {auditExpanded ? (
+                auditEntries.length === 0 && !auditLoading ? (
+                  <p className="muted" style={{ marginTop: 8, fontSize: 13 }}>
+                    No demographic changes recorded yet.
+                  </p>
+                ) : (
+                  <table className="summary-cases-table" style={{ marginTop: 8 }}>
+                    <thead>
+                      <tr>
+                        <th>When</th>
+                        <th>Who</th>
+                        <th>Field</th>
+                        <th>Before</th>
+                        <th>After</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {auditEntries.map((entry) => {
+                        const actor =
+                          entry.actorName ||
+                          entry.actorEmail ||
+                          (entry.userRole ? `(${entry.userRole})` : "System");
+                        return (
+                          <tr key={entry.id}>
+                            <td>{formatDateTime(entry.createdAt)}</td>
+                            <td>{actor}</td>
+                            <td>{entry.fieldLabel}</td>
+                            <td>{entry.beforeValue ?? dash}</td>
+                            <td>{entry.afterValue ?? dash}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )
+              ) : null}
+            </div>
           </section>
 
           <section className="summary-block" aria-label="Insurance information">
