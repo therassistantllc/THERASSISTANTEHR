@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 import PaymentsClient from "./PaymentsClient";
+import PaymentRowActions from "./PaymentRowActions";
 
 type PaymentSource = "era" | "manual_insurance" | "patient";
 
@@ -610,12 +611,27 @@ export default function PaymentsDashboard() {
                   <td style={tdStyle}>{fmtDate(r.depositDate)}</td>
                   <td style={tdStyle}>{fmtDate(r.paymentDate)}</td>
                   <td style={tdStyle}>
-                    <a
-                      href={`/billing/payments/posted/${encodeURIComponent(r.id)}?organizationId=${orgId}`}
-                      style={{ color: "#2563eb", textDecoration: "none", fontSize: 12 }}
-                    >
-                      Open →
-                    </a>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
+                      <a
+                        href={`/billing/payments/posted/${encodeURIComponent(r.id)}?organizationId=${orgId}`}
+                        style={{ color: "#2563eb", textDecoration: "none", fontSize: 12 }}
+                      >
+                        Open →
+                      </a>
+                      <PaymentRowActions
+                        row={{
+                          id: r.id,
+                          paymentType: r.paymentType,
+                          postingStatus: r.postingStatus,
+                          amount: r.amount,
+                          payerName: r.payerName,
+                          source: r.source,
+                        }}
+                        orgId={orgId}
+                        onChanged={refresh}
+                        onFlash={(tone, msg) => setFlash({ tone, msg })}
+                      />
+                    </div>
                   </td>
                 </tr>
               ))
