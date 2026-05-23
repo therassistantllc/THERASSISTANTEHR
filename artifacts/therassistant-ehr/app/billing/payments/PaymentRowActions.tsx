@@ -1355,6 +1355,29 @@ function SimpleReasonModal({
 // Recoupment modal
 // ─────────────────────────────────────────────────────────────────────────────
 
+interface RecoupmentPreviewShape {
+  source: { kind: string; id: string; label: string };
+  amount: number;
+  paymentTotalImpact: number;
+  priorRefundTotal: number;
+  priorRecoupTotal: number;
+  remainingRecoupableBefore: number;
+  remainingRecoupableAfter: number;
+  ledgerEntry: {
+    entryType: string;
+    amount: number;
+    groupCode: string;
+    reasonCode: string | null;
+    description: string;
+  };
+  workqueueItem: {
+    wouldOpen: boolean;
+    workType: string | null;
+    title: string | null;
+    priority: string | null;
+  };
+}
+
 function RecoupModal({
   row,
   orgId,
@@ -1373,7 +1396,10 @@ function RecoupModal({
   const [reason, setReason] = useState("");
   const [reasonCode, setReasonCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<RecoupmentPreviewShape | null>(null);
+  const [previewStale, setPreviewStale] = useState(false);
   const amountNum = Number(amount);
 
   const validation = useMemo(() => {
@@ -1385,14 +1411,8 @@ function RecoupModal({
     return null;
   }, [detail, amountNum, remaining, reason]);
 
-  const submit = async () => {
-    if (validation) {
-      setError(validation);
-      return;
-    }
-    setSubmitting(true);
-    setError(null);
-    try {
+  const callApi = useCallback(
+    async (dryRun: boolean) => {
       const r = await fetch(
         `/api/billing/payments/posted/${encodeURIComponent(row.id)}/recoup`,
         {
@@ -1403,6 +1423,7 @@ function RecoupModal({
             amount: amountNum,
             reason: reason.trim(),
             reasonCode: reasonCode.trim() || null,
+            dryRun,
           }),
         },
       );
@@ -1412,6 +1433,49 @@ function RecoupModal({
           (j?.errors?.[0]?.message as string | undefined) ?? j?.error ?? "Recoupment failed";
         throw new Error(msg);
       }
+      return j;
+    },
+    [row.id, orgId, amountNum, reason, reasonCode],
+  );
+
+  // Auto-refresh preview on open and whenever the inputs change (debounced) so
+  // billers always see what *this* recoupment would do before clicking Confirm.
+  useEffect(() => {
+    if (!detail) return;
+    if (validation) {
+      setPreview(null);
+      setPreviewStale(false);
+      return;
+    }
+    setPreviewStale(true);
+    const timer = setTimeout(async () => {
+      setPreviewing(true);
+      setError(null);
+      try {
+        const j = await callApi(true);
+        if (!j.preview) throw new Error("Server did not return a preview");
+        setPreview(j.preview as RecoupmentPreviewShape);
+        setPreviewStale(false);
+      } catch (e) {
+        setPreview(null);
+        const msg = e instanceof Error ? e.message : "Preview failed";
+        setError(msg);
+      } finally {
+        setPreviewing(false);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [detail, validation, callApi]);
+
+  const submit = async () => {
+    if (validation) {
+      setError(validation);
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await callApi(false);
       onDone(`Recoupment ${fmtMoney(amountNum)} recorded.`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Recoupment failed";
@@ -1423,14 +1487,14 @@ function RecoupModal({
   };
 
   return (
-    <Modal title="Record recoupment" onClose={onClose}>
+    <Modal title="Record recoupment" onClose={onClose} width={580}>
       <ErrorBanner message={error ?? loadError} />
       {loading ? (
         <div style={{ padding: 12, color: "#6b7280", fontSize: 13 }}>Loading payment detail…</div>
       ) : detail ? (
         <>
           <InfoLine label="Original payment" value={fmtMoney(detail.totalImpact)} />
-          <InfoLine label="Remaining" value={fmtMoney(remaining)} />
+          <InfoLine label="Remaining recoupable" value={fmtMoney(remaining)} />
           <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
             <label style={fieldLabel}>
               <span>Amount (USD)</span>
@@ -1466,17 +1530,108 @@ function RecoupModal({
               <div style={{ fontSize: 12, color: "#b45309" }}>{validation}</div>
             ) : null}
           </div>
+
+          <RecoupPreviewPanel
+            preview={preview}
+            loading={previewing}
+            stale={previewStale}
+            hasValidation={Boolean(validation)}
+          />
+
           <div style={{ marginTop: 16, display: "flex", gap: 8, justifyContent: "flex-end" }}>
             <button onClick={onClose} style={secondaryBtn} disabled={submitting}>
               Cancel
             </button>
-            <button onClick={submit} style={primaryBtn} disabled={submitting || Boolean(validation)}>
-              {submitting ? "Submitting…" : "Record recoupment"}
+            <button
+              onClick={submit}
+              style={primaryBtn}
+              disabled={submitting || previewing || previewStale || Boolean(validation) || !preview}
+            >
+              {submitting ? "Submitting…" : "Confirm & record recoupment"}
             </button>
           </div>
         </>
       ) : null}
     </Modal>
+  );
+}
+
+function RecoupPreviewPanel({
+  preview,
+  loading,
+  stale,
+  hasValidation,
+}: {
+  preview: RecoupmentPreviewShape | null;
+  loading: boolean;
+  stale: boolean;
+  hasValidation: boolean;
+}) {
+  if (hasValidation) {
+    return (
+      <div style={{ marginTop: 14, padding: 10, background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 6, fontSize: 12, color: "#6b7280" }}>
+        Enter a valid amount and reason to see a preview of what will be written.
+      </div>
+    );
+  }
+  if (loading && !preview) {
+    return (
+      <div style={{ marginTop: 14, padding: 10, background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 6, fontSize: 12, color: "#6b7280" }}>
+        Loading preview…
+      </div>
+    );
+  }
+  if (!preview) return null;
+  return (
+    <div
+      style={{
+        marginTop: 14,
+        padding: 12,
+        background: stale ? "#fffbeb" : "#eff6ff",
+        border: `1px solid ${stale ? "#fde68a" : "#bfdbfe"}`,
+        color: stale ? "#92400e" : "#1e3a8a",
+        borderRadius: 6,
+        fontSize: 13,
+      }}
+    >
+      <div style={{ fontWeight: 600, marginBottom: 8 }}>
+        {stale ? "Preview — recalculating…" : "Preview — nothing has been written yet."}
+      </div>
+      <InfoLine label="Source" value={preview.source.label} />
+      <InfoLine label="Amount" value={fmtMoney(preview.amount)} />
+      <InfoLine
+        label="Remaining recoupable"
+        value={`${fmtMoney(preview.remainingRecoupableBefore)} → ${fmtMoney(preview.remainingRecoupableAfter)}`}
+      />
+      {preview.priorRecoupTotal > 0 ? (
+        <InfoLine label="Prior recoupments" value={fmtMoney(preview.priorRecoupTotal)} />
+      ) : null}
+      <div style={{ marginTop: 8, color: "#374151" }}>
+        <strong>Compensating ledger entry:</strong>
+        <ul style={{ margin: "4px 0 0 18px" }}>
+          <li>
+            {preview.ledgerEntry.entryType} {fmtMoney(preview.ledgerEntry.amount)}{" "}
+            {preview.ledgerEntry.reasonCode ? (
+              <>
+                (code <code>{preview.ledgerEntry.reasonCode}</code>){" "}
+              </>
+            ) : null}
+            — {preview.ledgerEntry.description}
+          </li>
+        </ul>
+      </div>
+      {preview.workqueueItem.wouldOpen ? (
+        <div style={{ marginTop: 8, color: "#374151" }}>
+          <strong>Workqueue follow-up:</strong>{" "}
+          {preview.workqueueItem.title ?? preview.workqueueItem.workType ?? "(item will be opened)"}
+          {preview.workqueueItem.priority ? ` · priority ${preview.workqueueItem.priority}` : ""}
+        </div>
+      ) : (
+        <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
+          No workqueue follow-up will be opened (no claim linked).
+        </div>
+      )}
+    </div>
   );
 }
 
