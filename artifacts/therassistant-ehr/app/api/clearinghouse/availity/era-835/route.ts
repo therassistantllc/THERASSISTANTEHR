@@ -5,6 +5,7 @@ import { parse835 } from "@/lib/clearinghouse/parsers/parse835";
 import { createServerSupabaseServiceRoleClient } from "@/lib/supabase/server";
 import type { Json } from "@/lib/supabase/database.types";
 import type { Database } from "@/lib/supabase/database.types";
+import { UNIQUE_VIOLATION } from "@/lib/db/findOrCreate";
 
 function generateUuid() {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -46,12 +47,17 @@ export async function POST(request: Request) {
     const now = new Date().toISOString();
     const fileHash = crypto.createHash("sha256").update(raw835).digest("hex");
 
-    // Guard against duplicate ingestion of the same ERA file
+    // Guard against duplicate ingestion of the same ERA file.
+    // The SELECT below catches the common case (file already imported);
+    // the partial unique index idx_payment_import_batches_unique_active_file_hash
+    // (Task #184) catches the race when two simultaneous ingests both miss
+    // the SELECT and both INSERT — we detect 23505 and return the same 409.
     const { data: existingBatch } = await supabase
       .from("payment_import_batches")
       .select("id")
       .eq("organization_id", organizationId)
       .eq("source_file_hash", fileHash)
+      .is("archived_at", null)
       .limit(1)
       .maybeSingle();
 
@@ -76,7 +82,26 @@ export async function POST(request: Request) {
       updated_at: now,
     });
 
-    if (batchError) throw batchError;
+    if (batchError) {
+      if ((batchError as { code?: string }).code === UNIQUE_VIOLATION) {
+        // Race: a parallel ingest of the same file beat us to the INSERT.
+        // Re-select the winning batch and return the same 409 the SELECT
+        // path would have returned.
+        const { data: raceBatch } = await supabase
+          .from("payment_import_batches")
+          .select("id")
+          .eq("organization_id", organizationId)
+          .eq("source_file_hash", fileHash)
+          .is("archived_at", null)
+          .limit(1)
+          .maybeSingle();
+        return NextResponse.json(
+          { success: false, error: "This ERA file has already been imported.", batchId: raceBatch?.id ?? null },
+          { status: 409 },
+        );
+      }
+      throw batchError;
+    }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const importedItems: any[] = [];

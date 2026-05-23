@@ -6,6 +6,7 @@ import {
   PaymentPostingForbiddenError,
   PaymentPostingUnauthenticatedError,
 } from "@/lib/payments/postingEngine";
+import { findOrCreateRow } from "@/lib/db/findOrCreate";
 
 function generateUuid() {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -76,42 +77,49 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: "Payment import item is not ready to post" }, { status: 409 });
     }
 
-    const { data: existingPosting, error: existingPostingError } = await supabase
-      .from("payment_postings")
-      .select("id, posting_reference, total_posted_amount, posted_at")
-      .eq("payment_import_item_id", paymentImportItemId)
-      .is("archived_at", null)
-      .maybeSingle();
-
-    if (existingPostingError) throw existingPostingError;
-
-    if (existingPosting) {
-      return NextResponse.json({ success: true, reused: true, posting: existingPosting });
-    }
-
     const now = new Date().toISOString();
     const amount = Number(paymentImportItem.net_amount ?? 0);
     const safeAmount = Number.isFinite(amount) ? amount : 0;
 
-    const { data: createdPosting, error: postingError } = await supabase
-      .from("payment_postings")
-      .insert({
-        id: generateUuid(),
-        organization_id: paymentImportItem.organization_id,
-        payment_import_item_id: paymentImportItem.id,
-        posting_status: "posted",
-        posting_reference: `POST-${Date.now()}`,
-        total_posted_amount: safeAmount,
-        note: `Posted from payment posting workspace for ${paymentImportItem.imported_item_ref ?? paymentImportItem.id}`,
-        posted_at: now,
-        created_at: now,
-        updated_at: now,
-      })
-      .select("*")
-      .single();
+    // Find-or-create with 23505 race protection (Task #184). Partial unique
+    // index idx_payment_postings_unique_active_import_item guarantees one
+    // live posting per import item even if two posters race.
+    const postingResult = await findOrCreateRow<Record<string, unknown>>({
+      label: "payment posting",
+      findExisting: () =>
+        supabase
+          .from("payment_postings")
+          .select("*")
+          .eq("payment_import_item_id", paymentImportItemId)
+          .is("archived_at", null)
+          .limit(1)
+          .maybeSingle(),
+      insertNew: () =>
+        supabase
+          .from("payment_postings")
+          .insert({
+            id: generateUuid(),
+            organization_id: paymentImportItem.organization_id,
+            payment_import_item_id: paymentImportItem.id,
+            posting_status: "posted",
+            posting_reference: `POST-${Date.now()}`,
+            total_posted_amount: safeAmount,
+            note: `Posted from payment posting workspace for ${paymentImportItem.imported_item_ref ?? paymentImportItem.id}`,
+            posted_at: now,
+            created_at: now,
+            updated_at: now,
+          })
+          .select("*")
+          .single(),
+    });
 
-    if (postingError) throw postingError;
-    if (!createdPosting) throw new Error("Payment posting creation returned no row");
+    if (!postingResult.ok) {
+      return NextResponse.json({ success: false, error: postingResult.error }, { status: 422 });
+    }
+    if (!postingResult.created) {
+      return NextResponse.json({ success: true, reused: true, posting: postingResult.row });
+    }
+    const createdPosting = postingResult.row;
 
     const paymentImportUpdate = await supabase
       .from("payment_import_items")

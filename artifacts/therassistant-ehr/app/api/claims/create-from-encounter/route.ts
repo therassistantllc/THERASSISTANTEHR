@@ -7,6 +7,7 @@ import {
   getDefaultCaseForClient,
   isPatientResponsibilityCaseType,
 } from "@/lib/cases/clientCasesService";
+import { findOrCreateRow } from "@/lib/db/findOrCreate";
 
 function generateUuid() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
@@ -64,16 +65,6 @@ export async function POST(request: Request) {
     const blocked = gateResponse(gate);
     if (blocked) return blocked;
 
-    const { data: existingClaim } = await supabase
-      .from("professional_claims")
-      .select("*")
-      .eq("encounter_id", encounterId)
-      .maybeSingle();
-
-    if (existingClaim) {
-      return NextResponse.json({ success: true, message: "Claim already exists", claim: existingClaim });
-    }
-
     const now = new Date().toISOString();
     const claimNumber = `CLM-${Date.now()}`;
 
@@ -92,13 +83,32 @@ export async function POST(request: Request) {
       updated_at: now,
     };
 
-    const { data: claim, error: claimError } = await supabase
-      .from("professional_claims")
-      .insert(claimPayload)
-      .select()
-      .single();
+    // Find-or-create with 23505 race protection (Task #184). Partial unique
+    // index idx_professional_claims_unique_active_encounter at the DB
+    // guarantees one live claim per signed encounter even under double-clicks.
+    const claimResult = await findOrCreateRow<Record<string, unknown>>({
+      label: "claim",
+      findExisting: () =>
+        supabase
+          .from("professional_claims")
+          .select("*")
+          .eq("organization_id", encounter.organization_id)
+          .eq("encounter_id", encounterId)
+          .is("archived_at", null)
+          .limit(1)
+          .maybeSingle(),
+      insertNew: () =>
+        supabase.from("professional_claims").insert(claimPayload).select().single(),
+    });
 
-    if (claimError) throw claimError;
+    if (!claimResult.ok) {
+      return NextResponse.json({ success: false, error: claimResult.error }, { status: 422 });
+    }
+    const claim = claimResult.row as { id: string; [k: string]: unknown };
+
+    if (!claimResult.created) {
+      return NextResponse.json({ success: true, message: "Claim already exists", claim });
+    }
 
     await supabase.from("workqueue_items").insert({
       id: generateUuid(),

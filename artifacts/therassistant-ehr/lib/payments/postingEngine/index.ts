@@ -22,6 +22,7 @@
  */
 
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
+import { UNIQUE_VIOLATION } from "@/lib/db/findOrCreate";
 import { writePaymentAuditLog } from "./audit";
 import { validateEra835Posting, isAlreadyPosted } from "./validation";
 import type {
@@ -585,7 +586,16 @@ async function createLedgerEntry(
     reason_code: effect.reasonCode ?? null,
     description: effect.description,
   });
-  if (error) throw new Error(error.message);
+  if (error) {
+    // Race (Task #184): partial unique index
+    // idx_era_posting_ledger_entries_unique_active on
+    // (organization_id, era_claim_payment_id, entry_type) raised 23505.
+    // Another concurrent posting attempt wrote the same ledger row between
+    // our SELECT and INSERT. Treat as already-posted and return — the
+    // winner's row is the canonical one.
+    if ((error as { code?: string }).code === UNIQUE_VIOLATION) return;
+    throw new Error(error.message);
+  }
 }
 
 async function createPatientInvoiceIfNeeded(
@@ -626,7 +636,15 @@ async function createPatientInvoiceIfNeeded(
     .select("id")
     .single();
 
-  if (error) throw new Error(error.message);
+  if (error) {
+    // Race (Task #184): partial unique index
+    // idx_patient_invoices_unique_active_era_payment on
+    // (organization_id, era_claim_payment_id) raised 23505. Another
+    // concurrent posting attempt already created the invoice — treat as
+    // "no new invoice from this caller" rather than failing the post.
+    if ((error as { code?: string }).code === UNIQUE_VIOLATION) return false;
+    throw new Error(error.message);
+  }
   if (!inserted) return false;
 
   const audit = await writePaymentAuditLog(supabase, {

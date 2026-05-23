@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient as createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireRoleInRoute } from "@/lib/rbac/middleware";
 import { mapLegacyClaimInputToProfessionalClaim } from "@/lib/claims/createProfessionalClaimFromLegacyInput";
+import { UNIQUE_VIOLATION } from "@/lib/db/findOrCreate";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -154,10 +155,27 @@ export async function POST(request: Request) {
         .select()
         .single();
 
-      if (createEncounterError) throw createEncounterError;
-      if (!createdEncounter) throw new Error("Encounter creation returned no row");
-      encounter = createdEncounter;
-      steps.push({ step: "encounter", status: "created", id: createdEncounter.id, message: "Created draft encounter from appointment" });
+      if (createEncounterError) {
+        // Race (Task #184 / #148): partial unique index raised 23505 between
+        // our SELECT and INSERT. Re-select the winning encounter row.
+        if ((createEncounterError as { code?: string }).code === UNIQUE_VIOLATION) {
+          const { data: raceEncounter } = await supabase
+            .from("encounters")
+            .select("*")
+            .eq("appointment_id", appointmentId)
+            .is("archived_at", null)
+            .maybeSingle();
+          if (!raceEncounter) throw createEncounterError;
+          encounter = raceEncounter;
+          steps.push({ step: "encounter", status: "reused", id: raceEncounter.id, message: "Encounter created concurrently — reused" });
+        } else {
+          throw createEncounterError;
+        }
+      } else {
+        if (!createdEncounter) throw new Error("Encounter creation returned no row");
+        encounter = createdEncounter;
+        steps.push({ step: "encounter", status: "created", id: createdEncounter.id, message: "Created draft encounter from appointment" });
+      }
     }
 
     await createWorkqueueItem(supabase, {
@@ -238,10 +256,28 @@ export async function POST(request: Request) {
         .select()
         .single();
 
-      if (claimError) throw claimError;
-      if (!createdClaim) throw new Error("Claim creation returned no row");
-      claim = createdClaim;
-      steps.push({ step: "claim", status: "created", id: createdClaim.id, message: "Created submitted claim from signed encounter" });
+      if (claimError) {
+        // Race (Task #184): partial unique index
+        // idx_professional_claims_unique_active_encounter raised 23505.
+        if ((claimError as { code?: string }).code === UNIQUE_VIOLATION) {
+          const { data: raceClaim } = await supabase
+            .from("professional_claims")
+            .select("*")
+            .eq("organization_id", encounter.organization_id)
+            .eq("encounter_id", encounter.id)
+            .is("archived_at", null)
+            .maybeSingle();
+          if (!raceClaim) throw claimError;
+          claim = raceClaim;
+          steps.push({ step: "claim", status: "reused", id: raceClaim.id, message: "Claim created concurrently — reused" });
+        } else {
+          throw claimError;
+        }
+      } else {
+        if (!createdClaim) throw new Error("Claim creation returned no row");
+        claim = createdClaim;
+        steps.push({ step: "claim", status: "created", id: createdClaim.id, message: "Created submitted claim from signed encounter" });
+      }
     }
 
     await createWorkqueueItem(supabase, {
@@ -410,10 +446,27 @@ export async function POST(request: Request) {
           .select()
           .single();
 
-        if (postingError) throw postingError;
-        if (!createdPosting) throw new Error("Payment posting creation returned no row");
-        posting = createdPosting;
-        steps.push({ step: "posting", status: "created", id: createdPosting.id, message: "Created posted payment posting" });
+        if (postingError) {
+          // Race (Task #184): partial unique index
+          // idx_payment_postings_unique_active_import_item raised 23505.
+          if ((postingError as { code?: string }).code === UNIQUE_VIOLATION) {
+            const { data: racePosting } = await supabase
+              .from("payment_postings")
+              .select("*")
+              .eq("payment_import_item_id", paymentImportItem.id)
+              .is("archived_at", null)
+              .maybeSingle();
+            if (!racePosting) throw postingError;
+            posting = racePosting;
+            steps.push({ step: "posting", status: "reused", id: racePosting.id, message: "Payment posting created concurrently — reused" });
+          } else {
+            throw postingError;
+          }
+        } else {
+          if (!createdPosting) throw new Error("Payment posting creation returned no row");
+          posting = createdPosting;
+          steps.push({ step: "posting", status: "created", id: createdPosting.id, message: "Created posted payment posting" });
+        }
       }
 
       const { error: claimPaidError } = await supabase
