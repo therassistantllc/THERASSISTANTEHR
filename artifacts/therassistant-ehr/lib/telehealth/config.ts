@@ -59,15 +59,19 @@ export function getPlatformConfig(platform: TelehealthPlatform): PlatformOAuthCo
 }
 
 export function getPlatformStatus(platform: TelehealthPlatform): PlatformStatus {
+  const encKey = process.env.TELEHEALTH_TOKEN_ENC_KEY;
+  const encMissing = !encKey || encKey.length < 24;
   if (platform === "zoom") {
     const missing: string[] = [];
     if (!process.env.ZOOM_CLIENT_ID) missing.push("ZOOM_CLIENT_ID");
     if (!process.env.ZOOM_CLIENT_SECRET) missing.push("ZOOM_CLIENT_SECRET");
+    if (encMissing) missing.push("TELEHEALTH_TOKEN_ENC_KEY");
     return { platform, configured: missing.length === 0, missingEnv: missing };
   }
   const missing: string[] = [];
   if (!process.env.GOOGLE_CLIENT_ID) missing.push("GOOGLE_CLIENT_ID");
   if (!process.env.GOOGLE_CLIENT_SECRET) missing.push("GOOGLE_CLIENT_SECRET");
+  if (encMissing) missing.push("TELEHEALTH_TOKEN_ENC_KEY");
   return { platform: "google_meet", configured: missing.length === 0, missingEnv: missing };
 }
 

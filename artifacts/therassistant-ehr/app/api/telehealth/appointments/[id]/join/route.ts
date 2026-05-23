@@ -63,6 +63,7 @@ export async function POST(
 
   let platform: TelehealthPlatform | null = null;
   let providerLegacyUrl: string | null = null;
+  let providerStaffId: string | null = null;
   if (appt.provider_id) {
     const { data: profile } = await supabase
       .from("provider_credentialing_profiles")
@@ -73,7 +74,19 @@ export async function POST(
     const dp = (profile as any)?.default_telehealth_platform as string | null | undefined;
     if (dp && isTelehealthPlatform(dp)) platform = dp;
     providerLegacyUrl = (profile as any)?.telehealth_url ?? null;
+    providerStaffId = (profile as any)?.staff_id ?? null;
   }
+
+  let providerAuthUserId: string | null = null;
+  if (providerStaffId) {
+    const { data: staffRow } = await supabase
+      .from("staff_profiles")
+      .select("auth_user_id")
+      .eq("id", providerStaffId)
+      .maybeSingle();
+    providerAuthUserId = (staffRow as any)?.auth_user_id ?? null;
+  }
+  const ownerUserIdForAuth = providerAuthUserId ?? ctx.userId;
 
   if (!platform) {
     const fallbackUrl = appt.telehealth_url ?? providerLegacyUrl ?? null;
@@ -99,11 +112,14 @@ export async function POST(
 
   const auth = await loadAuthForProvider(supabase as any, {
     organizationId: ctx.organizationId,
-    ownerUserId: ctx.userId,
+    ownerUserId: ownerUserIdForAuth,
     platform,
   });
   if (!auth) {
     const fallbackUrl = appt.telehealth_url ?? providerLegacyUrl ?? null;
+    const providerScopeNote = providerAuthUserId
+      ? `The appointment's provider has not connected ${platform}.`
+      : `${platform} connection lookup falls back to the current user because the appointment's provider has no linked staff account.`;
     if (fallbackUrl) {
       return NextResponse.json({
         success: true,
@@ -111,11 +127,15 @@ export async function POST(
         platform,
         joinUrl: fallbackUrl,
         hostUrl: null,
-        warning: `Not connected to ${platform}. Using the legacy static URL. Connect in Settings → Providers to auto-create meetings.`,
+        warning: `${providerScopeNote} Using the legacy static URL. Connect in Settings → Providers to auto-create meetings.`,
       });
     }
     return NextResponse.json(
-      { error: `Not connected to ${platform}.`, platform, requiresConnect: true },
+      {
+        error: providerScopeNote,
+        platform,
+        requiresConnect: true,
+      },
       { status: 409 },
     );
   }

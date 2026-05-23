@@ -3,17 +3,22 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
 const ALGO = "aes-256-gcm";
 
 function getKey(): Buffer {
-  const raw =
-    process.env.TELEHEALTH_TOKEN_ENC_KEY ??
-    process.env.GMAIL_OAUTH_STATE_SECRET ??
-    null;
+  const raw = process.env.TELEHEALTH_TOKEN_ENC_KEY ?? null;
   if (!raw) {
     throw new Error(
-      "TELEHEALTH_TOKEN_ENC_KEY (or GMAIL_OAUTH_STATE_SECRET fallback) is not configured. " +
-        "Set TELEHEALTH_TOKEN_ENC_KEY to encrypt telehealth OAuth tokens at rest.",
+      "TELEHEALTH_TOKEN_ENC_KEY is not configured. " +
+        "Set TELEHEALTH_TOKEN_ENC_KEY (a long random string, e.g. `openssl rand -base64 48`) to encrypt telehealth OAuth tokens at rest.",
     );
   }
+  if (raw.length < 24) {
+    throw new Error("TELEHEALTH_TOKEN_ENC_KEY must be at least 24 characters of entropy.");
+  }
   return createHash("sha256").update(raw).digest();
+}
+
+export function isTokenEncryptionConfigured(): boolean {
+  const raw = process.env.TELEHEALTH_TOKEN_ENC_KEY;
+  return typeof raw === "string" && raw.length >= 24;
 }
 
 export function encryptToken(plaintext: string): string {

@@ -28,6 +28,17 @@ export async function PATCH(request: Request) {
     .eq("id", body.providerId);
 
   if (error) {
+    const code = (error as { code?: string }).code ?? "";
+    if (code === "42703" && /default_telehealth_platform/i.test(error.message ?? "")) {
+      return NextResponse.json(
+        {
+          error:
+            "default_telehealth_platform column not yet provisioned. Apply migration 20260527000000_telehealth_oauth.sql to your Supabase project.",
+          degraded: true,
+        },
+        { status: 409 },
+      );
+    }
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
   return NextResponse.json({ success: true, providerId: body.providerId, platform: platform ?? null });

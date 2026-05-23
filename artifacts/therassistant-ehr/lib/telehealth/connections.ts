@@ -43,11 +43,11 @@ export async function listConnectionsForUser(
   if (!conns || conns.length === 0) return [];
 
   const ids = conns.map((c) => c.id);
-  const { data: tokens, error: tokErr } = await supabase
+  const tokRes = await supabase
     .from("telehealth_oauth_tokens")
     .select("integration_connection_id, scope, account_email, expires_at, last_refreshed_at, last_error")
     .in("integration_connection_id", ids);
-  if (tokErr) throw tokErr;
+  const tokens = isMissingTelehealthTable(tokRes.error) ? [] : (tokRes.error ? (() => { throw tokRes.error; })() : tokRes.data);
 
   const byId = new Map<string, any>();
   (tokens ?? []).forEach((t) => byId.set(t.integration_connection_id, t));
@@ -142,8 +142,28 @@ export async function deleteConnection(
   supabase: DbAny,
   connectionId: string,
 ): Promise<void> {
-  await supabase.from("telehealth_oauth_tokens").delete().eq("integration_connection_id", connectionId);
-  await supabase.from("integration_connections").delete().eq("id", connectionId);
+  const tokDel = await supabase
+    .from("telehealth_oauth_tokens")
+    .delete()
+    .eq("integration_connection_id", connectionId);
+  if (tokDel.error && !isMissingTelehealthTable(tokDel.error)) throw tokDel.error;
+
+  const connDel = await supabase.from("integration_connections").delete().eq("id", connectionId);
+  if (connDel.error) throw connDel.error;
+}
+
+export function isMissingTelehealthTable(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: string }).code ?? "";
+  const message = String((error as { message?: string }).message ?? "");
+  return code === "42P01" && /telehealth_oauth_tokens/i.test(message);
+}
+
+export function isMissingDefaultPlatformColumn(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: string }).code ?? "";
+  const message = String((error as { message?: string }).message ?? "");
+  return code === "42703" && /default_telehealth_platform/i.test(message);
 }
 
 export async function loadAuthForProvider(

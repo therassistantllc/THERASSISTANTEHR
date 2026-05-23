@@ -16,7 +16,7 @@ function isMissingTelehealthColumns(error: unknown): boolean {
   const code = (error as { code?: string }).code ?? "";
   const message = String((error as { message?: string }).message ?? "");
   if (code !== "42703") return false;
-  return /telehealth_url|stripe_payment_link_url/i.test(message);
+  return /telehealth_url|stripe_payment_link_url|default_telehealth_platform/i.test(message);
 }
 
 function withNullExtras<T extends Record<string, unknown>>(row: T): T & {

@@ -29,9 +29,21 @@ export async function GET() {
       })),
     });
   } catch (e) {
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : "Failed to load connections" },
-      { status: 500 },
-    );
+    const code = (e as { code?: string } | null)?.code ?? "";
+    const message = e instanceof Error ? e.message : "Failed to load connections";
+    if (code === "42P01" && /telehealth_oauth_tokens/i.test(message)) {
+      return NextResponse.json({
+        success: true,
+        degraded: true,
+        error:
+          "Telehealth OAuth tables not yet provisioned. Apply migration 20260527000000_telehealth_oauth.sql to your Supabase project.",
+        platformStatus: {
+          zoom: getPlatformStatus("zoom"),
+          google_meet: getPlatformStatus("google_meet"),
+        },
+        connections: [],
+      });
+    }
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
