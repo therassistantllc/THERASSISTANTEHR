@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 import styles from "./charge-capture.module.css";
-import CodeCombobox, { fetchChildCodes, validateCode } from "./CodeCombobox";
+import CodeCombobox, { describeCodeForSaveError, fetchChildCodes, validateCode } from "./CodeCombobox";
 import type { CodeOption, CodeValidation } from "./CodeCombobox";
 
 type ChargeStatus = "ready" | "unsigned" | "missing_dx" | "hold" | "released";
@@ -386,15 +386,9 @@ export default function ChargeCaptureClient() {
     setInvalidDx(dxBad);
     setInvalidProc(procBad);
     if (dxBad.size === 0 && procBad.size === 0) return { ok: true };
-    const describe = (code: string, v: CodeValidation): string => {
-      if (v.status === "unknown") return `${code} (not found)`;
-      if (v.status === "retired") return `${code} (retired${v.expirationDate ? ` ${v.expirationDate}` : ""})`;
-      if (v.status === "header") return `${code} (header — not billable)`;
-      return code;
-    };
     const parts: string[] = [];
-    if (dxBad.size) parts.push(`ICD-10: ${[...dxBad.entries()].map(([c, v]) => describe(c, v)).join(", ")}`);
-    if (procBad.size) parts.push(`CPT/HCPCS: ${[...procBad.entries()].map(([c, v]) => describe(c, v)).join(", ")}`);
+    if (dxBad.size) parts.push(`ICD-10: ${[...dxBad.entries()].map(([c, v]) => describeCodeForSaveError(c, v)).join(", ")}`);
+    if (procBad.size) parts.push(`CPT/HCPCS: ${[...procBad.entries()].map(([c, v]) => describeCodeForSaveError(c, v)).join(", ")}`);
     return { ok: false, reason: parts.join(" · ") };
   }, [detail]);
 

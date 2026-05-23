@@ -105,6 +105,21 @@ export async function fetchChildCodes(
   }
 }
 
+/**
+ * Save-time error format shown in Charge Capture when a code fails
+ * validation. Kept here (next to `validateCode`) so the format and the
+ * classification stay in lockstep, and so it can be unit-tested without
+ * rendering the React tree.
+ */
+export function describeCodeForSaveError(code: string, v: CodeValidation): string {
+  if (v.status === "unknown") return `${code} (not found)`;
+  if (v.status === "retired") {
+    return `${code} (retired${v.expirationDate ? ` ${v.expirationDate}` : ""})`;
+  }
+  if (v.status === "header") return `${code} (header — not billable)`;
+  return code;
+}
+
 export async function validateCode(
   kind: Props["kind"],
   code: string,
