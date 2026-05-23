@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 import styles from "./charge-capture.module.css";
+import CodeCombobox, { validateCode } from "./CodeCombobox";
 
 type ChargeStatus = "ready" | "unsigned" | "missing_dx" | "hold" | "released";
 
@@ -188,6 +189,8 @@ export default function ChargeCaptureClient() {
   const [releasing, setReleasing] = useState(false);
   const [message, setMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [invalidDx, setInvalidDx] = useState<Set<string>>(new Set());
+  const [invalidProc, setInvalidProc] = useState<Set<string>>(new Set());
 
   // Load workqueue list
   useEffect(() => {
@@ -288,11 +291,45 @@ export default function ChargeCaptureClient() {
     });
   }, []);
 
+  // Validate every non-empty DX and CPT code against reference tables before saving.
+  const validateAllCodes = useCallback(async (): Promise<{ ok: boolean; reason?: string }> => {
+    if (!detail) return { ok: true };
+    const dxCodes = detail.diagnoses.map((d) => d.trim().toUpperCase()).filter(Boolean);
+    const procCodes = detail.serviceLines
+      .map((l) => l.procedureCode.trim().toUpperCase())
+      .filter(Boolean);
+    const dxBad = new Set<string>();
+    const procBad = new Set<string>();
+    await Promise.all([
+      ...dxCodes.map(async (c) => {
+        const hit = await validateCode("diagnosis", c);
+        if (!hit) dxBad.add(c);
+      }),
+      ...procCodes.map(async (c) => {
+        const hit = await validateCode("procedure", c);
+        if (!hit) procBad.add(c);
+      }),
+    ]);
+    setInvalidDx(dxBad);
+    setInvalidProc(procBad);
+    if (dxBad.size === 0 && procBad.size === 0) return { ok: true };
+    const parts: string[] = [];
+    if (dxBad.size) parts.push(`Unknown ICD-10: ${[...dxBad].join(", ")}`);
+    if (procBad.size) parts.push(`Unknown CPT/HCPCS: ${[...procBad].join(", ")}`);
+    return { ok: false, reason: parts.join(" · ") };
+  }, [detail]);
+
   async function saveCharge() {
     if (!detail || saving) return;
     setSaving(true);
     setMessage(null);
     try {
+      const codeCheck = await validateAllCodes();
+      if (!codeCheck.ok) {
+        setMessage({ tone: "error", text: codeCheck.reason ?? "Invalid codes" });
+        setSaving(false);
+        return;
+      }
       const res = await fetch(
         `/api/billing/charge-capture/${encodeURIComponent(detail.id)}?organizationId=${encodeURIComponent(organizationId)}`,
         {
@@ -513,16 +550,33 @@ export default function ChargeCaptureClient() {
               <div className={styles.sectionCard}>
                 <div className={styles.sectionTitle}>Diagnosis (ICD-10)</div>
                 <div className={styles.dxGrid}>
-                  {dxSlots.map((code, idx) => (
-                    <div className={styles.dxCell} key={idx}>
-                      <label>{`D${idx + 1}${idx === 0 ? "*" : ""}`}</label>
-                      <input
-                        value={code}
-                        placeholder={idx === 0 ? "F41.1" : ""}
-                        onChange={(e) => updateDiagnosis(idx, e.target.value)}
-                      />
-                    </div>
-                  ))}
+                  {dxSlots.map((code, idx) => {
+                    const upper = code.trim().toUpperCase();
+                    const bad = upper.length > 0 && invalidDx.has(upper);
+                    return (
+                      <div className={styles.dxCell} key={idx}>
+                        <label>{`D${idx + 1}${idx === 0 ? "*" : ""}`}</label>
+                        <CodeCombobox
+                          kind="diagnosis"
+                          value={code}
+                          onChange={(next) => {
+                            updateDiagnosis(idx, next);
+                            if (invalidDx.size) {
+                              setInvalidDx((prev) => {
+                                const n = new Set(prev);
+                                n.delete(upper);
+                                return n;
+                              });
+                            }
+                          }}
+                          placeholder={idx === 0 ? "F41.1" : ""}
+                          ariaLabel={`Diagnosis ${idx + 1}`}
+                          invalid={bad}
+                          invalidTitle="Code not found in ICD-10 reference"
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -562,7 +616,30 @@ export default function ChargeCaptureClient() {
                         const mods = [0, 1, 2, 3].map((i) => line.modifiers[i] ?? "");
                         return (
                           <tr key={idx}>
-                            <td><input className={styles.cellInput} value={line.procedureCode} onChange={(e) => updateLine(idx, { procedureCode: e.target.value.toUpperCase() })} placeholder="90837" /></td>
+                            <td style={{ minWidth: 90 }}>
+                              <CodeCombobox
+                                kind="procedure"
+                                value={line.procedureCode}
+                                onChange={(next) => {
+                                  updateLine(idx, { procedureCode: next });
+                                  if (invalidProc.size) {
+                                    setInvalidProc((prev) => {
+                                      const n = new Set(prev);
+                                      n.delete(line.procedureCode.trim().toUpperCase());
+                                      return n;
+                                    });
+                                  }
+                                }}
+                                className={styles.cellInput}
+                                placeholder="90837"
+                                ariaLabel={`Procedure code line ${idx + 1}`}
+                                invalid={
+                                  line.procedureCode.trim().length > 0 &&
+                                  invalidProc.has(line.procedureCode.trim().toUpperCase())
+                                }
+                                invalidTitle="Code not found in CPT/HCPCS reference"
+                              />
+                            </td>
                             <td><input className={styles.cellInput} type="date" value={line.serviceDateFrom ?? ""} onChange={(e) => updateLine(idx, { serviceDateFrom: e.target.value || null })} /></td>
                             <td><input className={styles.cellInput} type="date" value={line.serviceDateTo ?? ""} onChange={(e) => updateLine(idx, { serviceDateTo: e.target.value || null })} /></td>
                             <td>

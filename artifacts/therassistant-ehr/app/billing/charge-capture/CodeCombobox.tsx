@@ -1,0 +1,252 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+export type CodeOption = { code: string; description: string; code_system?: string };
+
+type Props = {
+  kind: "diagnosis" | "procedure";
+  value: string;
+  onChange: (code: string) => void;
+  placeholder?: string;
+  className?: string;
+  style?: React.CSSProperties;
+  ariaLabel?: string;
+  invalid?: boolean;
+  invalidTitle?: string;
+};
+
+const ENDPOINT: Record<Props["kind"], string> = {
+  diagnosis: "/api/billing/codes/diagnoses",
+  procedure: "/api/billing/codes/procedures",
+};
+
+// Per-kind in-memory cache of validated codes (this session only).
+const validCache: Record<Props["kind"], Map<string, CodeOption>> = {
+  diagnosis: new Map(),
+  procedure: new Map(),
+};
+const invalidCache: Record<Props["kind"], Set<string>> = {
+  diagnosis: new Set(),
+  procedure: new Set(),
+};
+
+export async function validateCode(
+  kind: Props["kind"],
+  code: string,
+): Promise<CodeOption | null> {
+  const upper = code.trim().toUpperCase();
+  if (!upper) return null;
+  if (validCache[kind].has(upper)) return validCache[kind].get(upper)!;
+  if (invalidCache[kind].has(upper)) return null;
+  try {
+    const res = await fetch(`${ENDPOINT[kind]}?q=${encodeURIComponent(upper)}&limit=10`, {
+      cache: "no-store",
+    });
+    const json = await res.json();
+    const items: CodeOption[] = json?.items ?? [];
+    const match = items.find((it) => it.code.toUpperCase() === upper);
+    if (match) {
+      validCache[kind].set(upper, match);
+      return match;
+    }
+    invalidCache[kind].add(upper);
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export default function CodeCombobox({
+  kind,
+  value,
+  onChange,
+  placeholder,
+  className,
+  style,
+  ariaLabel,
+  invalid,
+  invalidTitle,
+}: Props) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState(value);
+  const [options, setOptions] = useState<CodeOption[]>([]);
+  const [highlight, setHighlight] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const reqIdRef = useRef(0);
+
+  // Sync external value updates (e.g. reload from server) into local input.
+  useEffect(() => {
+    setQuery(value);
+  }, [value]);
+
+  // Click-outside closes dropdown.
+  useEffect(() => {
+    if (!open) return;
+    function onDoc(e: MouseEvent) {
+      if (!containerRef.current?.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  // Debounced search.
+  useEffect(() => {
+    if (!open) return;
+    const q = query.trim();
+    const id = ++reqIdRef.current;
+    setLoading(true);
+    const handle = window.setTimeout(async () => {
+      try {
+        const res = await fetch(`${ENDPOINT[kind]}?q=${encodeURIComponent(q)}&limit=20`, {
+          cache: "no-store",
+        });
+        const json = await res.json();
+        if (id !== reqIdRef.current) return;
+        const items: CodeOption[] = json?.items ?? [];
+        setOptions(items);
+        setHighlight(0);
+        // Warm validity cache from search results so onBlur is fast.
+        for (const it of items) validCache[kind].set(it.code.toUpperCase(), it);
+      } catch {
+        if (id === reqIdRef.current) setOptions([]);
+      } finally {
+        if (id === reqIdRef.current) setLoading(false);
+      }
+    }, 180);
+    return () => window.clearTimeout(handle);
+  }, [query, open, kind]);
+
+  const commitSelection = useCallback(
+    (opt: CodeOption) => {
+      const upper = opt.code.toUpperCase();
+      validCache[kind].set(upper, opt);
+      invalidCache[kind].delete(upper);
+      setQuery(upper);
+      onChange(upper);
+      setOpen(false);
+    },
+    [kind, onChange],
+  );
+
+  const handleKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown") {
+      if (!open) setOpen(true);
+      setHighlight((h) => Math.min(options.length - 1, h + 1));
+      e.preventDefault();
+    } else if (e.key === "ArrowUp") {
+      setHighlight((h) => Math.max(0, h - 1));
+      e.preventDefault();
+    } else if (e.key === "Enter") {
+      if (open && options[highlight]) {
+        commitSelection(options[highlight]);
+        e.preventDefault();
+      }
+    } else if (e.key === "Escape") {
+      setOpen(false);
+    } else if (e.key === "Tab") {
+      // Pick highlighted on tab if dropdown showing a unique exact match.
+      const upper = query.trim().toUpperCase();
+      const exact = options.find((o) => o.code.toUpperCase() === upper);
+      if (exact) commitSelection(exact);
+    }
+  };
+
+  const borderColor = invalid ? "#DC2626" : undefined;
+  const computedStyle = useMemo<React.CSSProperties>(
+    () => ({
+      ...(style ?? {}),
+      ...(borderColor ? { borderColor, boxShadow: "0 0 0 1px rgba(220,38,38,0.18)" } : {}),
+    }),
+    [style, borderColor],
+  );
+
+  return (
+    <div ref={containerRef} style={{ position: "relative", width: "100%" }}>
+      <input
+        ref={inputRef}
+        className={className}
+        style={computedStyle}
+        value={query}
+        placeholder={placeholder}
+        aria-label={ariaLabel}
+        aria-invalid={invalid ? true : undefined}
+        title={invalid ? invalidTitle : undefined}
+        autoComplete="off"
+        spellCheck={false}
+        onFocus={() => setOpen(true)}
+        onChange={(e) => {
+          const next = e.target.value.toUpperCase();
+          setQuery(next);
+          onChange(next);
+          if (!open) setOpen(true);
+        }}
+        onKeyDown={handleKey}
+      />
+      {open ? (
+        <div
+          role="listbox"
+          style={{
+            position: "absolute",
+            top: "calc(100% + 2px)",
+            left: 0,
+            right: 0,
+            minWidth: 260,
+            maxHeight: 240,
+            overflowY: "auto",
+            background: "#fff",
+            border: "1px solid #CBD5E1",
+            borderRadius: 6,
+            boxShadow: "0 6px 18px rgba(15,23,42,0.12)",
+            zIndex: 30,
+            fontSize: 12.5,
+          }}
+        >
+          {loading ? (
+            <div style={{ padding: "8px 10px", color: "#64748B" }}>Searching…</div>
+          ) : options.length === 0 ? (
+            <div style={{ padding: "8px 10px", color: "#64748B" }}>
+              {query.trim() ? "No matches" : "Type to search…"}
+            </div>
+          ) : (
+            options.map((opt, i) => (
+              <div
+                key={`${opt.code_system ?? ""}:${opt.code}`}
+                role="option"
+                aria-selected={i === highlight}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  commitSelection(opt);
+                }}
+                onMouseEnter={() => setHighlight(i)}
+                style={{
+                  padding: "6px 10px",
+                  cursor: "pointer",
+                  background: i === highlight ? "#EFF6FF" : "transparent",
+                  borderBottom: "1px solid #F1F5F9",
+                  display: "flex",
+                  gap: 10,
+                  alignItems: "baseline",
+                }}
+              >
+                <span
+                  style={{
+                    fontFamily: "ui-monospace, monospace",
+                    fontWeight: 600,
+                    color: "#0F172A",
+                    minWidth: 64,
+                  }}
+                >
+                  {opt.code}
+                </span>
+                <span style={{ color: "#475569", flex: 1 }}>{opt.description}</span>
+              </div>
+            ))
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}

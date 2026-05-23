@@ -185,6 +185,54 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
     if (Array.isArray(body.diagnoses)) {
       update.diagnosis_codes = body.diagnoses.map((d) => String(d).trim()).filter(Boolean);
     }
+
+    // Reference-table validation: reject unknown ICD-10 / CPT / HCPCS codes
+    // so saved charges never carry codes that the claim scrubber can't bill.
+    const dxToCheck = Array.isArray(update.diagnosis_codes) ? (update.diagnosis_codes as string[]) : [];
+    const procToCheck = Array.isArray(update.service_lines)
+      ? (update.service_lines as Array<{ procedureCode: string }>)
+          .map((l) => String(l.procedureCode ?? "").trim().toUpperCase())
+          .filter(Boolean)
+      : [];
+
+    const codeErrors: Array<{ field: string; message: string }> = [];
+
+    if (dxToCheck.length) {
+      const upperDx = dxToCheck.map((c) => c.toUpperCase());
+      const { data: dxRows, error: dxErr } = await supabase
+        .from("diagnosis_codes")
+        .select("code")
+        .eq("is_active", true)
+        .in("code", upperDx);
+      if (dxErr) return NextResponse.json({ success: false, error: dxErr.message }, { status: 500 });
+      const known = new Set((dxRows ?? []).map((r: { code: string }) => String(r.code).toUpperCase()));
+      const unknown = upperDx.filter((c) => !known.has(c));
+      for (const c of unknown) {
+        codeErrors.push({ field: "diagnosis_codes", message: `Unknown ICD-10 code: ${c}` });
+      }
+    }
+
+    if (procToCheck.length) {
+      const { data: pxRows, error: pxErr } = await supabase
+        .from("procedure_codes")
+        .select("code")
+        .eq("is_active", true)
+        .in("code", procToCheck);
+      if (pxErr) return NextResponse.json({ success: false, error: pxErr.message }, { status: 500 });
+      const known = new Set((pxRows ?? []).map((r: { code: string }) => String(r.code).toUpperCase()));
+      const unknown = [...new Set(procToCheck)].filter((c) => !known.has(c));
+      for (const c of unknown) {
+        codeErrors.push({ field: "service_lines.procedure_code", message: `Unknown CPT/HCPCS code: ${c}` });
+      }
+    }
+
+    if (codeErrors.length) {
+      return NextResponse.json(
+        { success: false, error: codeErrors.map((e) => e.message).join("; "), errors: codeErrors },
+        { status: 422 },
+      );
+    }
+
     if (body.placeOfService !== undefined) {
       update.place_of_service = body.placeOfService ? String(body.placeOfService) : null;
     }

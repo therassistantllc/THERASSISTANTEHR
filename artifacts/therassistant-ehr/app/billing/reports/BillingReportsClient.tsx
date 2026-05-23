@@ -134,7 +134,7 @@ export default function BillingReportsClient() {
           </p>
         </div>
         <div className="hero-actions">
-          <Link className="button button-secondary" href={`/billing${orgQuery}`}>Billing Home</Link>
+          <Link className="button button-secondary" href={`/billing/charge-capture${orgQuery}`}>Charge Capture</Link>
           <Link className="button" href={`/billing/workqueue${orgQuery}`}>Open Workqueue</Link>
         </div>
       </section>
