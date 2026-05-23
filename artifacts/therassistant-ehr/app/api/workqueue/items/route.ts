@@ -65,6 +65,22 @@ export async function GET(request: Request) {
     const workType = url.searchParams.get("workType") || "";
     const priority = url.searchParams.get("priority") || "";
     const audience = (url.searchParams.get("audience") || "").toLowerCase();
+    const assignedToUserIdParam = url.searchParams.get("assignedToUserId") || "";
+    const providerIdParam = url.searchParams.get("providerId") || "";
+    let assignedToUserId = assignedToUserIdParam;
+    if (!assignedToUserId && providerIdParam) {
+      const { data: providerRow } = await supabase
+        .from("providers")
+        .select("user_id")
+        .eq("id", providerIdParam)
+        .eq("organization_id", organizationId)
+        .maybeSingle();
+      const resolvedUserId =
+        providerRow && typeof providerRow.user_id === "string" ? providerRow.user_id : "";
+      // If the provider has no linked user account, return zero results
+      // rather than silently widening to everyone.
+      assignedToUserId = resolvedUserId || "__no_user__";
+    }
     const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 50), 1), 100);
 
     // Clinician-facing work types belong in the Clinician Inbox.
@@ -123,6 +139,7 @@ export async function GET(request: Request) {
       query = query.not("work_type", "in", `(${CLINICIAN_WORK_TYPES.join(",")})`);
     }
     if (priority) query = query.eq("priority", priority);
+    if (assignedToUserId) query = query.eq("assigned_to_user_id", assignedToUserId);
 
     const { data, error } = await query;
     if (error) {

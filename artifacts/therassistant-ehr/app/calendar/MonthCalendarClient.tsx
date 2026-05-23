@@ -77,6 +77,26 @@ type AppointmentDetail = {
 type ClientLite = { id: string; name: string };
 type ProviderLite = { id: string; provider_name: string };
 
+type ProviderOption = {
+  id: string;
+  provider_name: string;
+  credential_display: string | null;
+};
+
+type MePayload = { providerId?: string | null; staffId?: string | null };
+
+const PROVIDER_FILTER_STORAGE_PREFIX = "appointmentList.providerFilter:";
+
+function storageKeyFor(staffId: string | null | undefined) {
+  return staffId ? `${PROVIDER_FILTER_STORAGE_PREFIX}${staffId}` : null;
+}
+
+function readInitialProviderFilterFromUrl(): string {
+  if (typeof window === "undefined") return "";
+  const fromUrl = new URLSearchParams(window.location.search).get("providerId");
+  return fromUrl !== null ? fromUrl.trim() : "";
+}
+
 function startOfMonth(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), 1);
 }
@@ -154,6 +174,13 @@ export default function MonthCalendarClient() {
   const [appointments, setAppointments] = useState<ListAppointment[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [providerOptions, setProviderOptions] = useState<ProviderOption[]>([]);
+  const [me, setMe] = useState<MePayload | null>(null);
+  const [providerFilter, setProviderFilter] = useState<string>(() => readInitialProviderFilterFromUrl());
+  const [filterRestored, setFilterRestored] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    return new URLSearchParams(window.location.search).get("providerId") !== null;
+  });
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<AppointmentDetail | null>(null);
@@ -216,6 +243,86 @@ export default function MonthCalendarClient() {
     loadAppointments();
   }, [loadAppointments]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/providers?organizationId=${encodeURIComponent(ORG_ID)}`, {
+          cache: "no-store",
+        });
+        const json = (await res.json()) as { success?: boolean; providers?: ProviderOption[] };
+        if (!cancelled && res.ok && json.success && Array.isArray(json.providers)) {
+          setProviderOptions(json.providers);
+        }
+      } catch {
+        // Non-fatal: dropdown just stays at "All providers"
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/auth/me", { cache: "no-store" });
+        if (!res.ok) return;
+        const json = (await res.json()) as MePayload;
+        if (cancelled) return;
+        setMe(json);
+        if (!filterRestored && typeof window !== "undefined") {
+          const key = storageKeyFor(json.staffId);
+          if (key) {
+            try {
+              const saved = window.localStorage.getItem(key);
+              if (saved) setProviderFilter(saved);
+            } catch {
+              // ignore privacy mode
+            }
+          }
+          setFilterRestored(true);
+        }
+      } catch {
+        // Non-fatal: "Just me" toggle just won't appear
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [filterRestored]);
+
+  const meStaffId = me?.staffId ?? null;
+  const updateProviderFilter = useCallback((next: string) => {
+    setProviderFilter(next);
+    if (typeof window === "undefined") return;
+    const key = storageKeyFor(meStaffId);
+    if (key) {
+      try {
+        if (next) window.localStorage.setItem(key, next);
+        else window.localStorage.removeItem(key);
+      } catch {
+        // ignore quota / privacy mode
+      }
+    }
+    try {
+      const url = new URL(window.location.href);
+      if (next) url.searchParams.set("providerId", next);
+      else url.searchParams.delete("providerId");
+      window.history.replaceState(null, "", url.toString());
+    } catch {
+      // ignore — URL stays in sync next navigation
+    }
+  }, [meStaffId]);
+
+  const myProviderId = me?.providerId ?? null;
+
+  const visibleAppointments = useMemo(() => {
+    if (!providerFilter) return appointments;
+    return appointments.filter((a) => a.providerId === providerFilter);
+  }, [appointments, providerFilter]);
+
   const loadDetail = useCallback(async (id: string) => {
     setDetailLoading(true);
     setDetailError(null);
@@ -259,7 +366,7 @@ export default function MonthCalendarClient() {
 
   const dayBuckets = useMemo(() => {
     const map = new Map<string, ListAppointment[]>();
-    for (const appt of appointments) {
+    for (const appt of visibleAppointments) {
       const d = new Date(appt.scheduledStartAt);
       const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
       const list = map.get(key) ?? [];
@@ -267,7 +374,7 @@ export default function MonthCalendarClient() {
       map.set(key, list);
     }
     return map;
-  }, [appointments]);
+  }, [visibleAppointments]);
 
   const today = new Date();
 
@@ -413,11 +520,46 @@ export default function MonthCalendarClient() {
             <div className={styles.subtitle}>
               {loading
                 ? "Loading…"
-                : `${appointments.length} appointment${appointments.length === 1 ? "" : "s"} in view`}
+                : `${visibleAppointments.length} appointment${visibleAppointments.length === 1 ? "" : "s"} in view`}
             </div>
           </div>
         </div>
         <div className={styles.headerRight}>
+          <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13 }}>
+            <span>Provider</span>
+            <select
+              value={providerFilter}
+              onChange={(e) => updateProviderFilter(e.target.value)}
+              style={{ padding: "4px 8px" }}
+            >
+              <option value="">All providers</option>
+              {providerOptions.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.provider_name}
+                  {p.credential_display ? `, ${p.credential_display}` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          {myProviderId ? (
+            <button
+              type="button"
+              className={styles.navBtn}
+              onClick={() => updateProviderFilter(myProviderId)}
+              disabled={providerFilter === myProviderId}
+            >
+              Just me
+            </button>
+          ) : null}
+          {providerFilter ? (
+            <button
+              type="button"
+              className={styles.navBtn}
+              onClick={() => updateProviderFilter("")}
+            >
+              Clear
+            </button>
+          ) : null}
           <button className={styles.primaryBtn} onClick={() => setCreateOpen(true)}>
             + New appointment
           </button>

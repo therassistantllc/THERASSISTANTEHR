@@ -54,6 +54,20 @@ function getInitialUrlParam(name: string): string | null {
   return new URLSearchParams(window.location.search).get(name);
 }
 
+const PROVIDER_FILTER_STORAGE_PREFIX = "workqueue.providerFilter:";
+
+function storageKeyFor(staffId: string | null | undefined) {
+  return staffId ? `${PROVIDER_FILTER_STORAGE_PREFIX}${staffId}` : null;
+}
+
+function readInitialProviderFilterFromUrl(): string {
+  if (typeof window === "undefined") return "";
+  const fromUrl = new URLSearchParams(window.location.search).get("providerId");
+  return fromUrl !== null ? fromUrl.trim() : "";
+}
+
+type MePayload = { providerId?: string | null; staffId?: string | null };
+
 function formatDate(value: string) {
   if (!value) return "—";
   const date = new Date(value);
@@ -81,6 +95,12 @@ export default function WorkqueueClient() {
   }, [initialItemId]);
   const [status, setStatus] = useState(initialStatus);
   const [workType, setWorkType] = useState("");
+  const [providerFilter, setProviderFilter] = useState<string>(() => readInitialProviderFilterFromUrl());
+  const [me, setMe] = useState<MePayload | null>(null);
+  const [filterRestored, setFilterRestored] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    return new URLSearchParams(window.location.search).get("providerId") !== null;
+  });
   const [items, setItems] = useState<WorkqueueItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(initialItemId);
   const [selectedBulkIds, setSelectedBulkIds] = useState<Set<string>>(new Set());
@@ -111,6 +131,7 @@ export default function WorkqueueClient() {
     setError(null);
     const params = new URLSearchParams({ organizationId, status });
     if (workType) params.set("workType", workType);
+    if (providerFilter) params.set("providerId", providerFilter);
     const response = await fetch(`/api/workqueue/items?${params.toString()}`);
     const json = (await response.json()) as WorkqueueResponse;
     if (!response.ok || !json.success) {
@@ -235,7 +256,63 @@ export default function WorkqueueClient() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadItems();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [organizationId, status, workType]);
+  }, [organizationId, status, workType, providerFilter]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/auth/me", { cache: "no-store" });
+        if (!res.ok) return;
+        const json = (await res.json()) as MePayload;
+        if (cancelled) return;
+        setMe(json);
+        // Once we know who the user is, restore their per-account saved
+        // filter (unless a URL param already pinned it for this load).
+        if (!filterRestored && typeof window !== "undefined") {
+          const key = storageKeyFor(json.staffId);
+          if (key) {
+            try {
+              const saved = window.localStorage.getItem(key);
+              if (saved) setProviderFilter(saved);
+            } catch {
+              // ignore privacy mode
+            }
+          }
+          setFilterRestored(true);
+        }
+      } catch {
+        // Non-fatal: "Just me" toggle just won't appear
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [filterRestored]);
+
+  const updateProviderFilter = (next: string) => {
+    setProviderFilter(next);
+    if (typeof window === "undefined") return;
+    const key = storageKeyFor(me?.staffId);
+    if (key) {
+      try {
+        if (next) window.localStorage.setItem(key, next);
+        else window.localStorage.removeItem(key);
+      } catch {
+        // ignore quota / privacy mode
+      }
+    }
+    try {
+      const url = new URL(window.location.href);
+      if (next) url.searchParams.set("providerId", next);
+      else url.searchParams.delete("providerId");
+      window.history.replaceState(null, "", url.toString());
+    } catch {
+      // ignore — URL stays in sync next navigation
+    }
+  };
+
+  const myProviderId = me?.providerId ?? null;
 
   async function runAction(action: "comment" | "defer" | "resolve" | "close") {
     if (!selected) return;
@@ -374,6 +451,25 @@ export default function WorkqueueClient() {
           </select>
         </label>
         <button className="button button-secondary" type="button" onClick={() => void loadItems()} disabled={loading}>Refresh</button>
+        {myProviderId ? (
+          <button
+            type="button"
+            className="button button-secondary"
+            onClick={() => updateProviderFilter(myProviderId)}
+            disabled={providerFilter === myProviderId}
+          >
+            Just me
+          </button>
+        ) : null}
+        {providerFilter ? (
+          <button
+            type="button"
+            className="button button-secondary"
+            onClick={() => updateProviderFilter("")}
+          >
+            Show all
+          </button>
+        ) : null}
         {counts ? <span className="muted-text">{counts.total} item(s)</span> : null}
       </section>
 

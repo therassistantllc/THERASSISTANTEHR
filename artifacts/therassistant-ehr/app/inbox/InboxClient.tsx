@@ -52,6 +52,20 @@ function getOrganizationId() {
     || DEFAULT_ORG_ID;
 }
 
+const PROVIDER_FILTER_STORAGE_PREFIX = "inbox.providerFilter:";
+
+function storageKeyFor(staffId: string | null | undefined) {
+  return staffId ? `${PROVIDER_FILTER_STORAGE_PREFIX}${staffId}` : null;
+}
+
+function readInitialProviderFilterFromUrl(): string {
+  if (typeof window === "undefined") return "";
+  const fromUrl = new URLSearchParams(window.location.search).get("providerId");
+  return fromUrl !== null ? fromUrl.trim() : "";
+}
+
+type MePayload = { providerId?: string | null; staffId?: string | null };
+
 function patientName(c: WorkqueueClientInfo) {
   if (!c) return "No patient linked";
   return [c.firstName, c.lastName].filter(Boolean).join(" ") || "Patient";
@@ -77,6 +91,12 @@ export default function InboxClient() {
   const organizationId = useMemo(() => getOrganizationId(), []);
   const [status, setStatus] = useState("active");
   const [workTypeFilter, setWorkTypeFilter] = useState("");
+  const [providerFilter, setProviderFilter] = useState<string>(() => readInitialProviderFilterFromUrl());
+  const [me, setMe] = useState<MePayload | null>(null);
+  const [filterRestored, setFilterRestored] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    return new URLSearchParams(window.location.search).get("providerId") !== null;
+  });
   const [items, setItems] = useState<InboxItem[]>([]);
   const [counts, setCounts] = useState<Response["counts"] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -121,6 +141,7 @@ export default function InboxClient() {
     setError(null);
     const params = new URLSearchParams({ organizationId, status, audience: "clinician" });
     if (workTypeFilter) params.set("workType", workTypeFilter);
+    if (providerFilter) params.set("providerId", providerFilter);
     const response = await fetch(`/api/workqueue/items?${params.toString()}`, { cache: "no-store" });
     const json = (await response.json()) as Response;
     if (!response.ok || !json.success) {
@@ -140,7 +161,61 @@ export default function InboxClient() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadItems();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [organizationId, status, workTypeFilter]);
+  }, [organizationId, status, workTypeFilter, providerFilter]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/auth/me", { cache: "no-store" });
+        if (!res.ok) return;
+        const json = (await res.json()) as MePayload;
+        if (cancelled) return;
+        setMe(json);
+        if (!filterRestored && typeof window !== "undefined") {
+          const key = storageKeyFor(json.staffId);
+          if (key) {
+            try {
+              const saved = window.localStorage.getItem(key);
+              if (saved) setProviderFilter(saved);
+            } catch {
+              // ignore privacy mode
+            }
+          }
+          setFilterRestored(true);
+        }
+      } catch {
+        // Non-fatal: "Just me" toggle just won't appear
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [filterRestored]);
+
+  const updateProviderFilter = (next: string) => {
+    setProviderFilter(next);
+    if (typeof window === "undefined") return;
+    const key = storageKeyFor(me?.staffId);
+    if (key) {
+      try {
+        if (next) window.localStorage.setItem(key, next);
+        else window.localStorage.removeItem(key);
+      } catch {
+        // ignore quota / privacy mode
+      }
+    }
+    try {
+      const url = new URL(window.location.href);
+      if (next) url.searchParams.set("providerId", next);
+      else url.searchParams.delete("providerId");
+      window.history.replaceState(null, "", url.toString());
+    } catch {
+      // ignore — URL stays in sync next navigation
+    }
+  };
+
+  const myProviderId = me?.providerId ?? null;
 
   async function runAction(action: "comment" | "resolve" | "close") {
     if (!selected) return;
@@ -226,6 +301,25 @@ export default function InboxClient() {
           </select>
         </label>
         <button className="button button-secondary" type="button" onClick={() => void loadItems()} disabled={loading}>Refresh</button>
+        {myProviderId ? (
+          <button
+            type="button"
+            className="button button-secondary"
+            onClick={() => updateProviderFilter(myProviderId)}
+            disabled={providerFilter === myProviderId}
+          >
+            Just me
+          </button>
+        ) : null}
+        {providerFilter ? (
+          <button
+            type="button"
+            className="button button-secondary"
+            onClick={() => updateProviderFilter("")}
+          >
+            Show all
+          </button>
+        ) : null}
         {counts ? <span className="muted-text">{counts.total} item(s)</span> : null}
       </section>
 
