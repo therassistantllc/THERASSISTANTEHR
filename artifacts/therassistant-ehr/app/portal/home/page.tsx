@@ -281,11 +281,23 @@ async function payInvoiceAction(formData: FormData) {
   if (!invoiceId) {
     redirect("/portal/payments/return?status=error&reason=missing_invoice");
   }
+  const rawAmount = String(formData.get("amount") ?? "").trim();
+  let amountDollars: number | undefined;
+  if (rawAmount) {
+    const parsed = Number(rawAmount);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      redirect(
+        `/portal/payments/return?status=error&reason=invalid_amount&invoice=${encodeURIComponent(invoiceId)}`,
+      );
+    }
+    amountDollars = parsed;
+  }
   const baseUrl = await resolveAppBaseUrl();
   const result = await startInvoiceCheckout({
     session: session!,
     invoiceId,
     baseUrl,
+    amountDollars,
   });
   if (!result.ok) {
     redirect(
@@ -304,6 +316,40 @@ const payBtn: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 600,
   cursor: "pointer",
+};
+
+const payPickerSummary: React.CSSProperties = {
+  ...payBtn,
+  display: "inline-block",
+  listStyle: "none",
+  userSelect: "none",
+};
+
+const payPicker: React.CSSProperties = {
+  marginTop: 10,
+  padding: 12,
+  background: "#f8fafc",
+  border: "1px solid #e2e8f0",
+  borderRadius: 8,
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+  minWidth: 220,
+};
+
+const payAmountInput: React.CSSProperties = {
+  width: "100%",
+  padding: "6px 10px",
+  border: "1px solid #cbd5e1",
+  borderRadius: 6,
+  fontSize: 14,
+  boxSizing: "border-box",
+};
+
+const payPickerRow: React.CSSProperties = {
+  display: "flex",
+  gap: 8,
+  alignItems: "center",
 };
 
 export default async function PatientPortalHomePage() {
@@ -399,13 +445,38 @@ export default async function PatientPortalHomePage() {
                 {formatMoney(inv.amount)} billed · {formatMoney(inv.paid)} paid
               </div>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
               <div style={{ fontWeight: 600 }}>{formatMoney(inv.balance)}</div>
               {inv.balance > 0 ? (
-                <form action={payInvoiceAction}>
-                  <input type="hidden" name="invoiceId" value={inv.id} />
-                  <button type="submit" style={payBtn}>Pay</button>
-                </form>
+                <details>
+                  <summary style={payPickerSummary}>Pay</summary>
+                  <form action={payInvoiceAction} style={payPicker}>
+                    <input type="hidden" name="invoiceId" value={inv.id} />
+                    <label
+                      htmlFor={`pay-amount-${inv.id}`}
+                      style={{ fontSize: 12, fontWeight: 600, color: "#10243f" }}
+                    >
+                      Amount to pay (max {formatMoney(inv.balance)})
+                    </label>
+                    <div style={payPickerRow}>
+                      <span style={{ fontSize: 14, color: "#6b7280" }}>$</span>
+                      <input
+                        id={`pay-amount-${inv.id}`}
+                        type="number"
+                        name="amount"
+                        min="0.50"
+                        max={inv.balance.toFixed(2)}
+                        step="0.01"
+                        defaultValue={inv.balance.toFixed(2)}
+                        required
+                        style={payAmountInput}
+                      />
+                    </div>
+                    <button type="submit" style={payBtn}>
+                      Continue to checkout
+                    </button>
+                  </form>
+                </details>
               ) : null}
             </div>
           </div>

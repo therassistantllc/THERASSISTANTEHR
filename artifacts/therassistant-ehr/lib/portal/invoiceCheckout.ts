@@ -34,6 +34,8 @@ export type StartInvoiceCheckoutError =
   | "invoice_not_payable"
   | "no_balance"
   | "below_minimum"
+  | "invalid_amount"
+  | "amount_exceeds_balance"
   | "no_connected_account"
   | "stripe_error";
 
@@ -47,6 +49,11 @@ export async function startInvoiceCheckout(input: {
   session: PortalSession;
   invoiceId: string;
   baseUrl: string;
+  /**
+   * Optional partial-payment amount in dollars. When omitted the full
+   * remaining balance is charged. Must be > 0 and <= remaining balance.
+   */
+  amountDollars?: number;
 }): Promise<StartInvoiceCheckoutResult> {
   if (!getStripeSecretKey()) {
     return { ok: false, code: "stripe_not_configured", message: "Online payment is not set up yet." };
@@ -89,9 +96,29 @@ export async function startInvoiceCheckout(input: {
   if (!Number.isFinite(balance) || balance <= 0) {
     return { ok: false, code: "no_balance", message: "Invoice has no remaining balance." };
   }
-  const amountCents = dollarsToCents(balance);
+  const balanceCents = dollarsToCents(balance);
+
+  let amountCents: number;
+  let isPartial = false;
+  if (input.amountDollars === undefined || input.amountDollars === null) {
+    amountCents = balanceCents;
+  } else {
+    const requested = Number(input.amountDollars);
+    if (!Number.isFinite(requested) || requested <= 0) {
+      return { ok: false, code: "invalid_amount", message: "Please enter a payment amount greater than $0." };
+    }
+    amountCents = dollarsToCents(requested);
+    if (amountCents > balanceCents) {
+      return {
+        ok: false,
+        code: "amount_exceeds_balance",
+        message: "Payment amount cannot exceed the remaining balance.",
+      };
+    }
+    isPartial = amountCents < balanceCents;
+  }
   if (amountCents < STRIPE_MIN_CENTS) {
-    return { ok: false, code: "below_minimum", message: "Balance is below the $0.50 Stripe minimum." };
+    return { ok: false, code: "below_minimum", message: "Payment amount is below the $0.50 Stripe minimum." };
   }
 
   const { data: profileRow, error: profErr } = await supabase
@@ -141,14 +168,17 @@ export async function startInvoiceCheckout(input: {
     organization_id: organizationId,
     client_id: clientId,
     patient_invoice_id: invoice.id,
+    requested_amount_cents: String(amountCents),
+    invoice_balance_cents: String(balanceCents),
+    is_partial_payment: isPartial ? "true" : "false",
   };
 
   try {
-    // Tie idempotency to the invoice + balance so retries within the
-    // same balance state collapse to one Stripe session; once the
-    // balance changes (partial payment) the key changes and the patient
-    // gets a fresh session.
-    const idempotencyKey = `portal-invoice-${invoice.id}-${amountCents}`;
+    // Tie idempotency to the invoice + balance + chosen amount so
+    // retries within the same state collapse to one Stripe session;
+    // once the balance changes (partial payment) or the patient picks
+    // a different amount the key changes and they get a fresh session.
+    const idempotencyKey = `portal-invoice-${invoice.id}-${balanceCents}-${amountCents}`;
     const checkout = await createConnectCheckoutSession({
       amountCents,
       currency: "usd",
