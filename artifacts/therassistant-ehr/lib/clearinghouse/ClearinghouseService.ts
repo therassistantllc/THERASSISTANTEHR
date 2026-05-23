@@ -1,5 +1,6 @@
 // File: lib/clearinghouse/ClearinghouseService.ts
 import { MockClearinghouseAdapter } from "@/lib/clearinghouse/MockClearinghouseAdapter";
+import { resolveAttributionRouting } from "@/lib/clearinghouse/attributionRouting";
 import { attributeResponseToPatient } from "@/lib/edi/availity270/attribution";
 import { createServerSupabaseAdminClient as createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import type {
@@ -221,10 +222,62 @@ export class ClearinghouseService {
         .eq("id", outbound.id);
     }
 
+    // ---------------------------------------------------------------
+    // Phase 6 — compute attribution decision + routing BEFORE building
+    // the eligibility insert so client_id can be steered to the
+    // matching dependent patient chart when one uniquely exists.
+    // ---------------------------------------------------------------
+    const parsedAttributionRaw = result.normalized.attribution ?? null;
+    const attributionDecision = parsedAttributionRaw && parsedAttributionRaw.subscriber
+      ? attributeResponseToPatient(
+          {
+            target: parsedAttributionRaw.target,
+            subscriber: parsedAttributionRaw.subscriber,
+            dependent: parsedAttributionRaw.dependent ?? null,
+          },
+          {
+            firstName: patient.first_name ?? null,
+            lastName: patient.last_name ?? null,
+            dob: patient.date_of_birth ?? null,
+            memberId: policy.subscriber_id ?? policy.policy_number ?? null,
+          },
+        )
+      : null;
+
+    const routing = await resolveAttributionRouting({
+      requestedClientId: patient.id,
+      organizationId,
+      decision: attributionDecision,
+      parsedDependent: parsedAttributionRaw?.dependent ?? null,
+      lookup: async ({ organizationId: orgId, firstName, lastName, dob }) => {
+        if (!lastName || !dob) return [];
+        const q = supabase
+          .from("clients")
+          .select("id")
+          .eq("organization_id", orgId)
+          .ilike("last_name", lastName)
+          .eq("date_of_birth", dob);
+        const finalQuery = firstName ? q.ilike("first_name", firstName) : q;
+        const resp = await finalQuery.limit(5);
+        if (resp.error || !resp.data) return [];
+        return (resp.data as Array<{ id: string }>).map((r) => r.id);
+      },
+    });
+
+    if (attributionDecision && !attributionDecision.matchesRequestedPatient) {
+      console.warn(
+        `[eligibility] Attribution mismatch for patient ${patient.id}: ${attributionDecision.mismatchReasons.join(",")} ` +
+          `(271 attributed to ${attributionDecision.target} "${attributionDecision.attributedName ?? "—"}"; ` +
+          `routed to ${routing.routedClientId}${routing.unresolved ? ` UNRESOLVED:${routing.unresolvedReason}` : ""})`,
+      );
+    }
+
+    const persistedClientId = routing.routedClientId;
+
     const eligibilityPayload = {
       id: uuid(),
       organization_id: organizationId,
-      client_id: patient.id,
+      client_id: persistedClientId,
       appointment_id: input.appointmentId ?? null,
       insurance_policy_id: policy.id,
       clearinghouse_connection_id: connection.id,
@@ -255,44 +308,25 @@ export class ClearinghouseService {
       remaining_coverage_period: result.normalized.remainingCoveragePeriod ?? null,
       coverage_level: result.normalized.coverageLevel ?? null,
       raw_benefits: result.normalized.rawBenefits ?? {},
-      // Phase 6 — AAA reject reasons + Single Patient Attribution
-      // decision (vEB.1.0 §4.2–§4.3). We compare the parsed 271
-      // attribution (subscriber vs dependent and identifying details)
-      // against the patient record the user requested the check for.
-      // We DO NOT silently re-route persistence to a different patient
-      // record — there may be no chart for the dependent. Instead we
-      // attribute the response to the requested patient and flag
-      // mismatches so the UI can warn the user.
-      response_summary: (() => {
-        const parsedAttribution = result.normalized.attribution ?? null;
-        const decision = parsedAttribution && parsedAttribution.subscriber
-          ? attributeResponseToPatient(
-              {
-                target: parsedAttribution.target,
-                subscriber: parsedAttribution.subscriber,
-                dependent: parsedAttribution.dependent ?? null,
-              },
-              {
-                firstName: patient.first_name ?? null,
-                lastName: patient.last_name ?? null,
-                dob: patient.date_of_birth ?? null,
-                memberId: policy.subscriber_id ?? policy.policy_number ?? null,
-              },
-            )
-          : null;
-        if (decision && !decision.matchesRequestedPatient) {
-          // eslint-disable-next-line no-console
-          console.warn(
-            `[eligibility] Attribution mismatch for patient ${patient.id}: ${decision.mismatchReasons.join(",")} (271 attributed to ${decision.target} "${decision.attributedName ?? "—"}")`,
-          );
-        }
-        return {
-          aaaErrors: result.normalized.aaaErrors ?? [],
-          attribution: parsedAttribution,
-          attributionDecision: decision,
-          message: result.normalized.message ?? null,
-        };
-      })(),
+      // Phase 6 — AAA + Single Patient Attribution decision + routing
+      // resolution (vEB.1.0 §4.2–§4.3). attributionDecision compares
+      // parsed 271 identity against the requested patient; routing
+      // captures which client_id the row was attached to and whether
+      // dependent rerouting was unresolved.
+      response_summary: {
+        aaaErrors: result.normalized.aaaErrors ?? [],
+        attribution: parsedAttributionRaw,
+        attributionDecision,
+        attributionRouting: {
+          requestedClientId: patient.id,
+          routedClientId: routing.routedClientId,
+          routedToRequestedPatient: routing.routedToRequestedPatient,
+          unresolved: routing.unresolved,
+          unresolvedReason: routing.unresolvedReason,
+          candidateIds: routing.candidateIds,
+        },
+        message: result.normalized.message ?? null,
+      },
       checked_at: new Date().toISOString(),
     };
 
