@@ -20,6 +20,9 @@ import {
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { assertFkBelongsToOrg, FkOwnershipError } from "@/lib/payments/fkOwnershipGuard";
 
+// PP-4 (Task #113): "refund" deliberately excluded — callers must use
+// /api/billing/payments/posted/[id]/refund so the prior posted payment is
+// reversed atomically (ledger compensation + Stripe issuance + workqueue).
 const ALLOWED_METHODS: PatientPaymentMethod[] = [
   "cash",
   "check",
@@ -27,7 +30,6 @@ const ALLOWED_METHODS: PatientPaymentMethod[] = [
   "debit_card",
   "stripe",
   "external_card",
-  "refund",
   "unapplied_credit",
   "transferred_balance",
   "other",
@@ -53,6 +55,16 @@ export async function POST(request: Request) {
     await assertFkBelongsToOrg(supabase as unknown as Parameters<typeof assertFkBelongsToOrg>[0], "clients", organizationId, clientId);
 
     const method = String(body.method ?? "cash") as PatientPaymentMethod;
+    if (String(body.method ?? "") === "refund") {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            "Refunds must be issued against the prior posted payment via /api/billing/payments/posted/[id]/refund (PP-4). Direct method='refund' intake is no longer supported.",
+        },
+        { status: 400 },
+      );
+    }
     if (!ALLOWED_METHODS.includes(method)) {
       return NextResponse.json({ ok: false, error: `Unsupported payment method: ${method}` }, { status: 400 });
     }

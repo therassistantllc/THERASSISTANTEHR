@@ -136,12 +136,88 @@ export async function commitPosting(
     });
     return r;
   }
+  if (input.source.type === "refund") {
+    // PP-4: dispatch to the proper insurance/patient refund recorder so
+    // we get atomic ledger compensation, optional Stripe issuance, and
+    // workqueue follow-up — never a flat negative entry.
+    if (input.dryRun) {
+      // Refund/reversal helpers don't support dry-run today; honor the
+      // engine contract by short-circuiting before any writes.
+      const out = emptyResult();
+      out.ok = true;
+      return out;
+    }
+    const { recordInsuranceRefund, recordPatientRefund } = await import("./reversal");
+    const refundType =
+      input.source.refundType ??
+      (input.source.target.kind === "client_payment" ? "patient" : "insurance");
+    const fn = refundType === "patient" ? recordPatientRefund : recordInsuranceRefund;
+    const r = await fn({
+      organizationId: input.organizationId,
+      target: input.source.target,
+      amount: input.source.amount,
+      reason: input.source.reason,
+      stripeRefundId: input.source.stripeRefundId ?? null,
+      alreadyIssued: input.source.alreadyIssued === true,
+      actor,
+    });
+    return refundResultToCommitResult(r);
+  }
+  if (input.source.type === "reversal") {
+    if (input.dryRun) {
+      const out = emptyResult();
+      out.ok = true;
+      return out;
+    }
+    const { reversePostedPayment } = await import("./reversal");
+    const r = await reversePostedPayment({
+      organizationId: input.organizationId,
+      target: input.source.target,
+      reason: input.source.reason,
+      actor,
+    });
+    return reversalResultToCommitResult(r);
+  }
   const result = emptyResult();
   result.errors.push({
     field: "source.type",
-    message: `Posting source "${input.source.type}" is not implemented yet. See Task #110.`,
+    message: `Posting source "${input.source.type}" is not implemented.`,
   });
   return result;
+}
+
+function refundResultToCommitResult(
+  r: Awaited<ReturnType<typeof import("./reversal").recordPatientRefund>>,
+): CommitPostingResult {
+  // CommitPostingResult.posted means "any rows written" — a refund row
+  // inserted in 'pending' state still counts as a write (Stripe issuance
+  // can flip it to 'issued' later). Preserve refundId/status/workqueue
+  // via the optional `refund` field so dashboard callers don't need to
+  // re-query.
+  const out = emptyResult();
+  out.ok = r.ok;
+  out.posted = r.ok && !!r.refundId;
+  out.auditLogIds = r.auditLogIds;
+  out.errors = r.errors;
+  out.refund = {
+    refundId: r.refundId,
+    refundStatus: r.refundStatus,
+    workqueueItemId: r.workqueueItemId,
+  };
+  return out;
+}
+
+function reversalResultToCommitResult(
+  r: Awaited<ReturnType<typeof import("./reversal").reversePostedPayment>>,
+): CommitPostingResult {
+  const out = emptyResult();
+  out.ok = r.ok;
+  out.posted = r.reversed;
+  out.alreadyReversed = r.alreadyReversed;
+  out.workqueueItemsClosed = r.workqueueItemsClosed;
+  out.auditLogIds = r.auditLogIds;
+  out.errors = r.errors;
+  return out;
 }
 
 async function commitEra835Posting(

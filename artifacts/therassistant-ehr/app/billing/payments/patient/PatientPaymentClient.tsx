@@ -37,6 +37,11 @@ interface Credit {
   created_at: string;
 }
 
+// PP-4 (Task #113): "refund" intentionally removed — refunds must be issued
+// against the prior posted payment via /billing/payments → row action →
+// /api/billing/payments/posted/[id]/refund so applications + Stripe charges
+// reverse atomically. A flat negative entry here would silently diverge the
+// ledger from the original posted payment.
 const METHODS = [
   "cash",
   "check",
@@ -44,7 +49,6 @@ const METHODS = [
   "debit_card",
   "stripe",
   "external_card",
-  "refund",
   "unapplied_credit",
   "transferred_balance",
   "other",

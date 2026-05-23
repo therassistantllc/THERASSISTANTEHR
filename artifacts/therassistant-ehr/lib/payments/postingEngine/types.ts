@@ -105,18 +105,29 @@ export type PostingSource =
       description: string | null;
     }
   | {
+      /**
+       * Refund (PP-4): refers to an existing posted payment and issues
+       * insurance OR patient refund against it. Dispatched to
+       * recordInsuranceRefund / recordPatientRefund. When refundType is
+       * omitted the engine picks the natural fit for the source kind
+       * (client_payment → patient, era/manual → insurance).
+       */
       type: "refund";
-      /** TODO: shape filled in by Task #110. */
-      clientId: string;
+      target: { kind: "era_835" | "client_payment" | "insurance_manual"; id: string };
       amount: number;
-      reason: string | null;
+      reason: string;
+      refundType?: "insurance" | "patient";
+      stripeRefundId?: string | null;
+      alreadyIssued?: boolean;
     }
   | {
+      /**
+       * Reversal (PP-4): undoes a previously posted payment by writing
+       * paired negative ledger entries and restoring invoice/claim
+       * balances. Dispatched to reversePostedPayment.
+       */
       type: "reversal";
-      /** TODO: shape filled in by Task #110. */
-      eraClaimPaymentId?: string;
-      manualPostingId?: string;
-      patientPaymentId?: string;
+      target: { kind: "era_835" | "client_payment" | "insurance_manual"; id: string };
       reason: string;
     };
 
@@ -165,6 +176,23 @@ export interface CommitPostingResult {
   /** audit_logs.id rows written by the engine, in commit order. */
   auditLogIds: string[];
   errors: Array<{ field: string; message: string }>;
+  /**
+   * PP-4: present only when source.type === 'refund'. Surfaces the
+   * payment_refunds row id, its terminal status (issued vs pending), and
+   * any workqueue follow-up so callers don't have to call recordRefund
+   * directly to see what was created.
+   */
+  refund?: {
+    refundId: string | null;
+    refundStatus: "pending" | "issued" | "failed" | "cancelled" | null;
+    workqueueItemId: string | null;
+  };
+  /**
+   * PP-4: present only when source.type === 'reversal'. True when the
+   * reversal engine treated this as a no-op replay of an already-reversed
+   * payment (distinct from `alreadyPosted` which targets posting replays).
+   */
+  alreadyReversed?: boolean;
 }
 
 /**

@@ -156,11 +156,17 @@ export function validatePatientPayment(input: CommitPatientPaymentInput): Valida
     }
   }
   if (input.method === "refund") {
-    warning.push({
-      severity: "warning",
-      code: "refund_via_intake",
+    // PP-4 (Task #113): refunds must reverse a prior posted payment via
+    // recordPatientRefund / reversePostedPayment so applications + balances
+    // unwind atomically and Stripe charges are reconciled. Recording a
+    // flat negative entry through the intake path would leave the original
+    // payment + invoice applications intact (silent ledger divergence).
+    blocking.push({
+      severity: "blocking",
+      code: "refund_via_intake_blocked",
       field: "method",
-      message: "Refunds requiring reversal of a prior posted payment are a PP-4 flow; this records the negative entry only.",
+      message:
+        "Refunds must be issued against the prior posted payment via /api/billing/payments/posted/[id]/refund (PP-4). Direct method='refund' intake is no longer supported.",
     });
   }
   return { blocking, warning };

@@ -40,7 +40,7 @@ test("warns when stripe / external_card method has no external_payment_id", () =
   assert.ok(r.warning.some((w) => w.code === "external_payment_id_missing"));
 });
 
-test("warns for refund method (PP-4 hint)", () => {
+test("blocks refund method via intake (PP-4 routes refunds through posted-payment endpoint)", () => {
   const r = validatePatientPayment({
     organizationId: "org-1",
     clientId: "client-1",
@@ -49,8 +49,7 @@ test("warns for refund method (PP-4 hint)", () => {
     applyTo: { kind: "account_balance" },
     actor,
   });
-  assert.equal(r.blocking.length, 0);
-  assert.ok(r.warning.some((w) => w.code === "refund_via_intake"));
+  assert.ok(r.blocking.some((b) => b.code === "refund_via_intake_blocked"));
 });
 
 test("clean cash payment to account_balance passes", () => {
