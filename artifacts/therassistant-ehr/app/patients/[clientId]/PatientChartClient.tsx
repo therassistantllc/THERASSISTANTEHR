@@ -258,6 +258,43 @@ type MailroomSummary = {
   createdAt?: string;
 };
 
+type CreditSourceSummary = {
+  id: string;
+  paymentMethod: string | null;
+  referenceNumber: string | null;
+  paidAt: string | null;
+  amount: string | number | null;
+  postingStatus: string | null;
+  reversedAt: string | null;
+  refundable: boolean;
+};
+
+type CreditRow = {
+  id: string;
+  client_id: string;
+  source_payment_id: string | null;
+  initial_amount: string | number | null;
+  applied_amount: string | number | null;
+  balance_amount: string | number | null;
+  note: string | null;
+  created_at: string | null;
+  source: CreditSourceSummary | null;
+};
+
+type OpenInvoiceOption = {
+  id: string;
+  invoiceNumber: string | null;
+  status: string | null;
+  balanceAmount: number;
+};
+
+type OpenClaimOption = {
+  id: string;
+  claimNumber: string | null;
+  status: string | null;
+  patientResponsibilityAmount: number;
+};
+
 type DetailState = {
   appointments: AppointmentSummary[];
   conditions: ConditionSummary[];
@@ -368,6 +405,26 @@ export default function PatientChartClient({
   const [groupEditDraft, setGroupEditDraft] = useState<string>("");
   const [groupSavingPolicyId, setGroupSavingPolicyId] = useState<string | null>(null);
   const [groupEditError, setGroupEditError] = useState<string | null>(null);
+  const [credits, setCredits] = useState<CreditRow[]>([]);
+  const [creditsLoading, setCreditsLoading] = useState(false);
+  const [creditsError, setCreditsError] = useState<string | null>(null);
+  const [creditsMessage, setCreditsMessage] = useState<string | null>(null);
+  const [openInvoices, setOpenInvoices] = useState<OpenInvoiceOption[]>([]);
+  const [openClaims, setOpenClaims] = useState<OpenClaimOption[]>([]);
+  const [creditDraft, setCreditDraft] = useState<
+    Record<
+      string,
+      {
+        mode: "apply" | "refund";
+        target: "invoice" | "claim";
+        invoiceId: string;
+        claimId: string;
+        amount: string;
+        reason: string;
+      }
+    >
+  >({});
+  const [creditBusy, setCreditBusy] = useState<string | null>(null);
   const organizationId = useMemo(
     () => resolveOrganizationId(initialOrganizationId),
     [initialOrganizationId],
@@ -432,6 +489,187 @@ export default function PatientChartClient({
 
   function setDemoField(field: string, value: string) {
     setDemoDraft((prev) => ({ ...prev, [field]: value }));
+  }
+
+  async function reloadCredits() {
+    if (!organizationId) return;
+    setCreditsLoading(true);
+    setCreditsError(null);
+    try {
+      const [creditsRes, balanceRes, summaryRes, claimsRes] = await Promise.all([
+        fetch(
+          `/api/billing/clients/${encodeURIComponent(clientId)}/credits?organizationId=${encodeURIComponent(organizationId)}`,
+          { cache: "no-store" },
+        ),
+        fetch(
+          `/api/patients/${encodeURIComponent(clientId)}/balance?organizationId=${encodeURIComponent(organizationId)}`,
+          { cache: "no-store" },
+        ),
+        fetch(
+          `/api/patients/${encodeURIComponent(clientId)}/summary?organizationId=${encodeURIComponent(organizationId)}`,
+          { cache: "no-store" },
+        ),
+        fetch(
+          `/api/patients/${encodeURIComponent(clientId)}/claims?organizationId=${encodeURIComponent(organizationId)}`,
+          { cache: "no-store" },
+        ),
+      ]);
+      const creditsJson = await creditsRes.json().catch(() => ({}));
+      const balanceJson = await balanceRes.json().catch(() => ({}));
+      const summaryJson = await summaryRes.json().catch(() => ({}));
+      const claimsJson = await claimsRes.json().catch(() => ({}));
+      if (!creditsRes.ok || creditsJson.ok === false) {
+        throw new Error(creditsJson.error ?? "Failed to load credits");
+      }
+      setCredits((creditsJson.credits ?? []) as CreditRow[]);
+      if (balanceRes.ok && balanceJson.success) {
+        const invoices: OpenInvoiceOption[] = (balanceJson.invoices ?? [])
+          .filter((inv: { status?: string | null; balanceAmount?: number }) =>
+            ["open", "sent", "collections"].includes(String(inv.status ?? "")) &&
+            Number(inv.balanceAmount ?? 0) > 0,
+          )
+          .map((inv: {
+            id: string;
+            invoiceNumber?: string | null;
+            status?: string | null;
+            balanceAmount?: number;
+          }) => ({
+            id: String(inv.id),
+            invoiceNumber: inv.invoiceNumber ?? null,
+            status: inv.status ?? null,
+            balanceAmount: Number(inv.balanceAmount ?? 0),
+          }));
+        setOpenInvoices(invoices);
+      }
+      if (summaryRes.ok && summaryJson.success) {
+        setSummary(summaryJson as PatientSummary);
+      }
+      if (claimsRes.ok && claimsJson.success) {
+        const claims: OpenClaimOption[] = (claimsJson.claims ?? [])
+          .filter(
+            (cl: { patientResponsibilityAmount?: number | null }) =>
+              Number(cl.patientResponsibilityAmount ?? 0) > 0,
+          )
+          .map((cl: {
+            id: string;
+            claimNumber?: string | null;
+            status?: string | null;
+            patientResponsibilityAmount?: number | null;
+          }) => ({
+            id: String(cl.id),
+            claimNumber: cl.claimNumber ?? null,
+            status: cl.status ?? null,
+            patientResponsibilityAmount: Number(cl.patientResponsibilityAmount ?? 0),
+          }));
+        setOpenClaims(claims);
+      }
+    } catch (err) {
+      setCreditsError(err instanceof Error ? err.message : "Failed to load credits");
+    } finally {
+      setCreditsLoading(false);
+    }
+  }
+
+  function getCreditDraft(creditId: string, defaultAmount: number) {
+    return (
+      creditDraft[creditId] ?? {
+        mode: "apply" as const,
+        target: "invoice" as const,
+        invoiceId: "",
+        claimId: "",
+        amount: defaultAmount > 0 ? defaultAmount.toFixed(2) : "",
+        reason: "",
+      }
+    );
+  }
+
+  function updateCreditDraft(
+    creditId: string,
+    patch: Partial<{
+      mode: "apply" | "refund";
+      target: "invoice" | "claim";
+      invoiceId: string;
+      claimId: string;
+      amount: string;
+      reason: string;
+    }>,
+    defaultAmount: number,
+  ) {
+    setCreditDraft((prev) => ({
+      ...prev,
+      [creditId]: { ...getCreditDraft(creditId, defaultAmount), ...patch },
+    }));
+  }
+
+  async function submitCreditAction(credit: CreditRow) {
+    const balance = Number(credit.balance_amount ?? 0);
+    const draft = getCreditDraft(credit.id, balance);
+    const amount = Number(draft.amount);
+    if (!(amount > 0)) {
+      setCreditsMessage("Enter an amount greater than zero.");
+      return;
+    }
+    setCreditBusy(credit.id);
+    setCreditsMessage(null);
+    setCreditsError(null);
+    try {
+      const body: Record<string, unknown> = {
+        organizationId,
+        clientCreditId: credit.id,
+        amount,
+      };
+      if (draft.mode === "refund") {
+        body.action = "refund";
+        if (!draft.reason.trim()) {
+          throw new Error("Enter a refund reason.");
+        }
+        body.reason = draft.reason.trim();
+      } else if (draft.target === "claim") {
+        if (!draft.claimId) {
+          throw new Error("Choose a claim to apply the credit to.");
+        }
+        body.action = "apply";
+        body.professionalClaimId = draft.claimId;
+      } else {
+        if (!draft.invoiceId) {
+          throw new Error("Choose an invoice to apply the credit to.");
+        }
+        body.action = "apply";
+        body.patientInvoiceId = draft.invoiceId;
+      }
+      const response = await fetch(
+        `/api/billing/clients/${encodeURIComponent(clientId)}/credits`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok || json.ok === false) {
+        const errMsg =
+          json.error ??
+          (Array.isArray(json.errors) && json.errors.length
+            ? json.errors.map((e: { message?: string }) => e.message ?? "Error").join("; ")
+            : `Request failed (${response.status})`);
+        throw new Error(errMsg);
+      }
+      setCreditsMessage(
+        draft.mode === "refund"
+          ? `Refund of $${amount.toFixed(2)} recorded${json.refundStatus ? ` (${json.refundStatus})` : ""}.`
+          : `Applied $${amount.toFixed(2)} to invoice.`,
+      );
+      setCreditDraft((prev) => {
+        const next = { ...prev };
+        delete next[credit.id];
+        return next;
+      });
+      await reloadCredits();
+    } catch (err) {
+      setCreditsError(err instanceof Error ? err.message : "Credit action failed");
+    } finally {
+      setCreditBusy(null);
+    }
   }
 
   async function reloadDemoAudit() {
@@ -733,6 +971,7 @@ export default function PatientChartClient({
     void loadPatient();
     void reloadIntake();
     void reloadDemoAudit();
+    void reloadCredits();
     return () => {
       cancelled = true;
     };
@@ -1409,6 +1648,213 @@ export default function PatientChartClient({
                         </tr>
                       );
                     });
+                  })}
+                </tbody>
+              </table>
+            )}
+          </section>
+
+          <section className="summary-block" aria-label="Credit on account">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <h3 style={{ margin: 0 }}>Credit on account</h3>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <strong>{formatMoneyOrDash(creditOnAccount)}</strong>
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  onClick={() => void reloadCredits()}
+                  disabled={creditsLoading}
+                >
+                  {creditsLoading ? "Refreshing…" : "Refresh"}
+                </button>
+              </div>
+            </div>
+            {creditsError ? (
+              <div className="alert-panel" role="alert" style={{ marginBottom: 8 }}>{creditsError}</div>
+            ) : null}
+            {creditsMessage ? (
+              <div className="alert-panel" style={{ marginBottom: 8 }}>{creditsMessage}</div>
+            ) : null}
+            {credits.length === 0 ? (
+              <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+                {creditsLoading ? "Loading credits…" : "No unapplied credits on file."}
+              </p>
+            ) : (
+              <table className="summary-cases-table">
+                <thead>
+                  <tr>
+                    <th>Source</th>
+                    <th>Initial</th>
+                    <th>Applied</th>
+                    <th>Balance</th>
+                    <th>Created</th>
+                    <th>Note</th>
+                    <th aria-label="Actions" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {credits.map((credit) => {
+                    const balance = Number(credit.balance_amount ?? 0);
+                    const draft = getCreditDraft(credit.id, balance);
+                    const busy = creditBusy === credit.id;
+                    const sourceLabel = credit.source
+                      ? [
+                          credit.source.paymentMethod ?? "payment",
+                          credit.source.referenceNumber ? `#${credit.source.referenceNumber}` : null,
+                          credit.source.paidAt ? formatDate(credit.source.paidAt) : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")
+                      : credit.source_payment_id
+                        ? `Payment ${credit.source_payment_id.slice(0, 8)}`
+                        : "—";
+                    const refundDisabled =
+                      draft.mode === "refund" && !(credit.source?.refundable ?? false);
+                    return (
+                      <tr key={credit.id}>
+                        <td>
+                          <div>{sourceLabel}</div>
+                          {credit.source && !credit.source.refundable ? (
+                            <small className="muted">
+                              {credit.source.reversedAt
+                                ? "Source payment reversed — refund disabled"
+                                : "Source payment not posted — refund disabled"}
+                            </small>
+                          ) : null}
+                        </td>
+                        <td>{formatMoneyOrDash(credit.initial_amount)}</td>
+                        <td>{formatMoneyOrDash(credit.applied_amount)}</td>
+                        <td>
+                          <strong>{formatMoneyOrDash(balance)}</strong>
+                        </td>
+                        <td>{credit.created_at ? formatDate(credit.created_at) : dash}</td>
+                        <td>{credit.note ?? dash}</td>
+                        <td style={{ minWidth: 280 }}>
+                          {balance <= 0 ? (
+                            <span className="muted">Fully used</span>
+                          ) : (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                                <select
+                                  value={draft.mode}
+                                  onChange={(e) =>
+                                    updateCreditDraft(
+                                      credit.id,
+                                      { mode: e.target.value as "apply" | "refund" },
+                                      balance,
+                                    )
+                                  }
+                                  disabled={busy}
+                                >
+                                  <option value="apply">Apply to invoice</option>
+                                  <option value="refund" disabled={!(credit.source?.refundable ?? false)}>
+                                    Refund to source
+                                  </option>
+                                </select>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  max={balance}
+                                  value={draft.amount}
+                                  onChange={(e) =>
+                                    updateCreditDraft(credit.id, { amount: e.target.value }, balance)
+                                  }
+                                  disabled={busy}
+                                  style={{ width: 96 }}
+                                  aria-label="Amount"
+                                />
+                              </div>
+                              {draft.mode === "apply" ? (
+                                <>
+                                  <div style={{ display: "flex", gap: 6 }}>
+                                    <select
+                                      value={draft.target}
+                                      onChange={(e) =>
+                                        updateCreditDraft(
+                                          credit.id,
+                                          { target: e.target.value as "invoice" | "claim" },
+                                          balance,
+                                        )
+                                      }
+                                      disabled={busy}
+                                      aria-label="Apply to"
+                                    >
+                                      <option value="invoice">Invoice</option>
+                                      <option value="claim">Claim (patient resp.)</option>
+                                    </select>
+                                  </div>
+                                  {draft.target === "claim" ? (
+                                    <select
+                                      value={draft.claimId}
+                                      onChange={(e) =>
+                                        updateCreditDraft(credit.id, { claimId: e.target.value }, balance)
+                                      }
+                                      disabled={busy || openClaims.length === 0}
+                                      aria-label="Target claim"
+                                    >
+                                      <option value="">
+                                        {openClaims.length === 0
+                                          ? "No claims with patient responsibility"
+                                          : "Select claim…"}
+                                      </option>
+                                      {openClaims.map((cl) => (
+                                        <option key={cl.id} value={cl.id}>
+                                          {(cl.claimNumber ?? cl.id.slice(0, 8))} — {cl.patientResponsibilityAmount.toLocaleString(undefined, { style: "currency", currency: "USD" })} resp.
+                                        </option>
+                                      ))}
+                                    </select>
+                                  ) : (
+                                    <select
+                                      value={draft.invoiceId}
+                                      onChange={(e) =>
+                                        updateCreditDraft(credit.id, { invoiceId: e.target.value }, balance)
+                                      }
+                                      disabled={busy || openInvoices.length === 0}
+                                      aria-label="Target invoice"
+                                    >
+                                      <option value="">
+                                        {openInvoices.length === 0
+                                          ? "No open invoices"
+                                          : "Select invoice…"}
+                                      </option>
+                                      {openInvoices.map((inv) => (
+                                        <option key={inv.id} value={inv.id}>
+                                          {(inv.invoiceNumber ?? inv.id.slice(0, 8))} — {inv.balanceAmount.toLocaleString(undefined, { style: "currency", currency: "USD" })} open
+                                        </option>
+                                      ))}
+                                    </select>
+                                  )}
+                                </>
+                              ) : (
+                                <input
+                                  type="text"
+                                  placeholder="Refund reason (required)"
+                                  value={draft.reason}
+                                  onChange={(e) =>
+                                    updateCreditDraft(credit.id, { reason: e.target.value }, balance)
+                                  }
+                                  disabled={busy || refundDisabled}
+                                  aria-label="Refund reason"
+                                />
+                              )}
+                              <button
+                                type="button"
+                                className="button"
+                                onClick={() => void submitCreditAction(credit)}
+                                disabled={busy || refundDisabled}
+                              >
+                                {busy
+                                  ? "Working…"
+                                  : draft.mode === "refund"
+                                    ? "Issue refund"
+                                    : "Apply credit"}
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    );
                   })}
                 </tbody>
               </table>

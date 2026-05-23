@@ -21,7 +21,7 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
     // professional_claims uses patient_id which maps to clients.id
     const { data: claims, error } = await supabase
       .from("professional_claims")
-      .select("id, claim_number, claim_status, total_charge, diagnosis_codes, created_at, submitted_at, appointment_id, encounter_id, payer_profile_id")
+      .select("id, claim_number, claim_status, total_charge, patient_responsibility_amount, diagnosis_codes, created_at, submitted_at, appointment_id, encounter_id, payer_profile_id")
       .eq("organization_id", organizationId)
       .eq("patient_id", clientId)
       .order("created_at", { ascending: false })
@@ -34,6 +34,7 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
       claimNumber: claim.claim_number as string | null,
       status: claim.claim_status as string | null,
       totalCharge: claim.total_charge as number | null,
+      patientResponsibilityAmount: claim.patient_responsibility_amount as number | null,
       diagnosisCodes: (claim.diagnosis_codes ?? []) as string[],
       createdAt: claim.created_at as string | null,
       submittedAt: claim.submitted_at as string | null,
