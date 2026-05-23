@@ -38,6 +38,10 @@ import {
 } from "../../../app/api/billing/payments/stripe-webhook/route";
 import { commitPatientPayment } from "../postingEngine/patientPayment";
 import type { PatientPaymentResult } from "../postingEngine/patientPayment";
+import {
+  validateInsert,
+  validateWritePayload,
+} from "../../supabase/__tests__/schemaGuard";
 
 const SECRET = "whsec_test_abc123";
 
@@ -303,6 +307,7 @@ test("charge.succeeded missing org metadata writes workqueue_items row and retur
     from(table: string) {
       return {
         insert(row: Record<string, unknown>) {
+          validateInsert(table, row);
           inserts.push({ table, row });
           return Promise.resolve({ error: null });
         },
@@ -605,12 +610,16 @@ function makeFakeSupabaseForDispute(args: {
             return chain;
           },
           update(row: Record<string, unknown>) {
+            validateWritePayload("workqueue_items", row);
             args.onWorkqueueUpdate?.(row);
             const chain = { eq: () => chain };
             // .update().eq().eq() resolves to {error:null}
             return Object.assign(Promise.resolve({ error: null }), chain);
           },
-          insert: async () => ({ error: null }),
+          insert: async (row: Record<string, unknown>) => {
+            validateInsert("workqueue_items", row);
+            return { error: null };
+          },
         };
       }
       throw new Error(`Unexpected from(${table}) in dispute fake`);
@@ -727,7 +736,10 @@ function makeFakeSupabaseForCommit(handlers: {
           };
           return chain;
         },
-        insert: async () => ({ error: handlers.onClientPaymentsInsert() }),
+        insert: async (row: Record<string, unknown>) => {
+          validateInsert("client_payments", row);
+          return { error: handlers.onClientPaymentsInsert() };
+        },
       };
     },
   };

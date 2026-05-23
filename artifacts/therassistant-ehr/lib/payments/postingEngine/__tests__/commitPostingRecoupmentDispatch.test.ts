@@ -13,6 +13,7 @@ import { describe, it } from "node:test";
 
 import { commitPosting } from "../index";
 import type { PostingActor } from "../types";
+import { validateInsert, validateWritePayload } from "./_schemaGuard";
 
 const ORG = "org-1";
 const ACTOR: PostingActor = {
@@ -96,11 +97,13 @@ function makeFakeSupabase(seed: Record<string, Array<Record<string, unknown>>>) 
         return chain;
       },
       insert(p: Record<string, unknown>) {
+        validateInsert(table, p);
         ctx.mode = "insert";
         ctx.insertPayload = p;
         return chain;
       },
       update(p: Record<string, unknown>) {
+        validateWritePayload(table, p);
         ctx.mode = "update";
         ctx.updatePayload = p;
         return chain;

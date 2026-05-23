@@ -19,6 +19,11 @@
 import { strict as assert } from "node:assert";
 import { before, mock, test } from "node:test";
 
+import {
+  validateInsert,
+  validateWritePayload,
+} from "../../../../lib/supabase/__tests__/schemaGuard";
+
 const ORG = "org-1";
 const CLIENT = "client-1";
 const STAFF_USER = "user-1";
@@ -62,9 +67,13 @@ function builderFor(table: string, op: Call["op"], payload?: Row | Row[]) {
     let result: SelectResult | InsertResult | UpdateResult = { data: null, error: null };
     if (handler) {
       if (op === "select" && handler.select) result = handler.select(filters);
-      else if (op === "insert" && handler.insert) result = handler.insert(payload ?? {});
-      else if (op === "update" && handler.update)
+      else if (op === "insert" && handler.insert) {
+        validateInsert(table, (payload ?? {}) as Row | Row[]);
+        result = handler.insert(payload ?? {});
+      } else if (op === "update" && handler.update) {
+        validateWritePayload(table, (payload ?? {}) as Row);
         result = handler.update((payload ?? {}) as Row, filters);
+      }
     }
     calls.push({ table, op, payload, filters: [...filters], orderDesc });
     return result;

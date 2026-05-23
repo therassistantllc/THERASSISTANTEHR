@@ -27,6 +27,10 @@ import assert from "node:assert/strict";
 import { processRefundRequest } from "../../../app/api/billing/payments/posted/[id]/refund/route";
 import { processReversalRequest } from "../../../app/api/billing/payments/posted/[id]/reverse/route";
 import type { PostingActor } from "../postingEngine";
+import {
+  validateInsert,
+  validateWritePayload,
+} from "../../supabase/__tests__/schemaGuard";
 
 const ORG = "11111111-1111-1111-1111-111111111111";
 const ERA_ID = "22222222-2222-2222-2222-222222222222";
@@ -131,11 +135,16 @@ function makeFakeSupabase(initial: Record<string, Array<Record<string, unknown>>
       },
       insert(payload: unknown) {
         ctx.mode = "insert";
+        validateInsert(
+          tableName,
+          payload as Record<string, unknown> | Array<Record<string, unknown>>,
+        );
         writes.push({ op: "insert", table: tableName, payload });
         return chain;
       },
       update(payload: unknown) {
         ctx.mode = "update";
+        validateWritePayload(tableName, payload as Record<string, unknown>);
         writes.push({ op: "update", table: tableName, payload });
         return chain;
       },

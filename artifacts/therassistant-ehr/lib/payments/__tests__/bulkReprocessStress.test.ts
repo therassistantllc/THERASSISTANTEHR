@@ -26,6 +26,10 @@ import {
   type BulkReprocessTarget,
 } from "../bulkReprocess";
 import type { PostingActor } from "../postingEngine";
+import {
+  validateInsert,
+  validateWritePayload,
+} from "../../supabase/__tests__/schemaGuard";
 
 /* ─── Fake Supabase ──────────────────────────────────────────────────── */
 
@@ -97,6 +101,7 @@ function makeFakeSupabase(db: FakeDB): SupabaseClient {
       },
       insert(payload: Row | Row[]) {
         const payloads = Array.isArray(payload) ? payload : [payload];
+        validateInsert(table, payloads);
         let conflict: { code: string; message: string } | null = null;
         if (table === "workqueue_items") {
           for (const p of payloads) {
@@ -149,6 +154,7 @@ function makeFakeSupabase(db: FakeDB): SupabaseClient {
         return tail;
       },
       update(patch: Row) {
+        validateWritePayload(table, patch);
         const filters: Array<(r: Row) => boolean> = [];
         const apply = () => {
           const matched = rows().filter((r) => filters.every((f) => f(r)));

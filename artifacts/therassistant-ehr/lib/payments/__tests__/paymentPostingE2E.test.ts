@@ -16,6 +16,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+import {
+  validateInsert,
+  validateWritePayload,
+} from "../../supabase/__tests__/schemaGuard";
+
 type Row = Record<string, unknown>;
 
 function makeFakeSupabase() {
@@ -102,6 +107,7 @@ function makeFakeSupabase() {
       insert(payload: Row | Row[]) {
         mode = "insert";
         insertItems = Array.isArray(payload) ? [...payload] : [payload];
+        validateInsert(name, insertItems);
         // Pre-assign ids so .select().single() can find them.
         for (const it of insertItems) {
           if (!it.id) it.id = `${name}-${list.length + insertItems.indexOf(it) + 1}-${Math.random().toString(36).slice(2, 8)}`;
@@ -111,6 +117,7 @@ function makeFakeSupabase() {
       update(patch: Row) {
         mode = "update";
         updatePatch = { ...patch };
+        validateWritePayload(name, updatePatch);
         return builder;
       },
       delete() { mode = "delete"; return builder; },

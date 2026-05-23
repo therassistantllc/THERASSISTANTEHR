@@ -19,6 +19,7 @@ import {
   UNIQUE_VIOLATION,
   type EncountersSupabase,
 } from "../findOrCreate";
+import { validateInsert } from "../../supabase/__tests__/schemaGuard";
 
 function asSupabase(fake: unknown): EncountersSupabase {
   return fake as EncountersSupabase;
@@ -112,6 +113,7 @@ function makeFakeDb(opts: { gate?: () => Promise<void> } = {}) {
           };
         },
         insert(row: Record<string, unknown>) {
+          validateInsert(table, row);
           return {
             select() {
               return {

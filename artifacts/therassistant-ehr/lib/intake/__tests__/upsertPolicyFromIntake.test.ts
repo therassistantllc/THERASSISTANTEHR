@@ -16,6 +16,10 @@ import {
   UNIQUE_VIOLATION,
   upsertPolicyFromIntake,
 } from "../upsertPolicyFromIntake";
+import {
+  validateInsert,
+  validateWritePayload,
+} from "../../supabase/__tests__/schemaGuard";
 
 type StoredPolicy = { id: string; fields: IntakePolicyFields };
 
@@ -48,6 +52,7 @@ function makeFakeDb(opts: { selectGate?: () => Promise<void>; insertGate?: () =>
           };
         },
         async insert(row: Record<string, unknown>) {
+          validateInsert("insurance_policies", row);
           await insertGate();
           const fields = row as IntakePolicyFields;
           const dup = rows.find(
@@ -60,6 +65,7 @@ function makeFakeDb(opts: { selectGate?: () => Promise<void>; insertGate?: () =>
           return { error: null };
         },
         update(patch: Record<string, unknown>) {
+          validateWritePayload("insurance_policies", patch);
           return {
             eq(_f: string, id: string) {
               const found = rows.find((r) => r.id === id);
