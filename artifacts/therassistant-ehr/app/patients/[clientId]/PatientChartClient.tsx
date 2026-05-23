@@ -109,6 +109,7 @@ type CaseRowSummary = {
   activeFlag: boolean;
   isDefault: boolean;
   policies: Array<{
+    policyId: string;
     priority: "primary" | "secondary" | "tertiary";
     planName: string | null;
     payerName: string | null;
@@ -361,6 +362,10 @@ export default function PatientChartClient({
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditError, setAuditError] = useState<string | null>(null);
   const [auditExpanded, setAuditExpanded] = useState(false);
+  const [groupEditPolicyId, setGroupEditPolicyId] = useState<string | null>(null);
+  const [groupEditDraft, setGroupEditDraft] = useState<string>("");
+  const [groupSavingPolicyId, setGroupSavingPolicyId] = useState<string | null>(null);
+  const [groupEditError, setGroupEditError] = useState<string | null>(null);
   const organizationId = useMemo(
     () => resolveOrganizationId(initialOrganizationId),
     [initialOrganizationId],
@@ -499,6 +504,63 @@ export default function PatientChartClient({
       setDemoError(err instanceof Error ? err.message : "Failed to save demographics");
     } finally {
       setDemoSaving(false);
+    }
+  }
+
+  async function refreshSummary() {
+    try {
+      const response = await fetch(
+        `/api/patients/${clientId}/summary?organizationId=${encodeURIComponent(organizationId)}`,
+        { cache: "no-store" },
+      );
+      const refreshed = (await response.json()) as PatientSummary;
+      if (response.ok && refreshed.success) {
+        setSummary(refreshed);
+      }
+    } catch {
+      // best-effort refresh
+    }
+  }
+
+  function startGroupEdit(policy: InsurancePolicySummary | null | undefined) {
+    if (!policy) return;
+    setGroupEditError(null);
+    setGroupEditPolicyId(policy.id);
+    setGroupEditDraft(policy.group_number ?? "");
+  }
+
+  function cancelGroupEdit() {
+    setGroupEditPolicyId(null);
+    setGroupEditDraft("");
+    setGroupEditError(null);
+  }
+
+  async function saveGroupEdit(policy: InsurancePolicySummary) {
+    setGroupSavingPolicyId(policy.id);
+    setGroupEditError(null);
+    try {
+      const response = await fetch(
+        `/api/clients/${clientId}/policies/${policy.id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            organizationId,
+            groupNumber: groupEditDraft.trim() || null,
+          }),
+        },
+      );
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok || !json.success) {
+        throw new Error(json.error ?? "Failed to update group number");
+      }
+      await refreshSummary();
+      setGroupEditPolicyId(null);
+      setGroupEditDraft("");
+    } catch (err) {
+      setGroupEditError(err instanceof Error ? err.message : "Failed to update group number");
+    } finally {
+      setGroupSavingPolicyId(null);
     }
   }
 
@@ -1179,6 +1241,7 @@ export default function PatientChartClient({
 
           <section className="summary-block" aria-label="Insurance information">
             <h3>Insurance information</h3>
+            {groupEditError ? <div className="alert-panel">{groupEditError}</div> : null}
             {cases.length === 0 ? (
               <p className="muted" style={{ margin: 0 }}>
                 No cases on file yet.{" "}
@@ -1198,37 +1261,152 @@ export default function PatientChartClient({
                   </tr>
                 </thead>
                 <tbody>
-                  {cases.map((c) => {
-                    const primary = c.policies.find((p) => p.priority === "primary") ?? null;
-                    const matchingPolicy = primary
-                      ? policies.find((p) => (p.policy_number ?? "") === (primary.policyNumber ?? ""))
-                      : null;
-                    return (
-                      <tr key={c.id}>
-                        <td>
-                          <strong>{c.name}</strong>
-                          {c.isDefault ? (
-                            <span className="status status-green" style={{ marginLeft: 6 }}>
-                              Default
-                            </span>
-                          ) : null}
-                        </td>
-                        <td>{primary?.payerName ?? primary?.planName ?? dash}</td>
-                        <td>{primary?.policyNumber ?? dash}</td>
-                        <td>{dashIfNullish(matchingPolicy?.group_number ?? null)}</td>
-                        <td>{formatMoneyOrDash(matchingPolicy?.copay_amount ?? null)}</td>
-                        <td>
-                          <span className={c.activeFlag ? "status status-green" : "status status-yellow"}>
-                            {c.activeFlag ? "Yes" : "No"}
-                          </span>
-                        </td>
-                        <td style={{ textAlign: "right" }}>
-                          <a className="button button-secondary" href="#cases-editor">
-                            Open
-                          </a>
-                        </td>
-                      </tr>
+                  {cases.flatMap((c) => {
+                    const sortedPolicies = [...c.policies].sort((a, b) => {
+                      const order = { primary: 0, secondary: 1, tertiary: 2 } as const;
+                      return (order[a.priority] ?? 9) - (order[b.priority] ?? 9);
+                    });
+                    const visiblePolicies = sortedPolicies.filter(
+                      (p) => p.priority === "primary" || p.priority === "secondary",
                     );
+                    if (visiblePolicies.length === 0) {
+                      return [
+                        <tr key={c.id}>
+                          <td>
+                            <strong>{c.name}</strong>
+                            {c.isDefault ? (
+                              <span className="status status-green" style={{ marginLeft: 6 }}>
+                                Default
+                              </span>
+                            ) : null}
+                          </td>
+                          <td>{dash}</td>
+                          <td>{dash}</td>
+                          <td>{dash}</td>
+                          <td>{dash}</td>
+                          <td>
+                            <span
+                              className={c.activeFlag ? "status status-green" : "status status-yellow"}
+                            >
+                              {c.activeFlag ? "Yes" : "No"}
+                            </span>
+                          </td>
+                          <td style={{ textAlign: "right" }}>
+                            <a className="button button-secondary" href="#cases-editor">
+                              Open
+                            </a>
+                          </td>
+                        </tr>,
+                      ];
+                    }
+                    return visiblePolicies.map((casePolicy, idx) => {
+                      const matchingPolicy =
+                        policies.find((p) => p.id === casePolicy.policyId) ?? null;
+                      const isFirst = idx === 0;
+                      return (
+                        <tr key={`${c.id}:${casePolicy.policyId}`}>
+                          <td>
+                            {isFirst ? (
+                              <>
+                                <strong>{c.name}</strong>
+                                {c.isDefault ? (
+                                  <span
+                                    className="status status-green"
+                                    style={{ marginLeft: 6 }}
+                                  >
+                                    Default
+                                  </span>
+                                ) : null}
+                                <div style={{ fontSize: 12, color: "var(--muted-color, #6b7280)" }}>
+                                  {casePolicy.priority}
+                                </div>
+                              </>
+                            ) : (
+                              <div style={{ fontSize: 12, color: "var(--muted-color, #6b7280)" }}>
+                                {casePolicy.priority}
+                              </div>
+                            )}
+                          </td>
+                          <td>{casePolicy.payerName ?? casePolicy.planName ?? dash}</td>
+                          <td>{casePolicy.policyNumber ?? dash}</td>
+                          <td>
+                            {matchingPolicy ? (
+                              groupEditPolicyId === matchingPolicy.id ? (
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    gap: 4,
+                                    alignItems: "center",
+                                    flexWrap: "wrap",
+                                  }}
+                                >
+                                  <input
+                                    type="text"
+                                    value={groupEditDraft}
+                                    onChange={(e) => setGroupEditDraft(e.target.value)}
+                                    maxLength={80}
+                                    style={{ width: 110 }}
+                                    disabled={groupSavingPolicyId === matchingPolicy.id}
+                                    aria-label="Group number"
+                                  />
+                                  <button
+                                    type="button"
+                                    className="button button-secondary"
+                                    onClick={() => saveGroupEdit(matchingPolicy)}
+                                    disabled={groupSavingPolicyId === matchingPolicy.id}
+                                  >
+                                    {groupSavingPolicyId === matchingPolicy.id ? "Saving…" : "Save"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="button button-secondary"
+                                    onClick={cancelGroupEdit}
+                                    disabled={groupSavingPolicyId === matchingPolicy.id}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              ) : (
+                                <span
+                                  style={{ display: "inline-flex", gap: 6, alignItems: "center" }}
+                                >
+                                  <span>{dashIfNullish(matchingPolicy.group_number ?? null)}</span>
+                                  <button
+                                    type="button"
+                                    className="button button-secondary"
+                                    onClick={() => startGroupEdit(matchingPolicy)}
+                                    aria-label={`Edit ${casePolicy.priority} group number`}
+                                  >
+                                    Edit
+                                  </button>
+                                </span>
+                              )
+                            ) : (
+                              dash
+                            )}
+                          </td>
+                          <td>{formatMoneyOrDash(matchingPolicy?.copay_amount ?? null)}</td>
+                          <td>
+                            {isFirst ? (
+                              <span
+                                className={
+                                  c.activeFlag ? "status status-green" : "status status-yellow"
+                                }
+                              >
+                                {c.activeFlag ? "Yes" : "No"}
+                              </span>
+                            ) : null}
+                          </td>
+                          <td style={{ textAlign: "right" }}>
+                            {isFirst ? (
+                              <a className="button button-secondary" href="#cases-editor">
+                                Open
+                              </a>
+                            ) : null}
+                          </td>
+                        </tr>
+                      );
+                    });
                   })}
                 </tbody>
               </table>
