@@ -48,7 +48,6 @@ type AppointmentDetail = {
     status: string;
     appointmentType: string | null;
     serviceLocation: string | null;
-    reason: string | null;
     cptCode: string | null;
     memo: string;
   };
@@ -1245,7 +1244,7 @@ function CreateAppointmentModal({
     return iso;
   });
   const [duration, setDuration] = useState<number>(60);
-  const [reason, setReason] = useState("Therapy session");
+  const [memo, setMemo] = useState("");
   const [serviceLocation, setServiceLocation] = useState<
     "office" | "telehealth"
   >("office");
@@ -1298,7 +1297,7 @@ function CreateAppointmentModal({
         scheduledStartAt: new Date(startAt).toISOString(),
         durationMinutes: Number(duration),
         appointmentType: "Therapy",
-        reason,
+        memo,
         serviceLocation,
       };
       const res = await fetch(`/api/scheduling/appointments/create`, {
@@ -1387,11 +1386,11 @@ function CreateAppointmentModal({
           </select>
         </div>
         <div className={styles.modalRow}>
-          <label className={styles.modalLabel}>Reason</label>
+          <label className={styles.modalLabel}>Memo</label>
           <input
             className={styles.input}
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
+            value={memo}
+            onChange={(e) => setMemo(e.target.value)}
           />
         </div>
         <div className={styles.modalActions}>

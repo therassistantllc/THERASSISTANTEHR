@@ -81,7 +81,7 @@ export async function POST(request: Request) {
       scheduledStartAt?: string;
       durationMinutes?: number;
       appointmentType?: string;
-      reason?: string;
+      memo?: string | null;
       serviceLocation?: "office" | "telehealth";
       internalNote?: string;
       reminderEmailEnabled?: boolean;
@@ -107,12 +107,13 @@ export async function POST(request: Request) {
     const scheduledStartAt = String(body.scheduledStartAt ?? "").trim();
     const durationMinutes = Math.max(15, Number(body.durationMinutes ?? 60));
     const appointmentType = String(body.appointmentType ?? "").trim();
-    const reason = String(body.reason ?? "").trim();
+    const memoRaw = typeof body.memo === "string" ? body.memo.trim() : "";
+    const memo = memoRaw.length > 0 ? memoRaw : null;
     const serviceLocation = body.serviceLocation ?? (appointmentType.toLowerCase().includes("tele") ? "telehealth" : "office");
 
-    if (!clientId || !providerId || !scheduledStartAt || !appointmentType || !reason) {
+    if (!clientId || !providerId || !scheduledStartAt || !appointmentType) {
       return NextResponse.json(
-        { success: false, error: "Client, provider, start time, classification, and reason are required." },
+        { success: false, error: "Client, provider, start time, and classification are required." },
         { status: 400 },
       );
     }
@@ -228,7 +229,7 @@ export async function POST(request: Request) {
         scheduled_end_at: endAt.toISOString(),
         appointment_status: "scheduled",
         appointment_type: appointmentType,
-        reason,
+        memo,
         telehealth_url: teleUrl,
         created_at: now,
         updated_at: now,
@@ -260,7 +261,7 @@ export async function POST(request: Request) {
           payload: {
             appointmentType,
             serviceLocation,
-            reason,
+            memo,
             leadHours: reminderLeadHours,
           },
           created_at: now,

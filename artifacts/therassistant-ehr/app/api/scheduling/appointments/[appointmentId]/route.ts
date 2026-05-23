@@ -31,7 +31,6 @@ export async function PATCH(
       scope?: "single" | "series";
       updates?: {
         appointment_status?: string;
-        reason?: string;
         appointment_type?: string;
         service_location?: string;
         internal_note?: string | null;
@@ -49,8 +48,8 @@ export async function PATCH(
       allowed.appointment_status = updates.appointment_status.trim();
     }
     // CPT and memo each have their own dedicated columns now, so we
-    // write them independently of appointment_type / reason. This keeps
-    // the original appointment type (e.g. "therapy", "Initial
+    // write them independently of appointment_type. This keeps the
+    // original appointment type (e.g. "therapy", "Initial
     // Consultation") intact when a CPT is saved.
     if ("cpt_code" in updates) {
       allowed.cpt_code = updates.cpt_code ?? null;
@@ -60,9 +59,6 @@ export async function PATCH(
     }
     if ("memo" in updates) {
       allowed.memo = updates.memo ?? null;
-    }
-    if (typeof updates.reason === "string") {
-      allowed.reason = updates.reason;
     }
     if (typeof updates.service_location === "string") {
       allowed.service_location = updates.service_location;

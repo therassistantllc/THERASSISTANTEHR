@@ -29,14 +29,14 @@ export type AppointmentRow = {
   scheduled_end_at?: string | null;
   appointment_status?: string | null;
   appointment_type?: string | null;
-  reason?: string | null;
+  memo?: string | null;
   cancellation_reason?: string | null;
   archived_at?: string | null;
   updated_at?: string | null;
 };
 
 export const APPOINTMENT_DB_COLUMNS =
-  "id, organization_id, client_id, provider_id, scheduled_start_at, scheduled_end_at, appointment_status, appointment_type, reason, cancellation_reason, archived_at, updated_at";
+  "id, organization_id, client_id, provider_id, scheduled_start_at, scheduled_end_at, appointment_status, appointment_type, memo, cancellation_reason, archived_at, updated_at";
 
 function mapAppointmentStatus(status: string | null | undefined): FhirAppointment["status"] {
   switch ((status ?? "").toLowerCase()) {
@@ -78,7 +78,7 @@ export function appointmentRowToFhir(row: AppointmentRow, baseUrl: string): Fhir
     meta: { lastUpdated: s(row.updated_at) },
     status: mapAppointmentStatus(row.appointment_status),
     serviceType: apptType ? [{ text: apptType }] : undefined,
-    description: s(row.reason),
+    description: s(row.memo),
     start: s(row.scheduled_start_at),
     end: s(row.scheduled_end_at),
     participant: participants,

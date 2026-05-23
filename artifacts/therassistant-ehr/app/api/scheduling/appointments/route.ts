@@ -33,7 +33,7 @@ export async function GET(request: Request) {
     const { data: appts, error } = await supabase
       .from("appointments")
       .select(
-        "id, client_id, provider_id, scheduled_start_at, scheduled_end_at, appointment_status, appointment_type, reason, cpt_code, memo",
+        "id, client_id, provider_id, scheduled_start_at, scheduled_end_at, appointment_status, appointment_type, cpt_code, memo",
       )
       .eq("organization_id", organizationId)
       .is("archived_at", null)

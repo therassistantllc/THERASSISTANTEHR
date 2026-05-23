@@ -28,7 +28,7 @@ export async function GET(
     const { data: appt, error: apptError } = await supabase
       .from("appointments")
       .select(
-        "id, client_id, provider_id, scheduled_start_at, scheduled_end_at, appointment_status, appointment_type, reason, cpt_code, memo",
+        "id, client_id, provider_id, scheduled_start_at, scheduled_end_at, appointment_status, appointment_type, cpt_code, memo",
       )
       .eq("organization_id", organizationId)
       .eq("id", appointmentId)
@@ -195,7 +195,6 @@ export async function GET(
         status: appt.appointment_status,
         appointmentType: appt.appointment_type,
         serviceLocation: null,
-        reason: appt.reason,
         cptCode: cpt,
         memo,
       },

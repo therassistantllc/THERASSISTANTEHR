@@ -10,7 +10,7 @@ type Appointment = {
   scheduledEnd: string | null;
   status: string | null;
   type: string | null;
-  reason: string | null;
+  memo: string | null;
   checkedInAt: string | null;
   cancelledAt: string | null;
   providerId: string | null;

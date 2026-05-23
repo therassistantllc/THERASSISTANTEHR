@@ -20,7 +20,7 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
 
     const { data: appointments, error } = await supabase
       .from("appointments")
-      .select("id, scheduled_start_at, scheduled_end_at, appointment_status, appointment_type, reason, check_in_at, cancelled_at, cancellation_reason, provider_id, insurance_policy_id, created_at")
+      .select("id, scheduled_start_at, scheduled_end_at, appointment_status, appointment_type, memo, check_in_at, cancelled_at, cancellation_reason, provider_id, insurance_policy_id, created_at")
       .eq("organization_id", organizationId)
       .eq("client_id", clientId)
       .is("archived_at", null)
@@ -50,7 +50,7 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
       scheduledEnd: appt.scheduled_end_at as string | null,
       status: appt.appointment_status as string | null,
       type: appt.appointment_type as string | null,
-      reason: appt.reason as string | null,
+      memo: appt.memo as string | null,
       checkedInAt: appt.check_in_at as string | null,
       cancelledAt: appt.cancelled_at as string | null,
       cancellationReason: appt.cancellation_reason as string | null,

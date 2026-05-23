@@ -32,7 +32,6 @@ export type Database = {
           organization_id: string
           provider_id: string | null
           provider_location_id: string | null
-          reason: string | null
           scheduled_end_at: string
           scheduled_start_at: string
           telehealth_url: string | null
@@ -54,7 +53,6 @@ export type Database = {
           organization_id: string
           provider_id?: string | null
           provider_location_id?: string | null
-          reason?: string | null
           scheduled_end_at: string
           scheduled_start_at: string
           telehealth_url?: string | null
@@ -76,7 +74,6 @@ export type Database = {
           organization_id?: string
           provider_id?: string | null
           provider_location_id?: string | null
-          reason?: string | null
           scheduled_end_at?: string
           scheduled_start_at?: string
           telehealth_url?: string | null
