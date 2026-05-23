@@ -20,7 +20,18 @@ type MailroomItem = {
   createdAt: string;
 };
 
-type DetailResponse = { success?: boolean; item?: MailroomItem; error?: string };
+type LinkedPatient = { id: string; name: string; dob: string; archived: boolean };
+type LinkedEncounter = { id: string; serviceDate: string; providerName: string; archived: boolean };
+type LinkedClaim = { id: string; claimNumber: string; serviceDateFrom: string; payerName: string; archived: boolean };
+
+type DetailResponse = {
+  success?: boolean;
+  item?: MailroomItem;
+  patient?: LinkedPatient | null;
+  encounter?: LinkedEncounter | null;
+  claim?: LinkedClaim | null;
+  error?: string;
+};
 
 type FilingDestination = "patient_chart" | "claim" | "encounter" | "practice_documents";
 
@@ -45,6 +56,9 @@ function formatDate(value: string) {
 export default function MailroomItemClient({ itemId }: { itemId: string }) {
   const organizationId = useMemo(() => getOrganizationId(), []);
   const [item, setItem] = useState<MailroomItem | null>(null);
+  const [patient, setPatient] = useState<LinkedPatient | null>(null);
+  const [encounter, setEncounter] = useState<LinkedEncounter | null>(null);
+  const [claim, setClaim] = useState<LinkedClaim | null>(null);
   const [filingDestination, setFilingDestination] = useState<FilingDestination>("patient_chart");
   const [selectedEntity, setSelectedEntity] = useState<EntityResult | null>(null);
   const [adminComments, setAdminComments] = useState("");
@@ -65,6 +79,9 @@ export default function MailroomItemClient({ itemId }: { itemId: string }) {
       setError(json.error || "Unable to load mailroom item.");
     } else {
       setItem(json.item);
+      setPatient(json.patient ?? null);
+      setEncounter(json.encounter ?? null);
+      setClaim(json.claim ?? null);
       setAdminComments(json.item.adminComments || "");
     }
     setLoading(false);
@@ -151,11 +168,58 @@ export default function MailroomItemClient({ itemId }: { itemId: string }) {
               <p><strong>Source:</strong> {item.source || "—"}</p>
               <p><strong>Created:</strong> {formatDate(item.createdAt)}</p>
               <p><strong>Notes:</strong> {item.notes || "—"}</p>
-              <p><strong>Linked patient:</strong> {item.clientId || "Not linked"}</p>
+              <p>
+                <strong>Linked patient:</strong>{" "}
+                {patient ? (
+                  patient.name ? (
+                    <>
+                      <Link href={`/clients/${patient.id}`}>{patient.name}</Link>
+                      {patient.dob ? ` (DOB ${patient.dob})` : ""}
+                      {patient.archived ? " — archived" : ""}
+                    </>
+                  ) : (
+                    <span className="muted-text">Patient record unavailable (archived or deleted)</span>
+                  )
+                ) : (
+                  "Not linked"
+                )}
+              </p>
+              {encounter ? (
+                <p>
+                  <strong>Linked encounter:</strong>{" "}
+                  {encounter.serviceDate || encounter.providerName ? (
+                    <>
+                      <Link href={`/encounters/${encounter.id}`}>
+                        {encounter.serviceDate || "Encounter"}
+                        {encounter.providerName ? ` · ${encounter.providerName}` : ""}
+                      </Link>
+                      {encounter.archived ? " — archived" : ""}
+                    </>
+                  ) : (
+                    <span className="muted-text">Encounter unavailable (archived or deleted)</span>
+                  )}
+                </p>
+              ) : null}
+              {claim ? (
+                <p>
+                  <strong>Linked claim:</strong>{" "}
+                  {claim.claimNumber || claim.payerName || claim.serviceDateFrom ? (
+                    <>
+                      {[claim.claimNumber, claim.payerName, claim.serviceDateFrom].filter(Boolean).join(" · ")}
+                      {claim.archived ? " — archived" : ""}
+                    </>
+                  ) : (
+                    <span className="muted-text">Claim unavailable (archived or deleted)</span>
+                  )}
+                </p>
+              ) : null}
             </div>
             <div className="section-actions">
-              {item.clientId ? <Link className="button button-secondary" href={`/clients/${item.clientId}`}>Open Client Chart</Link> : null}
-              {filingDestination === "encounter" && selectedEntity ? <Link className="button button-secondary" href={`/encounters/${selectedEntity.id}`}>Open Encounter</Link> : null}
+              {patient?.id ? <Link className="button button-secondary" href={`/clients/${patient.id}`}>Open Client Chart</Link> : null}
+              {encounter?.id ? <Link className="button button-secondary" href={`/encounters/${encounter.id}`}>Open Encounter</Link> : null}
+              {filingDestination === "encounter" && selectedEntity && selectedEntity.id !== encounter?.id ? (
+                <Link className="button button-secondary" href={`/encounters/${selectedEntity.id}`}>Open Selected Encounter</Link>
+              ) : null}
             </div>
           </div>
 
