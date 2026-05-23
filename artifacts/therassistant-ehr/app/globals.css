@@ -818,3 +818,213 @@ input {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Client chart Summary layout (3-column) ──────────────────────────────── */
+.summary-shell {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr) 300px;
+  gap: 16px;
+  align-items: start;
+  margin-bottom: 16px;
+}
+
+.summary-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  background: var(--card, #fff);
+  border: 1px solid var(--line, #d0d8e2);
+  border-radius: 4px;
+}
+
+.summary-rail h3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted, #5c6e82);
+  margin: 0 0 4px;
+  font-weight: 700;
+}
+
+.summary-rail-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--navy, #10243f);
+  text-decoration: none;
+  border-radius: 3px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-weight: 500;
+}
+
+.summary-rail-action:hover {
+  background: #edf3ef;
+  border-color: var(--line, #d0d8e2);
+}
+
+.summary-rail-action[aria-disabled="true"] {
+  color: rgba(92, 110, 130, 0.55);
+  cursor: not-allowed;
+}
+
+.summary-center {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.summary-block {
+  background: var(--card, #fff);
+  border: 1px solid var(--line, #d0d8e2);
+  border-radius: 4px;
+  padding: 14px 16px;
+}
+
+.summary-block h3 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted, #5c6e82);
+  margin: 0 0 10px;
+  font-weight: 700;
+  border-bottom: 1px solid var(--line, #d0d8e2);
+  padding-bottom: 6px;
+}
+
+.summary-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 18px;
+}
+
+.summary-form-grid .summary-field-wide {
+  grid-column: 1 / -1;
+}
+
+.summary-field {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 13px;
+  line-height: 1.4;
+  padding: 3px 0;
+}
+
+.summary-field label {
+  color: var(--muted, #5c6e82);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.summary-field span,
+.summary-field strong {
+  color: var(--text, #1a2332);
+  word-break: break-word;
+}
+
+.summary-cases-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.summary-cases-table th,
+.summary-cases-table td {
+  text-align: left;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line, #d0d8e2);
+  vertical-align: middle;
+}
+
+.summary-cases-table th {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted, #5c6e82);
+  background: #f7faf8;
+  font-weight: 700;
+}
+
+.summary-cases-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.summary-financial {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.summary-financial-section {
+  background: var(--card, #fff);
+  border: 1px solid var(--line, #d0d8e2);
+  border-radius: 4px;
+  padding: 12px 14px;
+}
+
+.summary-financial-section h3 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted, #5c6e82);
+  margin: 0 0 8px;
+  font-weight: 700;
+}
+
+.summary-financial-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  padding: 3px 0;
+  color: var(--text, #1a2332);
+}
+
+.summary-financial-row span:first-child {
+  color: var(--muted, #5c6e82);
+}
+
+.summary-financial-row strong {
+  color: var(--navy, #10243f);
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-financial-row.total {
+  border-top: 1px solid var(--line, #d0d8e2);
+  margin-top: 4px;
+  padding-top: 8px;
+  font-weight: 600;
+}
+
+.summary-financial-row.total strong {
+  font-size: 15px;
+}
+
+@media (max-width: 1100px) {
+  .summary-shell {
+    grid-template-columns: 180px minmax(0, 1fr);
+  }
+  .summary-shell > .summary-financial {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 760px) {
+  .summary-shell {
+    grid-template-columns: 1fr;
+  }
+  .summary-form-grid {
+    grid-template-columns: 1fr;
+  }
+  .summary-field {
+    grid-template-columns: 110px 1fr;
+  }
+}

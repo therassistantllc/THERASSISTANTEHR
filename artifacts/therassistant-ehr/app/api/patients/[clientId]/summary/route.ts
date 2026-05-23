@@ -46,7 +46,9 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
 
     const { data: client, error: clientError } = await supabase
       .from("clients")
-      .select("id, first_name, last_name, date_of_birth, email, phone, preferred_name, pronouns")
+      .select(
+        "id, first_name, middle_name, last_name, date_of_birth, email, phone, preferred_name, pronouns, mrn, sex_at_birth, gender_identity, address_line_1, address_line_2, city, state, postal_code, preferred_language",
+      )
       .eq("organization_id", organizationId)
       .eq("id", clientId)
       .is("archived_at", null)
@@ -56,13 +58,31 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
       return NextResponse.json({ success: false, error: "Patient not found" }, { status: 404 });
     }
 
-    const { data: policies } = await supabase
+    const { data: policiesRaw } = await supabase
       .from("insurance_policies")
-      .select("id, plan_name, policy_number, priority, active_flag, effective_date, termination_date, payer_id")
+      .select(
+        "id, plan_name, policy_number, priority, active_flag, effective_date, termination_date, payer_id, copay_amount, insurance_payers(payer_name)",
+      )
       .eq("organization_id", organizationId)
       .eq("client_id", clientId)
       .is("archived_at", null)
       .order("priority", { ascending: true });
+
+    const policies = (policiesRaw ?? []).map((p: DbRow) => {
+      const payer = Array.isArray(p.insurance_payers) ? p.insurance_payers[0] : p.insurance_payers;
+      return {
+        id: p.id,
+        plan_name: p.plan_name,
+        policy_number: p.policy_number,
+        priority: p.priority,
+        active_flag: p.active_flag,
+        effective_date: p.effective_date,
+        termination_date: p.termination_date,
+        payer_id: p.payer_id,
+        payer_name: payer?.payer_name ?? null,
+        copay_amount: p.copay_amount ?? null,
+      };
+    });
 
     const { data: eligibility } = await supabase
       .from("eligibility_checks")
@@ -103,11 +123,23 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
       patient: {
         id: client.id,
         name: fullName(client),
+        firstName: client.first_name ?? null,
+        middleName: client.middle_name ?? null,
+        lastName: client.last_name ?? null,
         preferredName: client.preferred_name,
         dateOfBirth: client.date_of_birth,
         email: client.email,
         phone: client.phone,
         pronouns: client.pronouns,
+        mrn: client.mrn ?? null,
+        sexAtBirth: client.sex_at_birth ?? null,
+        genderIdentity: client.gender_identity ?? null,
+        addressLine1: client.address_line_1 ?? null,
+        addressLine2: client.address_line_2 ?? null,
+        city: client.city ?? null,
+        state: client.state ?? null,
+        postalCode: client.postal_code ?? null,
+        preferredLanguage: client.preferred_language ?? null,
       },
       insurance: {
         policies: policies ?? [],

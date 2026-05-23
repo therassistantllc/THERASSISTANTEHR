@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 import CasesPanel from "./CasesPanel";
-import MoveClaimButton from "./MoveClaimButton";
 
 type InsurancePolicySummary = {
   id: string;
@@ -12,6 +11,8 @@ type InsurancePolicySummary = {
   policy_number?: string | null;
   priority?: string | null;
   active_flag?: boolean | null;
+  payer_name?: string | null;
+  copay_amount?: string | number | null;
 };
 
 type EligibilitySummary = {
@@ -20,6 +21,20 @@ type EligibilitySummary = {
   checked_at?: string | null;
   copay_amount?: string | number | null;
   deductible_remaining?: string | number | null;
+};
+
+type CaseRowSummary = {
+  id: string;
+  name: string;
+  caseType: string;
+  activeFlag: boolean;
+  isDefault: boolean;
+  policies: Array<{
+    priority: "primary" | "secondary" | "tertiary";
+    planName: string | null;
+    payerName: string | null;
+    policyNumber: string | null;
+  }>;
 };
 
 type InvoiceSummary = {
@@ -50,11 +65,23 @@ type PatientSummary = {
   patient?: {
     id: string;
     name: string;
+    firstName?: string | null;
+    middleName?: string | null;
+    lastName?: string | null;
     preferredName?: string | null;
     dateOfBirth?: string | null;
     email?: string | null;
     phone?: string | null;
     pronouns?: string | null;
+    mrn?: string | null;
+    sexAtBirth?: string | null;
+    genderIdentity?: string | null;
+    addressLine1?: string | null;
+    addressLine2?: string | null;
+    city?: string | null;
+    state?: string | null;
+    postalCode?: string | null;
+    preferredLanguage?: string | null;
   };
   insurance?: {
     policies: InsurancePolicySummary[];
@@ -187,11 +214,6 @@ function formatDateTime(value: string | null | undefined) {
   return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
 }
 
-function formatMoney(value: string | number | null | undefined) {
-  const amount = Number(value ?? 0);
-  return amount.toLocaleString(undefined, { style: "currency", currency: "USD" });
-}
-
 function statusClass(value: string | null | undefined) {
   const normalized = String(value ?? "").toLowerCase();
   if (normalized.includes("active") && !normalized.includes("inactive")) return "status status-green";
@@ -230,6 +252,7 @@ export default function PatientChartClient({
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [cases, setCases] = useState<CaseRowSummary[]>([]);
   const [intakeLinks, setIntakeLinks] = useState<IntakeLink[]>([]);
   const [intakeSubmissions, setIntakeSubmissions] = useState<IntakeSubmission[]>([]);
   const [intakeBusy, setIntakeBusy] = useState(false);
@@ -376,18 +399,20 @@ export default function PatientChartClient({
         const summaryJson = (await summaryResponse.json()) as PatientSummary;
         if (!summaryResponse.ok || !summaryJson.success) throw new Error(summaryJson.error ?? "Failed to load patient chart");
 
-        const [appointments, conditions, claims, notes, documents, mailroomItems] = await Promise.all([
+        const [appointments, conditions, claims, notes, documents, mailroomItems, casesList] = await Promise.all([
           fetchList<AppointmentSummary>(`/api/patients/${clientId}/appointments?organizationId=${encodeURIComponent(organizationId)}`, "appointments"),
           fetchList<ConditionSummary>(`/api/patients/${clientId}/conditions?organizationId=${encodeURIComponent(organizationId)}`, "conditions"),
           fetchList<ClaimSummary>(`/api/patients/${clientId}/claims?organizationId=${encodeURIComponent(organizationId)}`, "claims"),
           fetchList<NoteSummary>(`/api/patients/${clientId}/notes?organizationId=${encodeURIComponent(organizationId)}`, "notes"),
           fetchList<DocumentSummary>(`/api/patients/${clientId}/documents?organizationId=${encodeURIComponent(organizationId)}`, "documents"),
           fetchList<MailroomSummary>(`/api/mailroom/items?organizationId=${encodeURIComponent(organizationId)}&clientId=${encodeURIComponent(clientId)}&status=all&limit=10`, "items"),
+          fetchList<CaseRowSummary>(`/api/clients/${clientId}/cases?organizationId=${encodeURIComponent(organizationId)}`, "cases"),
         ]);
 
         if (cancelled) return;
 
         setSummary(summaryJson);
+        setCases(casesList);
         setDetails({
           appointments,
           conditions,
@@ -414,18 +439,7 @@ export default function PatientChartClient({
   const patient = summary?.patient;
   const latestEligibility = summary?.insurance?.latestEligibility ?? null;
   const policies = summary?.insurance?.policies ?? [];
-  const invoices = summary?.balance?.invoices ?? [];
-  const encounters = summary?.encounters ?? [];
   const workqueueItems = summary?.workqueueItems ?? [];
-
-  const claimCounts = details.claims.reduce(
-    (acc, claim) => {
-      const key = String(claim.status ?? "unknown");
-      acc[key] = (acc[key] ?? 0) + 1;
-      return acc;
-    },
-    {} as Record<string, number>,
-  );
 
   const deniedOrRejectedCount = details.claims.filter((claim) => {
     const status = String(claim.status ?? "").toLowerCase();
@@ -447,61 +461,284 @@ export default function PatientChartClient({
   if (error) return <div className="alert-panel">{error}</div>;
   if (!patient) return <div className="alert-panel">Client record not found.</div>;
 
+  const dash = "—";
+  const dashIfNullish = (value: unknown): string => {
+    if (value === null || value === undefined || value === "") return dash;
+    return String(value);
+  };
+  const numOrNull = (v: unknown): number | null => {
+    if (v === null || v === undefined || v === "") return null;
+    const n = typeof v === "number" ? v : Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const formatMoneyOrDash = (v: unknown): string => {
+    const n = numOrNull(v);
+    return n === null ? dash : n.toLocaleString(undefined, { style: "currency", currency: "USD" });
+  };
+
+  const primaryPolicy = policies.find((p) => p.priority === "primary") ?? policies[0] ?? null;
+  const secondaryPolicy = policies.find((p) => p.priority === "secondary") ?? null;
+  const eligibilityCopay = numOrNull(latestEligibility?.copay_amount);
+  const policyCopay = numOrNull(primaryPolicy?.copay_amount);
+  const copay = eligibilityCopay ?? policyCopay;
+  const deductibleRemaining = numOrNull(latestEligibility?.deductible_remaining);
+  const previousBalance = numOrNull(summary?.balance?.total);
+  const creditOnAccount: number | null = null; // Not tracked yet — show em-dash.
+  const totalDue =
+    (copay ?? 0) + (deductibleRemaining ?? 0) + (previousBalance ?? 0) - (creditOnAccount ?? 0);
+  const hasAnyTotalInput =
+    copay !== null || deductibleRemaining !== null || previousBalance !== null;
+  const cityStateZip = [
+    [patient.city, patient.state].filter(Boolean).join(", "),
+    patient.postalCode ?? "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const addressLine2 = patient.addressLine2 ?? "";
+  const formattedAddress = [patient.addressLine1, addressLine2, cityStateZip]
+    .filter((s) => s && s.length > 0)
+    .join(" · ");
+
+  const newWorkqueueHref = `/workqueue/new?clientId=${patient.id}${organizationId ? `&organizationId=${organizationId}` : ""}`;
+  const railActions: Array<{ key: string; label: string; href: string }> = [
+    { key: "elig", label: "Eligibility check", href: `/clients/${patient.id}/eligibility${orgQ}` },
+    { key: "pay", label: "Enter payment", href: `/billing/payments${orgQ}` },
+    { key: "notes", label: "Notes", href: `/clients/${patient.id}/notes${orgQ}` },
+    { key: "auth", label: "Authorizations", href: newWorkqueueHref },
+    { key: "portal", label: "Portal access", href: `#` },
+  ];
+  const railDisabled: Record<string, boolean> = { portal: true };
+
   return (
     <>
-      <section className="hero-panel">
-        <div>
-          <p className="eyebrow">Client Chart Summary</p>
-          <h1>{patient.name}</h1>
-          <p className="hero-copy">
-            DOB: {formatDate(patient.dateOfBirth)}{patient.pronouns ? ` · Pronouns: ${patient.pronouns}` : ""}
-          </p>
-        </div>
-        <div className="hero-actions">
-          <Link className="button button-secondary" href={`/clients/${patient.id}/appointments${orgQ}`}>Appointments</Link>
-          <Link className="button button-secondary" href={`/clients/${patient.id}/notes${orgQ}`}>Notes</Link>
-          <Link className="button button-secondary" href={`/clients/${patient.id}/eligibility${orgQ}`}>Eligibility</Link>
-          <Link className="button button-secondary" href={`/clients/${patient.id}/claims${orgQ}`}>Claims</Link>
-          <Link className="button button-secondary" href={`/clients/${patient.id}/balance${orgQ}`}>Balance</Link>
-          <Link className="button button-secondary" href={`/clients/${patient.id}/documents${orgQ}`}>Documents</Link>
-          <Link className="button" href={`/workqueue/new?clientId=${patient.id}${organizationId ? `&organizationId=${organizationId}` : ""}`}>Route to Biller</Link>
+      <section className="summary-shell" aria-label="Client chart summary">
+        <aside className="summary-rail" aria-label="Quick actions">
+          <h3>Quick actions</h3>
+          {railActions.map((action) =>
+            railDisabled[action.key] ? (
+              <span
+                key={action.key}
+                className="summary-rail-action"
+                aria-disabled="true"
+                title="Coming soon"
+              >
+                {action.label}
+              </span>
+            ) : (
+              <Link key={action.key} href={action.href} className="summary-rail-action">
+                {action.label}
+              </Link>
+            ),
+          )}
           <button
             type="button"
-            className="button"
+            className="summary-rail-action"
             onClick={() => handleCreateIntakeLink("email")}
             disabled={intakeBusy || !patient.email}
-            title={patient.email ? `Email link to ${patient.email}` : "No email on file for this client"}
+            title={patient.email ? `Email intake link to ${patient.email}` : "No email on file"}
           >
             {intakeBusy ? "Sending…" : "Email intake link"}
           </button>
           <button
             type="button"
-            className="button button-secondary"
+            className="summary-rail-action"
             onClick={() => handleCreateIntakeLink("clipboard")}
             disabled={intakeBusy}
           >
             {intakeBusy ? "Generating…" : "Copy intake link"}
           </button>
-        </div>
-      </section>
+        </aside>
 
-      <section className="metric-grid">
-        <article className="metric-card">
-          <span>Outstanding Balance</span>
-          <strong>{formatMoney(summary?.balance?.total ?? 0)}</strong>
-        </article>
-        <article className="metric-card">
-          <span>Claims</span>
-          <strong>{details.claims.length}</strong>
-        </article>
-        <article className="metric-card">
-          <span>Recent Encounters</span>
-          <strong>{encounters.length}</strong>
-        </article>
-        <article className="metric-card">
-          <span>Open Workqueue</span>
-          <strong>{workqueueItems.length}</strong>
-        </article>
+        <div className="summary-center">
+          <section className="summary-block" aria-label="Demographics">
+            <h3>Demographics</h3>
+            <div className="summary-form-grid">
+              <div className="summary-field">
+                <label>Initial</label>
+                <span>{dashIfNullish(patient.preferredName ?? patient.firstName)}</span>
+              </div>
+              <div className="summary-field">
+                <label>MRN</label>
+                <span>{dashIfNullish(patient.mrn)}</span>
+              </div>
+              <div className="summary-field">
+                <label>First</label>
+                <span>{dashIfNullish(patient.firstName)}</span>
+              </div>
+              <div className="summary-field">
+                <label>Last</label>
+                <span>{dashIfNullish(patient.lastName)}</span>
+              </div>
+              <div className="summary-field">
+                <label>Middle</label>
+                <span>{dashIfNullish(patient.middleName)}</span>
+              </div>
+              <div className="summary-field">
+                <label>DOB</label>
+                <span>{patient.dateOfBirth ? formatDate(patient.dateOfBirth) : dash}</span>
+              </div>
+              <div className="summary-field">
+                <label>Sex at birth</label>
+                <span>{dashIfNullish(patient.sexAtBirth)}</span>
+              </div>
+              <div className="summary-field">
+                <label>Gender</label>
+                <span>{dashIfNullish(patient.genderIdentity ?? patient.pronouns)}</span>
+              </div>
+              <div className="summary-field summary-field-wide">
+                <label>Address</label>
+                <span>{formattedAddress || dash}</span>
+              </div>
+              <div className="summary-field">
+                <label>Home phone</label>
+                <span>{dashIfNullish(patient.phone)}</span>
+              </div>
+              <div className="summary-field">
+                <label>Email</label>
+                <span>{dashIfNullish(patient.email)}</span>
+              </div>
+              <div className="summary-field">
+                <label>Language</label>
+                <span>{dashIfNullish(patient.preferredLanguage)}</span>
+              </div>
+              <div className="summary-field">
+                <label>Client ID</label>
+                <span>{patient.id}</span>
+              </div>
+            </div>
+          </section>
+
+          <section className="summary-block" aria-label="Insurance information">
+            <h3>Insurance information</h3>
+            {cases.length === 0 ? (
+              <p className="muted" style={{ margin: 0 }}>
+                No cases on file yet.{" "}
+                <a href="#cases-editor">Add a case</a> to start tracking coverage.
+              </p>
+            ) : (
+              <table className="summary-cases-table">
+                <thead>
+                  <tr>
+                    <th>Case</th>
+                    <th>Primary payer</th>
+                    <th>Policy #</th>
+                    <th>Group #</th>
+                    <th>Copay</th>
+                    <th>Active</th>
+                    <th aria-label="Row actions" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {cases.map((c) => {
+                    const primary = c.policies.find((p) => p.priority === "primary") ?? null;
+                    const matchingPolicy = primary
+                      ? policies.find((p) => (p.policy_number ?? "") === (primary.policyNumber ?? ""))
+                      : null;
+                    return (
+                      <tr key={c.id}>
+                        <td>
+                          <strong>{c.name}</strong>
+                          {c.isDefault ? (
+                            <span className="status status-green" style={{ marginLeft: 6 }}>
+                              Default
+                            </span>
+                          ) : null}
+                        </td>
+                        <td>{primary?.payerName ?? primary?.planName ?? dash}</td>
+                        <td>{primary?.policyNumber ?? dash}</td>
+                        <td>{dash}</td>
+                        <td>{formatMoneyOrDash(matchingPolicy?.copay_amount ?? null)}</td>
+                        <td>
+                          <span className={c.activeFlag ? "status status-green" : "status status-yellow"}>
+                            {c.activeFlag ? "Yes" : "No"}
+                          </span>
+                        </td>
+                        <td style={{ textAlign: "right" }}>
+                          <a className="button button-secondary" href="#cases-editor">
+                            Open
+                          </a>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </section>
+        </div>
+
+        <aside className="summary-financial" aria-label="Patient financial summary">
+          <section className="summary-financial-section">
+            <h3>Eligibility</h3>
+            <div className="summary-financial-row">
+              <span>Status</span>
+              <strong className={statusClass(latestEligibility?.eligibility_status)}>
+                {latestEligibility?.eligibility_status ?? "not checked"}
+              </strong>
+            </div>
+            <div className="summary-financial-row">
+              <span>Last checked</span>
+              <strong>
+                {latestEligibility?.checked_at ? formatDateTime(latestEligibility.checked_at) : dash}
+              </strong>
+            </div>
+          </section>
+
+          <section className="summary-financial-section">
+            <h3>Insurance</h3>
+            <div className="summary-financial-row">
+              <span>Primary</span>
+              <strong>
+                {primaryPolicy?.payer_name ?? primaryPolicy?.plan_name ?? dash}
+              </strong>
+            </div>
+            <div className="summary-financial-row">
+              <span>Secondary</span>
+              <strong>
+                {secondaryPolicy?.payer_name ?? secondaryPolicy?.plan_name ?? dash}
+              </strong>
+            </div>
+          </section>
+
+          <section className="summary-financial-section">
+            <h3>Collect from patient today</h3>
+            <div className="summary-financial-row">
+              <span>Co-pay for today</span>
+              <strong>{formatMoneyOrDash(copay)}</strong>
+            </div>
+            <div className="summary-financial-row">
+              <span>Deductible remaining</span>
+              <strong>{formatMoneyOrDash(deductibleRemaining)}</strong>
+            </div>
+            <div className="summary-financial-row">
+              <span>Previous balance</span>
+              <strong>{formatMoneyOrDash(previousBalance)}</strong>
+            </div>
+            <div className="summary-financial-row">
+              <span>Credit on account</span>
+              <strong>{formatMoneyOrDash(creditOnAccount)}</strong>
+            </div>
+            <div className="summary-financial-row total">
+              <span>Total due</span>
+              <strong>{hasAnyTotalInput ? formatMoneyOrDash(totalDue) : dash}</strong>
+            </div>
+          </section>
+
+          <section className="summary-financial-section">
+            <h3>Comments</h3>
+            {alerts.length === 0 ? (
+              <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+                No active chart alerts.
+              </p>
+            ) : (
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: "var(--text)" }}>
+                {alerts.map((alert) => (
+                  <li key={alert} style={{ marginBottom: 4 }}>{alert}</li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </aside>
       </section>
 
       <section className="panel" style={{ marginBottom: "16px" }}>
@@ -674,208 +911,17 @@ export default function PatientChartClient({
         ) : null}
       </section>
 
-      <section className="panel" style={{ marginBottom: "16px" }}>
-        <h2>Alerts</h2>
-        {alerts.length === 0 ? <p className="muted">No active chart alerts.</p> : null}
-        <div className="stack-list">
-          {alerts.map((alert) => (
-            <div className="stack-item" key={alert}>
-              <span className="status status-yellow">Attention</span>
-              <strong>{alert}</strong>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="chart-grid">
-        <article className="panel">
-          <h2>Demographics</h2>
-          <div className="detail-list">
-            <p><strong>Preferred name:</strong> {patient.preferredName ?? "Not listed"}</p>
-            <p><strong>Email:</strong> {patient.email ?? "Not listed"}</p>
-            <p><strong>Phone:</strong> {patient.phone ?? "Not listed"}</p>
-            <p><strong>Client ID:</strong> {patient.id}</p>
-          </div>
-        </article>
-
-        <article className="panel">
-          <h2>Insurance</h2>
-          {policies.length === 0 ? <p className="muted">No active insurance policies found.</p> : null}
-          <div className="stack-list">
-            {policies.slice(0, 3).map((policy) => (
-              <div className="stack-item" key={policy.id}>
-                <strong>{policy.plan_name ?? "Insurance policy"}</strong>
-                <span>{policy.priority ?? "priority not set"} · {policy.active_flag ? "active" : "inactive"}</span>
-                <span>Policy: {policy.policy_number ?? "not listed"}</span>
-              </div>
-            ))}
-          </div>
-          <div className="section-actions">
-            <Link className="button button-secondary" href={`/clients/${patient.id}/eligibility${orgQ}`}>Open Eligibility</Link>
-          </div>
-        </article>
-
-        <article className="panel">
-          <CasesPanel
-            clientId={patient.id}
-            organizationId={organizationId}
-            availablePolicies={policies.map((p) => ({
-              id: p.id,
-              plan_name: p.plan_name ?? null,
-              policy_number: p.policy_number ?? null,
-              priority: p.priority ?? null,
-            }))}
-          />
-        </article>
-
-        <article className="panel">
-          <h2>Recent Appointments</h2>
-          {details.appointments.length === 0 ? <p className="muted">No appointments found.</p> : null}
-          <div className="stack-list">
-            {details.appointments.slice(0, 5).map((appointment) => (
-              <div className="stack-item" key={appointment.id}>
-                <strong>{formatDate(appointment.scheduledStart)}</strong>
-                <span>{appointment.type ?? "visit"} · {appointment.reason ?? "no reason listed"}</span>
-                <span className={statusClass(appointment.status)}>{appointment.status ?? "scheduled"}</span>
-              </div>
-            ))}
-          </div>
-          <div className="section-actions">
-            <Link className="button button-secondary" href={`/clients/${patient.id}/appointments${orgQ}`}>Open Appointments</Link>
-          </div>
-        </article>
-
-        <article className="panel">
-          <h2>Active Conditions / Diagnoses</h2>
-          {details.conditions.length === 0 ? <p className="muted">No diagnoses documented.</p> : null}
-          <div className="stack-list">
-            {details.conditions.slice(0, 6).map((condition) => (
-              <div className="stack-item" key={condition.id}>
-                <strong>{condition.code}</strong>
-                <span>{condition.description ?? "No description"}</span>
-                <span>Last seen: {formatDate(condition.encounterDate)}</span>
-              </div>
-            ))}
-          </div>
-          <div className="section-actions">
-            <Link className="button button-secondary" href={`/clients/${patient.id}/conditions${orgQ}`}>Open Diagnoses</Link>
-          </div>
-        </article>
-
-        <article className="panel wide-panel">
-          <h2>Recent Encounters</h2>
-          {encounters.length === 0 ? <p className="muted">No encounters found.</p> : null}
-          <div className="stack-list">
-            {encounters.slice(0, 6).map((encounter) => (
-              <div className="stack-item stack-row" key={encounter.id}>
-                <div>
-                  <strong>{formatDate(encounter.service_date)}</strong>
-                  <span className={statusClass(encounter.encounter_status)}>{encounter.encounter_status ?? "status not set"}</span>
-                </div>
-                <Link className="button button-secondary" href={`/encounters/${encounter.id}${orgQ}`}>Open Encounter</Link>
-              </div>
-            ))}
-          </div>
-        </article>
-
-        <article className="panel">
-          <h2>Open Workqueue Items</h2>
-          {workqueueItems.length === 0 ? <p className="muted">No open routed items.</p> : null}
-          <div className="stack-list">
-            {workqueueItems.slice(0, 6).map((item) => (
-              <div className="stack-item" key={item.id}>
-                <strong>{item.title ?? "Routed item"}</strong>
-                <span>{item.work_type ?? "work item"} · {item.priority ?? "priority not set"}</span>
-                <span className={statusClass(item.status)}>{item.status ?? "status not set"}</span>
-              </div>
-            ))}
-          </div>
-          <div className="section-actions">
-            <Link className="button button-secondary" href={`/clients/${patient.id}/workqueue${orgQ}`}>Open Client Workqueue</Link>
-          </div>
-        </article>
-
-        <article className="panel">
-          <h2>Balance Summary</h2>
-          <div className="detail-list">
-            <p><strong>Outstanding:</strong> {formatMoney(summary?.balance?.total ?? 0)}</p>
-            <p><strong>Open invoices:</strong> {invoices.length}</p>
-            <p><strong>Latest eligibility:</strong> <span className={statusClass(latestEligibility?.eligibility_status)}>{latestEligibility?.eligibility_status ?? "not checked"}</span></p>
-          </div>
-          <div className="section-actions">
-            <Link className="button button-secondary" href={`/clients/${patient.id}/balance${orgQ}`}>Open Balance</Link>
-          </div>
-        </article>
-
-        <article className="panel wide-panel">
-          <h2>Claim Summary</h2>
-          {details.claims.length === 0 ? <p className="muted">No professional claims found.</p> : null}
-          <div className="detail-list" style={{ marginBottom: "12px" }}>
-            {Object.entries(claimCounts).slice(0, 6).map(([status, count]) => (
-              <p key={status}><strong>{status}:</strong> {count}</p>
-            ))}
-          </div>
-          <div className="stack-list">
-            {details.claims.slice(0, 5).map((claim) => (
-              <div className="stack-item" key={claim.id}>
-                <strong>{claim.claimNumber ?? claim.id.slice(0, 8)}</strong>
-                <span className={statusClass(claim.status)}>{claim.status ?? "status not set"}</span>
-                <span>Total charge: {formatMoney(claim.totalCharge)}</span>
-                <MoveClaimButton
-                  claimId={claim.id}
-                  clientId={patient.id}
-                  organizationId={organizationId}
-                />
-              </div>
-            ))}
-          </div>
-          <div className="section-actions">
-            <Link className="button button-secondary" href={`/clients/${patient.id}/claims${orgQ}`}>Open Claims</Link>
-            <Link className="button button-secondary" href={`/billing/charge-capture${orgQ}`}>Charge Capture</Link>
-          </div>
-        </article>
-
-        <article className="panel wide-panel">
-          <h2>Documents / Mailroom Summary</h2>
-          <div className="metric-grid" style={{ marginTop: 0 }}>
-            <article className="metric-card">
-              <span>Documents</span>
-              <strong>{details.documents.length}</strong>
-            </article>
-            <article className="metric-card">
-              <span>Mailroom Items</span>
-              <strong>{details.mailroomItems.length}</strong>
-            </article>
-            <article className="metric-card">
-              <span>Clinical Notes</span>
-              <strong>{details.notes.length}</strong>
-            </article>
-            <article className="metric-card">
-              <span>Latest Note</span>
-              <strong className="metric-text">{formatDate(details.notes[0]?.encounterDate ?? null)}</strong>
-            </article>
-          </div>
-          <div className="stack-list">
-            {details.documents.slice(0, 3).map((document) => (
-              <div className="stack-item" key={document.id}>
-                <strong>{document.title ?? document.fileName ?? "Document"}</strong>
-                <span>Created: {formatDate(document.createdAt)}</span>
-              </div>
-            ))}
-            {details.mailroomItems.slice(0, 3).map((mailroomItem) => (
-              <div className="stack-item" key={mailroomItem.id}>
-                <strong>{mailroomItem.fileName ?? "Mailroom item"}</strong>
-                <span>{mailroomItem.documentType ?? "document"} · {mailroomItem.status ?? "status not set"}</span>
-                <span>Received: {formatDate(mailroomItem.createdAt ?? null)}</span>
-              </div>
-            ))}
-          </div>
-          <div className="section-actions">
-            <Link className="button button-secondary" href={`/clients/${patient.id}/documents${orgQ}`}>Open Documents</Link>
-            <Link className="button button-secondary" href={`/mailroom${orgQ}`}>Open Mailroom</Link>
-            <Link className="button button-secondary" href={`/clients/${patient.id}/notes${orgQ}`}>Open Notes</Link>
-          </div>
-        </article>
+      <section id="cases-editor" className="panel" style={{ marginBottom: "16px" }}>
+        <CasesPanel
+          clientId={patient.id}
+          organizationId={organizationId}
+          availablePolicies={policies.map((p) => ({
+            id: p.id,
+            plan_name: p.plan_name ?? null,
+            policy_number: p.policy_number ?? null,
+            priority: p.priority ?? null,
+          }))}
+        />
       </section>
     </>
   );
