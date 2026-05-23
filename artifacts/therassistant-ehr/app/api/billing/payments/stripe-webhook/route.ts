@@ -80,8 +80,12 @@ interface StripePaymentIntentLike {
  * Verify the `Stripe-Signature` header. The header format is
  * `t=<unix>,v1=<hex>[,v1=<hex>...]` and the signed payload is
  * `${t}.${rawBody}` HMAC-SHA256 with the webhook secret.
+ *
+ * Exported for tests — must remain a pure function of its inputs (no I/O,
+ * no env reads) so the test suite can pin behavior for timing-window,
+ * hex-parse, and multi-v1 cases without spinning up a request.
  */
-function verifyStripeSignature(rawBody: string, header: string | null, secret: string): boolean {
+export function verifyStripeSignature(rawBody: string, header: string | null, secret: string): boolean {
   if (!header) return false;
   const parts = header.split(",").map((p) => p.trim());
   let timestamp: string | null = null;
@@ -116,7 +120,7 @@ function verifyStripeSignature(rawBody: string, header: string | null, secret: s
 }
 
 /** Pull (chargeId, paymentIntentId, amountCents, metadata) from either event shape. */
-function extractPaymentDetails(event: StripeEvent): {
+export function extractPaymentDetails(event: StripeEvent): {
   chargeId: string | null;
   paymentIntentId: string | null;
   amountCents: number;
@@ -180,8 +184,9 @@ async function writeUnmatchedWorkqueueItem(
     paymentIntentId: string | null;
     amountCents: number;
   },
+  supabaseClient?: ReturnType<typeof createServerSupabaseAdminClient>,
 ): Promise<boolean> {
-  const supabase = createServerSupabaseAdminClient();
+  const supabase = supabaseClient ?? createServerSupabaseAdminClient();
   if (!supabase || !context.organizationId) {
     // No org context = no organization scope to attach the WQ row to.
     // This is unrecoverable for this delivery; signal failure so the caller
@@ -224,15 +229,31 @@ async function writeUnmatchedWorkqueueItem(
   return true;
 }
 
-export async function POST(request: Request) {
-  let rawBody: string;
-  try {
-    rawBody = await request.text();
-  } catch {
-    return NextResponse.json({ success: false, error: "Could not read body" }, { status: 400 });
-  }
+/**
+ * Dependencies the webhook handler reads from the outside world. Pulled
+ * into an interface so tests can substitute the supabase client factory
+ * and the posting engine without monkey-patching modules. The default
+ * wiring (`defaultStripeWebhookDeps`) preserves production behavior.
+ */
+export interface StripeWebhookDeps {
+  getSupabase: () => ReturnType<typeof createServerSupabaseAdminClient>;
+  commitPayment: typeof commitPatientPayment;
+  getSecret: () => string | undefined;
+  now?: () => number;
+}
 
-  const secret = process.env.STRIPE_WEBHOOK_SECRET?.trim();
+export const defaultStripeWebhookDeps: StripeWebhookDeps = {
+  getSupabase: () => createServerSupabaseAdminClient(),
+  commitPayment: commitPatientPayment,
+  getSecret: () => process.env.STRIPE_WEBHOOK_SECRET?.trim(),
+};
+
+export async function processStripeWebhook(
+  rawBody: string,
+  signatureHeader: string | null,
+  deps: StripeWebhookDeps = defaultStripeWebhookDeps,
+): Promise<Response> {
+  const secret = deps.getSecret();
   if (!secret) {
     // Refuse to process anything without a configured shared secret —
     // returning 503 lets Stripe retry once the secret is set rather than
@@ -243,9 +264,11 @@ export async function POST(request: Request) {
     );
   }
 
-  if (!verifyStripeSignature(rawBody, request.headers.get("stripe-signature"), secret)) {
+  if (!verifyStripeSignature(rawBody, signatureHeader, secret)) {
     return NextResponse.json({ success: false, error: "Invalid signature" }, { status: 401 });
   }
+
+  const supabase = deps.getSupabase();
 
   let event: StripeEvent;
   try {
@@ -299,6 +322,7 @@ export async function POST(request: Request) {
         paymentIntentId: details.paymentIntentId,
         amountCents: details.amountCents,
       },
+      supabase,
     );
     if (!queued) {
       // Fail-loud: if we couldn't even persist the review obligation,
@@ -316,14 +340,18 @@ export async function POST(request: Request) {
   }
 
   if (amountDollars <= 0) {
-    const queued = await writeUnmatchedWorkqueueItem("Stripe event reported zero amount", {
-      organizationId,
-      clientId,
-      invoiceId,
-      chargeId: details.chargeId,
-      paymentIntentId: details.paymentIntentId,
-      amountCents: details.amountCents,
-    });
+    const queued = await writeUnmatchedWorkqueueItem(
+      "Stripe event reported zero amount",
+      {
+        organizationId,
+        clientId,
+        invoiceId,
+        chargeId: details.chargeId,
+        paymentIntentId: details.paymentIntentId,
+        amountCents: details.amountCents,
+      },
+      supabase,
+    );
     if (!queued) {
       return NextResponse.json(
         { success: false, error: "Failed to record review item; retry expected" },
@@ -340,7 +368,7 @@ export async function POST(request: Request) {
       : { kind: "account_balance" };
 
   try {
-    const result = await commitPatientPayment({
+    const result = await deps.commitPayment({
       organizationId,
       clientId,
       amount: amountDollars,
@@ -362,14 +390,18 @@ export async function POST(request: Request) {
     }
 
     const errorSummary = result.errors.map((e) => `${e.field}: ${e.message}`).join("; ") || "Unknown commit failure";
-    const queued = await writeUnmatchedWorkqueueItem(`commitPatientPayment failed: ${errorSummary}`, {
-      organizationId,
-      clientId,
-      invoiceId,
-      chargeId: details.chargeId,
-      paymentIntentId: details.paymentIntentId,
-      amountCents: details.amountCents,
-    });
+    const queued = await writeUnmatchedWorkqueueItem(
+      `commitPatientPayment failed: ${errorSummary}`,
+      {
+        organizationId,
+        clientId,
+        invoiceId,
+        chargeId: details.chargeId,
+        paymentIntentId: details.paymentIntentId,
+        amountCents: details.amountCents,
+      },
+      supabase,
+    );
     if (!queued) {
       return NextResponse.json(
         { success: false, error: "Failed to record review item; retry expected", errors: result.errors },
@@ -379,14 +411,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: false, queuedForReview: true, errors: result.errors });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const queued = await writeUnmatchedWorkqueueItem(`Unexpected error: ${message}`, {
-      organizationId,
-      clientId,
-      invoiceId,
-      chargeId: details.chargeId,
-      paymentIntentId: details.paymentIntentId,
-      amountCents: details.amountCents,
-    });
+    const queued = await writeUnmatchedWorkqueueItem(
+      `Unexpected error: ${message}`,
+      {
+        organizationId,
+        clientId,
+        invoiceId,
+        chargeId: details.chargeId,
+        paymentIntentId: details.paymentIntentId,
+        amountCents: details.amountCents,
+      },
+      supabase,
+    );
     if (!queued) {
       return NextResponse.json(
         { success: false, error: `Failed to record review item; retry expected. Original: ${message}` },
@@ -397,4 +433,14 @@ export async function POST(request: Request) {
     // to pile up retries on a deterministic bug we already captured.
     return NextResponse.json({ success: false, queuedForReview: true, error: message });
   }
+}
+
+export async function POST(request: Request) {
+  let rawBody: string;
+  try {
+    rawBody = await request.text();
+  } catch {
+    return NextResponse.json({ success: false, error: "Could not read body" }, { status: 400 });
+  }
+  return processStripeWebhook(rawBody, request.headers.get("stripe-signature"));
 }
