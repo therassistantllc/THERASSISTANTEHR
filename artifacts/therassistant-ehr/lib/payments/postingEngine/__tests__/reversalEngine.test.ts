@@ -688,8 +688,17 @@ describe("integration: recoupment linkage", () => {
     const recoupRow = fake.tables.payment_recoupments[0] as Record<string, unknown>;
     assert.equal(recoupRow.source_era_claim_payment_id, "era-rec-1");
     const wq = fake.tables.workqueue_items[0] as Record<string, unknown>;
-    assert.equal(wq.source_object_type, "payment_recoupment");
+    // PP-5: workqueue_items.source_object_type is a Postgres ENUM that
+    // does not include `payment_recoupment`. We use the closest valid
+    // value `payment_posting` and stash the recoupment linkage in
+    // context_payload so downstream filters/audit chain still resolve.
+    assert.equal(wq.source_object_type, "payment_posting");
     assert.equal(wq.source_object_id, recoupRow.id);
+    assert.equal(wq.work_type, "recoupment_review");
+    assert.equal(wq.client_id, recoupRow.client_id);
+    const ctx = (wq.context_payload ?? {}) as Record<string, unknown>;
+    assert.equal(ctx.origin, "recoupment");
+    assert.equal(ctx.payment_recoupment_id, recoupRow.id);
     const audit = fake.tables.audit_logs.find(
       (a) => (a as Record<string, unknown>).object_type === "payment_recoupment",
     );
@@ -793,7 +802,9 @@ describe("recordRecoupment", () => {
     assert.equal(ledger.source_type, "recoupment");
     assert.equal(Number(ledger.amount), -40);
     assert.equal(fake.tables.workqueue_items.length, 1);
-    assert.equal(fake.tables.workqueue_items[0].queue_type, "recoupment_review");
+    // PP-5: workqueue_items uses `work_type` (no `queue_type` column).
+    assert.equal(fake.tables.workqueue_items[0].work_type, "recoupment_review");
+    assert.equal(fake.tables.workqueue_items[0].source_object_type, "payment_posting");
   });
 });
 

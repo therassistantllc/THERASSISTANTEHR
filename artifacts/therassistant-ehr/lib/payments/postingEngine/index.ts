@@ -163,6 +163,27 @@ export async function commitPosting(
     });
     return refundResultToCommitResult(r);
   }
+  if (input.source.type === "recoupment") {
+    // PP-5: payer takeback. Route through recordRecoupment for atomic
+    // ledger compensation (negative entry), workqueue follow-up, and
+    // audit linkage back to the original posted payment.
+    if (input.dryRun) {
+      const out = emptyResult();
+      out.ok = true;
+      return out;
+    }
+    const { recordRecoupment } = await import("./reversal");
+    const r = await recordRecoupment({
+      organizationId: input.organizationId,
+      target: input.source.target,
+      amount: input.source.amount,
+      reason: input.source.reason,
+      reasonCode: input.source.reasonCode ?? null,
+      offsetEraClaimPaymentId: input.source.offsetEraClaimPaymentId ?? null,
+      actor,
+    });
+    return recoupmentResultToCommitResult(r);
+  }
   if (input.source.type === "reversal") {
     if (input.dryRun) {
       const out = emptyResult();
@@ -178,10 +199,13 @@ export async function commitPosting(
     });
     return reversalResultToCommitResult(r);
   }
+  // All PostingSource variants are handled above; this is exhaustiveness
+  // insurance for any future variant added to the union without a branch.
+  const exhausted: never = input.source;
   const result = emptyResult();
   result.errors.push({
     field: "source.type",
-    message: `Posting source "${input.source.type}" is not implemented.`,
+    message: `Posting source "${(exhausted as { type?: string }).type ?? "unknown"}" is not implemented.`,
   });
   return result;
 }
@@ -202,6 +226,26 @@ function refundResultToCommitResult(
   out.refund = {
     refundId: r.refundId,
     refundStatus: r.refundStatus,
+    workqueueItemId: r.workqueueItemId,
+  };
+  return out;
+}
+
+function recoupmentResultToCommitResult(
+  r: Awaited<ReturnType<typeof import("./reversal").recordRecoupment>>,
+): CommitPostingResult {
+  // CommitPostingResult.posted means "any rows written" — a recoupment row
+  // plus its paired negative ledger entry both count. Surface the linked
+  // recoupment/ledger/workqueue ids via the optional `recoupment` field so
+  // dashboard callers don't have to re-query reversal.ts directly.
+  const out = emptyResult();
+  out.ok = r.ok;
+  out.posted = r.ok && !!r.recoupmentId;
+  out.auditLogIds = r.auditLogIds;
+  out.errors = r.errors;
+  out.recoupment = {
+    recoupmentId: r.recoupmentId,
+    ledgerEntryId: r.ledgerEntryId,
     workqueueItemId: r.workqueueItemId,
   };
   return out;

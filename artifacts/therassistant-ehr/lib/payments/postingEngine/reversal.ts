@@ -854,22 +854,36 @@ export async function recordRecoupment(
 
   // ── 3. Open a workqueue item for the affected claim ────────────────────────
   if (payment.professionalClaimId) {
+    // Schema invariants (see .agents/memory/workqueue-items-schema.md):
+    //   - column is `client_id`, NOT patient_id
+    //   - column is `work_type`, no `queue_type`
+    //   - `payer_id` is NOT a workqueue_items column
+    //   - `source_object_type` is an enum — `payment_recoupment` is not a
+    //     valid value, so use `payment_posting` (the closest enum family
+    //     for ledger-affecting events) and stash the recoupment linkage in
+    //     `context_payload` for downstream filters.
     const { data: wq } = await supabase
       .from("workqueue_items")
       .insert({
         organization_id: input.organizationId,
         professional_claim_id: payment.professionalClaimId,
         claim_id: payment.professionalClaimId,
-        patient_id: payment.clientId,
-        payer_id: payment.payerProfileId,
-        queue_type: "recoupment_review",
+        client_id: payment.clientId,
         work_type: "recoupment_review",
         priority: "high",
         status: "open",
         title: `Payer recoupment ${amount.toFixed(2)} on ${payment.rawSourceLabel}`,
         description: input.reason,
-        source_object_type: "payment_recoupment",
+        source_object_type: "payment_posting",
         source_object_id: result.recoupmentId,
+        context_payload: {
+          origin: "recoupment",
+          payment_recoupment_id: result.recoupmentId,
+          source_kind: payment.kind,
+          source_id: payment.id,
+          amount,
+          reason_code: input.reasonCode ?? null,
+        },
       })
       .select("id")
       .single();

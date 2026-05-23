@@ -97,12 +97,21 @@ export type PostingSource =
       } | null;
     }
   | {
+      /**
+       * Recoupment (PP-5): payer takeback of a previously posted payment.
+       * Dispatches to recordRecoupment, which writes a payment_recoupments
+       * row, a negative ledger entry (source_type='recoupment'), and a
+       * workqueue item for biller follow-up. Target must be a posted
+       * era_835 or client_payment (manual EOBs are not supported by the
+       * underlying recoupment recorder).
+       */
       type: "recoupment";
-      /** TODO: shape filled in by Task #110. */
-      professionalClaimId: string;
+      target: { kind: "era_835" | "client_payment"; id: string };
       amount: number;
-      reasonCode: string | null;
-      description: string | null;
+      reason: string;
+      reasonCode?: string | null;
+      /** When the takeback is netted out of a subsequent ERA check. */
+      offsetEraClaimPaymentId?: string | null;
     }
   | {
       /**
@@ -193,6 +202,16 @@ export interface CommitPostingResult {
    * payment (distinct from `alreadyPosted` which targets posting replays).
    */
   alreadyReversed?: boolean;
+  /**
+   * PP-5: present only when source.type === 'recoupment'. Surfaces the
+   * payment_recoupments row id, the paired negative ledger entry id, and
+   * the workqueue item opened for biller follow-up.
+   */
+  recoupment?: {
+    recoupmentId: string | null;
+    ledgerEntryId: string | null;
+    workqueueItemId: string | null;
+  };
 }
 
 /**

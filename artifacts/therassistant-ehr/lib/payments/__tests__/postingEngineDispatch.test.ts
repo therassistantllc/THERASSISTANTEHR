@@ -11,14 +11,40 @@ import assert from "node:assert/strict";
 
 import { commitPosting } from "../postingEngine";
 
-test("recoupment source still returns Task #110 stub error", async () => {
+test("recoupment dispatch reaches recordRecoupment (no longer stubbed)", async () => {
+  // PP-5: the recoupment branch now routes to recordRecoupment. Without a
+  // real DB the supabase admin client returns null and the handler
+  // surfaces a "Database connection not available" error; the important
+  // assertion is that we no longer see the old "not implemented" stub.
   const r = await commitPosting({
     organizationId: "org-1",
-    source: { type: "recoupment", professionalClaimId: "pc-1", amount: 5, reasonCode: null, description: null },
+    source: {
+      type: "recoupment",
+      target: { kind: "era_835", id: "era-1" },
+      amount: 5,
+      reason: "Payer takeback",
+    },
   });
   assert.equal(r.ok, false);
-  assert.equal(r.errors.length, 1);
-  assert.match(r.errors[0].message, /not implemented/i);
+  for (const e of r.errors) {
+    assert.doesNotMatch(e.message, /not implemented/i);
+  }
+});
+
+test("recoupment dry-run short-circuits without errors", async () => {
+  const r = await commitPosting({
+    organizationId: "org-1",
+    dryRun: true,
+    source: {
+      type: "recoupment",
+      target: { kind: "client_payment", id: "cp-1" },
+      amount: 12.5,
+      reason: "dry-run smoke",
+    },
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.posted, false);
+  assert.equal(r.errors.length, 0);
 });
 
 test("manual_insurance dispatch reaches the validator (no longer stubbed)", async () => {
