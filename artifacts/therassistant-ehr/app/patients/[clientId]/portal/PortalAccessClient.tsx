@@ -92,6 +92,35 @@ export default function PortalAccessClient({ clientId }: { clientId: string }) {
     load();
   }, [load]);
 
+  async function revokeInvite(inviteId: string) {
+    if (typeof window !== "undefined") {
+      const ok = window.confirm(
+        "Revoke this pending portal invite? The patient will not be able to use the existing link.",
+      );
+      if (!ok) return;
+    }
+    setBusy(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const response = await fetch(`/api/portal/invites`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ inviteId }),
+      });
+      const json = await response.json().catch(() => null);
+      if (!response.ok || !json?.success) {
+        throw new Error(json?.error ?? "Failed to revoke portal invite");
+      }
+      setMessage("Portal invite revoked.");
+      await load();
+    } catch (revokeErr) {
+      setError(revokeErr instanceof Error ? revokeErr.message : "Failed to revoke portal invite");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function createInvite(delivery: "clipboard" | "email") {
     setBusy(true);
     setMessage(null);
@@ -161,11 +190,24 @@ export default function PortalAccessClient({ clientId }: { clientId: string }) {
             </div>
             {activeInvite ? (
               <div style={{ marginTop: 8, fontSize: 13, color: "#4b5563" }}>
-                Active invite created {formatDateTime(activeInvite.createdAt)} · expires{" "}
-                {formatDateTime(activeInvite.expiresAt)}
-                {activeInvite.deliveredToEmail
-                  ? ` · last sent to ${activeInvite.deliveredToEmail}`
-                  : ""}
+                <div>
+                  Active invite created {formatDateTime(activeInvite.createdAt)} · expires{" "}
+                  {formatDateTime(activeInvite.expiresAt)}
+                  {activeInvite.deliveredToEmail
+                    ? ` · last sent to ${activeInvite.deliveredToEmail}`
+                    : ""}
+                </div>
+                <div style={{ marginTop: 8 }}>
+                  <button
+                    type="button"
+                    className="summary-rail-action"
+                    onClick={() => revokeInvite(activeInvite.id)}
+                    disabled={busy}
+                    title="Revoke this pending portal invite so the link can no longer be used"
+                  >
+                    {busy ? "Working…" : "Revoke invite"}
+                  </button>
+                </div>
               </div>
             ) : (
               <div style={{ marginTop: 8, fontSize: 13, color: "#4b5563" }}>

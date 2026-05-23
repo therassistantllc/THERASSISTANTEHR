@@ -224,6 +224,80 @@ export async function POST(request: Request) {
   }
 }
 
+export async function DELETE(request: Request) {
+  try {
+    const auth = await requirePermissionInRoute(PERMISSIONS.EDIT_PATIENT_DEMOGRAPHICS);
+    if (auth instanceof NextResponse) return auth;
+    const { organizationId } = auth;
+
+    const supabase = createServerSupabaseAdminClient();
+    if (!supabase) {
+      return NextResponse.json({ success: false, error: "Database connection not available" }, { status: 500 });
+    }
+
+    const { searchParams } = new URL(request.url);
+    const payload = (await request.json().catch(() => null)) as Row | null;
+    const inviteId = value(payload?.inviteId) || value(searchParams.get("inviteId"));
+    if (!inviteId) {
+      return NextResponse.json({ success: false, error: "inviteId is required" }, { status: 400 });
+    }
+
+    const { data: inviteRow, error: inviteErr } = await supabase
+      .from("portal_invites")
+      .select("id, organization_id, client_id, status")
+      .eq("id", inviteId)
+      .single();
+    if (inviteErr || !inviteRow) {
+      return NextResponse.json({ success: false, error: "Invite not found" }, { status: 404 });
+    }
+    const invite = inviteRow as Row;
+    if (value(invite.organization_id) !== organizationId) {
+      return NextResponse.json({ success: false, error: "Invite is not in your organization" }, { status: 403 });
+    }
+    if (value(invite.status) !== "pending") {
+      return NextResponse.json(
+        { success: false, error: "Only pending invites can be revoked." },
+        { status: 409 },
+      );
+    }
+
+    const clientId = value(invite.client_id);
+
+    const { error: updateErr } = await supabase
+      .from("portal_invites")
+      .update({ status: "revoked" })
+      .eq("id", inviteId)
+      .eq("status", "pending");
+    if (updateErr) throw updateErr;
+
+    // Only reset portal_status if the patient hasn't already activated their
+    // portal via a prior invite. Leaving an "active" patient as "not_invited"
+    // would misrepresent their access state.
+    const { data: clientRow } = await supabase
+      .from("clients")
+      .select("portal_status")
+      .eq("id", clientId)
+      .eq("organization_id", organizationId)
+      .single();
+    const currentStatus = value((clientRow as Row | null)?.portal_status);
+    if (currentStatus !== "active") {
+      await supabase
+        .from("clients")
+        .update({ portal_status: "not_invited" })
+        .eq("id", clientId)
+        .eq("organization_id", organizationId);
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("Portal invite revoke error:", error);
+    return NextResponse.json(
+      { success: false, error: error instanceof Error ? error.message : "Failed to revoke portal invite" },
+      { status: 500 },
+    );
+  }
+}
+
 export async function GET(request: Request) {
   try {
     const auth = await requirePermissionInRoute(PERMISSIONS.VIEW_PATIENT_CHART);
