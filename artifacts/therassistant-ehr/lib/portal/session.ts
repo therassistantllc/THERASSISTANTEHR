@@ -89,7 +89,7 @@ export async function setPortalSessionCookie(session: PortalSession): Promise<bo
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
-    path: "/portal",
+    path: "/",
     maxAge: SESSION_MAX_AGE_SECONDS,
   });
   return true;
@@ -103,7 +103,7 @@ export async function clearPortalSessionCookie(): Promise<void> {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
-    path: "/portal",
+    path: "/",
     maxAge: 0,
   });
 }

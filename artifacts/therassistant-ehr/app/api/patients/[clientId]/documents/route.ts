@@ -20,7 +20,7 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
 
     const { data: documents, error } = await supabase
       .from("documents")
-      .select("id, document_scope, document_type, title, file_name, mime_type, file_size_bytes, notes, filed_at, created_at, encounter_id, claim_id, mailroom_item_id, workqueue_item_id, storage_path")
+      .select("id, document_scope, document_type, title, file_name, mime_type, file_size_bytes, notes, filed_at, created_at, encounter_id, claim_id, mailroom_item_id, workqueue_item_id, storage_path, patient_visible")
       .eq("organization_id", organizationId)
       .eq("client_id", clientId)
       .is("archived_at", null)
@@ -45,6 +45,7 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
       mailroomItemId: doc.mailroom_item_id as string | null,
       workqueueItemId: doc.workqueue_item_id as string | null,
       storagePath: doc.storage_path as string | null,
+      patientVisible: Boolean(doc.patient_visible),
     }));
 
     return NextResponse.json({ success: true, documents: items, total: items.length });

@@ -78,6 +78,7 @@ type PortalData = {
     type: string;
     fileName: string | null;
     createdAt: string | null;
+    downloadHref: string;
   }>;
 };
 
@@ -124,6 +125,7 @@ async function loadPortalData(
       .select("id, title, document_type, file_name, created_at")
       .eq("organization_id", organizationId)
       .eq("client_id", clientId)
+      .eq("patient_visible", true)
       .is("archived_at", null)
       .order("created_at", { ascending: false })
       .limit(20),
@@ -180,6 +182,7 @@ async function loadPortalData(
     type: value(r.document_type) || "document",
     fileName: (r.file_name as string | null) ?? null,
     createdAt: (r.created_at as string | null) ?? null,
+    downloadHref: `/api/portal/documents/${value(r.id)}`,
   }));
 
   return {
@@ -240,6 +243,18 @@ const signOutBtn: React.CSSProperties = {
   padding: "6px 12px",
   fontSize: 13,
   cursor: "pointer",
+};
+
+const downloadBtnStyle: React.CSSProperties = {
+  background: "#1d4ed8",
+  color: "#ffffff",
+  border: "1px solid #1d4ed8",
+  borderRadius: 6,
+  padding: "6px 12px",
+  fontSize: 13,
+  fontWeight: 600,
+  textDecoration: "none",
+  whiteSpace: "nowrap",
 };
 
 const joinLinkStyle: React.CSSProperties = {
@@ -410,14 +425,17 @@ export default async function PatientPortalHomePage() {
                 <div style={mutedSmall}>
                   {doc.type.replace(/_/g, " ")}
                   {doc.createdAt ? ` · ${formatDate(doc.createdAt)}` : ""}
+                  {doc.fileName ? ` · ${doc.fileName}` : ""}
                 </div>
               </div>
-              <span style={mutedSmall}>{doc.fileName ?? ""}</span>
+              <a href={doc.downloadHref} style={downloadBtnStyle} download>
+                Download
+              </a>
             </div>
           ))
         )}
         <p style={{ ...mutedSmall, marginTop: 12 }}>
-          To request a copy of any document, please contact {practiceName}.
+          Only documents your care team has shared appear here. To request another document, please contact {practiceName}.
         </p>
       </section>
     </main>

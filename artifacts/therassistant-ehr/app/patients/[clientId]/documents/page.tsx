@@ -18,6 +18,7 @@ type DocItem = {
   encounterId: string | null;
   claimId: string | null;
   mailroomItemId: string | null;
+  patientVisible: boolean;
 };
 
 function formatDate(v: string | null | undefined) {
@@ -42,6 +43,32 @@ export default function DocumentsPage() {
   const [documents, setDocuments] = useState<DocItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [savingId, setSavingId] = useState<string | null>(null);
+
+  async function togglePatientVisible(docId: string, next: boolean) {
+    setSavingId(docId);
+    const prev = documents;
+    setDocuments((rows) =>
+      rows.map((d) => (d.id === docId ? { ...d, patientVisible: next } : d)),
+    );
+    try {
+      const r = await fetch(
+        `/api/patients/${clientId}/documents/${docId}?organizationId=${encodeURIComponent(orgId)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ patientVisible: next }),
+        },
+      );
+      const json = (await r.json()) as { success: boolean; error?: string };
+      if (!json.success) throw new Error(json.error ?? "Failed to update");
+    } catch (e: unknown) {
+      setDocuments(prev);
+      setError(e instanceof Error ? e.message : "Failed to update");
+    } finally {
+      setSavingId(null);
+    }
+  }
 
   useEffect(() => {
     if (!clientId || !orgId) return;
@@ -99,6 +126,7 @@ export default function DocumentsPage() {
                 <th>Size</th>
                 <th>Filed</th>
                 <th>Created</th>
+                <th>Patient portal</th>
                 <th>Links</th>
               </tr>
             </thead>
@@ -116,6 +144,17 @@ export default function DocumentsPage() {
                   <td>{formatSize(doc.fileSizeBytes)}</td>
                   <td>{doc.filedAt ? formatDate(doc.filedAt) : <span className="muted">Not filed</span>}</td>
                   <td>{formatDate(doc.createdAt)}</td>
+                  <td>
+                    <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+                      <input
+                        type="checkbox"
+                        checked={doc.patientVisible}
+                        disabled={savingId === doc.id}
+                        onChange={(e) => togglePatientVisible(doc.id, e.target.checked)}
+                      />
+                      {doc.patientVisible ? "Visible" : "Hidden"}
+                    </label>
+                  </td>
                   <td>
                     <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
                       {doc.encounterId && (
