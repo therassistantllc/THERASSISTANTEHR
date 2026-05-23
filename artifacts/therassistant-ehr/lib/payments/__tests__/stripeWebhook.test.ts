@@ -365,8 +365,258 @@ test("defaultStripeWebhookDeps is wired to real factories (regression guard)", (
   // engine. Cheap structural assertion that the default wiring exists.
   assert.equal(typeof defaultStripeWebhookDeps.getSupabase, "function");
   assert.equal(typeof defaultStripeWebhookDeps.commitPayment, "function");
+  assert.equal(typeof defaultStripeWebhookDeps.reversePayment, "function");
   assert.equal(typeof defaultStripeWebhookDeps.getSecret, "function");
 });
+
+/* -------------------------------------------------------------------------- */
+/* 5. charge.dispute.closed auto-reverse on lost (Task #173)                  */
+/* -------------------------------------------------------------------------- */
+
+test("dispute closed as LOST auto-reverses the matching client_payment and resolves the WQ", async () => {
+  const reverseCalls: Array<{ orgId: string; targetId: string; reason: string }> = [];
+  const wqUpdates: Array<Record<string, unknown>> = [];
+  const supabase = makeFakeSupabaseForDispute({
+    clientPayment: {
+      id: "cp_1",
+      organization_id: "org-1",
+      client_id: "client-1",
+      patient_invoice_id: "inv-1",
+    },
+    existingWorkqueueItem: { id: "wq_1", context_payload: { stripe_dispute_id: "du_lost" } },
+    onWorkqueueUpdate: (row) => wqUpdates.push(row),
+  });
+  const deps = makeDeps({
+    getSupabase: () => supabase as unknown as ReturnType<StripeWebhookDeps["getSupabase"]>,
+    reversePayment: async (input) => {
+      reverseCalls.push({
+        orgId: input.organizationId,
+        targetId: input.target.id,
+        reason: input.reason,
+      });
+      return {
+        ok: true,
+        reversed: true,
+        alreadyReversed: false,
+        ledgerEntriesWritten: 1,
+        workqueueItemsClosed: 0,
+        auditLogIds: ["audit-1"],
+        errors: [],
+      };
+    },
+  });
+
+  const body = JSON.stringify(disputeClosedEvent({ disputeId: "du_lost", chargeId: "ch_1", status: "lost", amount: 5000 }));
+  const { header } = signBody(body);
+  const res = await processStripeWebhook(body, header, deps);
+  assert.equal(res.status, 200);
+  const json = (await res.json()) as {
+    success: boolean;
+    workqueueItemId: string;
+    disputeStatus: string;
+    reversal: { attempted: boolean; ok: boolean; clientPaymentId: string };
+  };
+  assert.equal(json.success, true);
+  assert.equal(json.disputeStatus, "lost");
+  assert.equal(json.reversal.attempted, true);
+  assert.equal(json.reversal.ok, true);
+  assert.equal(json.reversal.clientPaymentId, "cp_1");
+  assert.equal(reverseCalls.length, 1, "exactly one reversal must fire");
+  assert.equal(reverseCalls[0].orgId, "org-1");
+  assert.equal(reverseCalls[0].targetId, "cp_1");
+  assert.match(reverseCalls[0].reason, /du_lost.*lost/);
+  assert.equal(wqUpdates.length, 1);
+  assert.equal(wqUpdates[0].status, "resolved", "WQ must be resolved when auto-reverse succeeds");
+  assert.match(
+    String(wqUpdates[0].description ?? ""),
+    /Auto-reversed client_payment cp_1/,
+    "WQ description must point at the reversal",
+  );
+});
+
+test("dispute closed as WON resolves the WQ and does NOT call reversePayment", async () => {
+  const reverseCalls: number[] = [];
+  const wqUpdates: Array<Record<string, unknown>> = [];
+  const supabase = makeFakeSupabaseForDispute({
+    clientPayment: {
+      id: "cp_2",
+      organization_id: "org-1",
+      client_id: "client-1",
+      patient_invoice_id: null,
+    },
+    existingWorkqueueItem: { id: "wq_2", context_payload: { stripe_dispute_id: "du_won" } },
+    onWorkqueueUpdate: (row) => wqUpdates.push(row),
+  });
+  const deps = makeDeps({
+    getSupabase: () => supabase as unknown as ReturnType<StripeWebhookDeps["getSupabase"]>,
+    reversePayment: async () => {
+      reverseCalls.push(1);
+      throw new Error("reversePayment must not be called for won disputes");
+    },
+  });
+
+  const body = JSON.stringify(disputeClosedEvent({ disputeId: "du_won", chargeId: "ch_2", status: "won", amount: 5000 }));
+  const { header } = signBody(body);
+  const res = await processStripeWebhook(body, header, deps);
+  assert.equal(res.status, 200);
+  const json = (await res.json()) as { reversal?: unknown; disputeStatus: string };
+  assert.equal(json.disputeStatus, "won");
+  assert.equal(json.reversal, undefined, "won disputes must not include a reversal block");
+  assert.equal(reverseCalls.length, 0);
+  assert.equal(wqUpdates[0].status, "resolved");
+});
+
+test("dispute closed as LOST leaves WQ in_progress when auto-reverse fails", async () => {
+  const wqUpdates: Array<Record<string, unknown>> = [];
+  const supabase = makeFakeSupabaseForDispute({
+    clientPayment: {
+      id: "cp_3",
+      organization_id: "org-1",
+      client_id: "client-1",
+      patient_invoice_id: null,
+    },
+    existingWorkqueueItem: { id: "wq_3", context_payload: { stripe_dispute_id: "du_fail" } },
+    onWorkqueueUpdate: (row) => wqUpdates.push(row),
+  });
+  const deps = makeDeps({
+    getSupabase: () => supabase as unknown as ReturnType<StripeWebhookDeps["getSupabase"]>,
+    reversePayment: async () => ({
+      ok: false,
+      reversed: false,
+      alreadyReversed: false,
+      ledgerEntriesWritten: 0,
+      workqueueItemsClosed: 0,
+      auditLogIds: [],
+      errors: [{ field: "ledger", message: "simulated DB outage" }],
+    }),
+  });
+
+  const body = JSON.stringify(disputeClosedEvent({ disputeId: "du_fail", chargeId: "ch_3", status: "lost", amount: 4200 }));
+  const { header } = signBody(body);
+  const res = await processStripeWebhook(body, header, deps);
+  assert.equal(res.status, 200);
+  assert.equal(wqUpdates.length, 1);
+  assert.equal(wqUpdates[0].status, "in_progress", "failed auto-reverse must NOT resolve the WQ");
+  assert.match(
+    String(wqUpdates[0].description ?? ""),
+    /Auto-reversal FAILED.*ledger: simulated DB outage/,
+  );
+});
+
+test("dispute closed as LOST resolves WQ when reversal returns alreadyReversed", async () => {
+  const wqUpdates: Array<Record<string, unknown>> = [];
+  const supabase = makeFakeSupabaseForDispute({
+    clientPayment: {
+      id: "cp_4",
+      organization_id: "org-1",
+      client_id: "client-1",
+      patient_invoice_id: null,
+    },
+    existingWorkqueueItem: { id: "wq_4", context_payload: { stripe_dispute_id: "du_idem" } },
+    onWorkqueueUpdate: (row) => wqUpdates.push(row),
+  });
+  const deps = makeDeps({
+    getSupabase: () => supabase as unknown as ReturnType<StripeWebhookDeps["getSupabase"]>,
+    reversePayment: async () => ({
+      ok: true,
+      reversed: false,
+      alreadyReversed: true,
+      ledgerEntriesWritten: 0,
+      workqueueItemsClosed: 0,
+      auditLogIds: [],
+      errors: [],
+    }),
+  });
+
+  const body = JSON.stringify(disputeClosedEvent({ disputeId: "du_idem", chargeId: "ch_4", status: "lost", amount: 100 }));
+  const { header } = signBody(body);
+  const res = await processStripeWebhook(body, header, deps);
+  assert.equal(res.status, 200);
+  assert.equal(wqUpdates[0].status, "resolved");
+  assert.match(
+    String(wqUpdates[0].description ?? ""),
+    /was already reversed/,
+  );
+});
+
+function disputeClosedEvent(args: {
+  disputeId: string;
+  chargeId: string;
+  status: string;
+  amount: number;
+}) {
+  return {
+    id: `evt_${args.disputeId}`,
+    type: "charge.dispute.closed",
+    data: {
+      object: {
+        id: args.disputeId,
+        amount: args.amount,
+        currency: "usd",
+        charge: args.chargeId,
+        status: args.status,
+        reason: "fraudulent",
+      },
+    },
+  };
+}
+
+/**
+ * Minimal fake supabase that models the surface handleDisputeClosed
+ * touches: client_payments lookup, workqueue_items lookup-by-dispute-id,
+ * and workqueue_items update. Reversal itself is injected via
+ * deps.reversePayment so this fake does NOT need to model the engine's
+ * many writes.
+ */
+function makeFakeSupabaseForDispute(args: {
+  clientPayment: {
+    id: string;
+    organization_id: string;
+    client_id: string | null;
+    patient_invoice_id: string | null;
+  } | null;
+  existingWorkqueueItem: { id: string; context_payload: Record<string, unknown> } | null;
+  onWorkqueueUpdate?: (row: Record<string, unknown>) => void;
+}) {
+  return {
+    from(table: string) {
+      if (table === "client_payments") {
+        // .select(...).eq.eq.is.maybeSingle()  (by external_payment_id)
+        // .select(...).eq.is.maybeSingle()     (by stripe_charge_id)
+        const chain = {
+          eq: () => chain,
+          is: () => chain,
+          maybeSingle: async () => ({ data: args.clientPayment, error: null }),
+        };
+        return { select: () => chain };
+      }
+      if (table === "workqueue_items") {
+        return {
+          select: () => {
+            // findDisputeWorkqueueItem chain:
+            //   .select.eq.eq.is.order.limit  -> Array<row>
+            const arr = args.existingWorkqueueItem ? [args.existingWorkqueueItem] : [];
+            const chain = {
+              eq: () => chain,
+              is: () => chain,
+              order: () => chain,
+              limit: async () => ({ data: arr, error: null }),
+            };
+            return chain;
+          },
+          update(row: Record<string, unknown>) {
+            args.onWorkqueueUpdate?.(row);
+            const chain = { eq: () => chain };
+            // .update().eq().eq() resolves to {error:null}
+            return Object.assign(Promise.resolve({ error: null }), chain);
+          },
+          insert: async () => ({ error: null }),
+        };
+      }
+      throw new Error(`Unexpected from(${table}) in dispute fake`);
+    },
+  };
+}
 
 /* -------------------------------------------------------------------------- */
 /* Test helpers                                                                */

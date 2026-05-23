@@ -18,8 +18,13 @@
  *   - `charge.dispute.created`    (Task #136)
  *       → open a high-priority workqueue item linked to the original
  *         client_payment
- *   - `charge.dispute.closed`     (Task #136)
- *       → resolve the open dispute workqueue item with the final status
+ *   - `charge.dispute.closed`     (Task #136 / #173)
+ *       → resolve the open dispute workqueue item with the final status.
+ *         When status='lost', also auto-reverse the matching client_payment
+ *         via reversePostedPayment (Task #173) so the patient ledger
+ *         matches Stripe (Stripe has debited us for the original charge).
+ *         reversePostedPayment opens a pending patient refund row for AR.
+ *         Won/warning_closed/etc. do not move money — no financial action.
  *
  * Idempotency: payment posting collapses on the unique
  * (organization_id, payment_method='stripe', external_payment_id) index;
@@ -52,6 +57,7 @@ import {
   commitPatientPayment,
   confirmPatientRefund,
   recordPatientRefund,
+  reversePostedPayment,
   type PatientPaymentApplyTo,
   type PostingActor,
 } from "@/lib/payments/postingEngine";
@@ -280,6 +286,12 @@ async function writeUnmatchedWorkqueueItem(
 export interface StripeWebhookDeps {
   getSupabase: () => ReturnType<typeof createServerSupabaseAdminClient>;
   commitPayment: typeof commitPatientPayment;
+  /**
+   * Injected for testability — the live wiring is `reversePostedPayment`.
+   * Used by handleDisputeClosed to auto-reverse a client_payment when a
+   * dispute closes as lost (Task #173).
+   */
+  reversePayment: typeof reversePostedPayment;
   getSecret: () => string | undefined;
   now?: () => number;
 }
@@ -287,6 +299,7 @@ export interface StripeWebhookDeps {
 export const defaultStripeWebhookDeps: StripeWebhookDeps = {
   getSupabase: () => createServerSupabaseAdminClient(),
   commitPayment: commitPatientPayment,
+  reversePayment: reversePostedPayment,
   getSecret: () => process.env.STRIPE_WEBHOOK_SECRET?.trim(),
 };
 
@@ -337,7 +350,7 @@ export async function processStripeWebhook(
     case "charge.dispute.created":
       return handleDisputeCreated(event, supabase);
     case "charge.dispute.closed":
-      return handleDisputeClosed(event, supabase);
+      return handleDisputeClosed(event, supabase, deps);
     default:
       // Acknowledge so Stripe doesn't retry; we just don't act on other types.
       return NextResponse.json({ success: true, ignored: true, type: eventType });
@@ -874,6 +887,7 @@ async function handleDisputeCreated(
 async function handleDisputeClosed(
   event: StripeEvent,
   supabase: SupabaseAdmin,
+  deps: StripeWebhookDeps,
 ): Promise<Response> {
   const dispute = event.data?.object as StripeDisputeLike | undefined;
   if (!dispute || !dispute.id) {
@@ -889,28 +903,110 @@ async function handleDisputeClosed(
   const wqId = await findDisputeWorkqueueItem(supabase, organizationId, dispute.id);
   const status = String(dispute.status ?? "closed");
   const isWon = status === "won";
+  const isLost = status === "lost";
+
+  // When the dispute is LOST, money has actually left the building (Stripe
+  // debits us for the original charge + fee). The matching client_payment
+  // must be reversed so the patient ledger matches Stripe — otherwise the
+  // invoice still reads as paid even though we no longer have the funds.
+  // Won/warning_closed/etc. do not move money, so no financial action.
+  let reversalInfo: {
+    attempted: boolean;
+    ok: boolean;
+    alreadyReversed: boolean;
+    clientPaymentId: string | null;
+    error: string | null;
+  } = { attempted: false, ok: false, alreadyReversed: false, clientPaymentId: null, error: null };
+
+  if (isLost && cp?.id) {
+    reversalInfo.attempted = true;
+    reversalInfo.clientPaymentId = cp.id;
+    try {
+      const rev = await deps.reversePayment(
+        {
+          organizationId,
+          target: { kind: "client_payment", id: cp.id },
+          reason: `Stripe dispute ${dispute.id} closed as lost`,
+          actor: WEBHOOK_ACTOR,
+        },
+        supabase,
+      );
+      reversalInfo.ok = rev.ok;
+      reversalInfo.alreadyReversed = rev.alreadyReversed;
+      if (!rev.ok) {
+        reversalInfo.error =
+          rev.errors.map((e) => `${e.field}: ${e.message}`).join("; ") || "Unknown reversal failure";
+      }
+    } catch (err) {
+      reversalInfo.error = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   if (wqId) {
     const now = new Date().toISOString();
+    // Resolve the WQ item when the dispute is won (no work left) OR when
+    // the dispute is lost AND the auto-reversal succeeded (the financial
+    // obligation is now tracked on the new pending patient refund row
+    // reversePostedPayment opened). Otherwise leave it open/in_progress
+    // so a biller picks it up.
+    const resolved = isWon || (isLost && (reversalInfo.ok || reversalInfo.alreadyReversed));
+    const descriptionParts = [`Stripe dispute ${dispute.id} closed with status: ${status}.`];
+    if (isLost) {
+      // Check alreadyReversed BEFORE ok — the engine sets both true for
+      // idempotent re-deliveries, but the user-facing note should be the
+      // more specific "was already reversed".
+      if (reversalInfo.alreadyReversed && reversalInfo.clientPaymentId) {
+        descriptionParts.push(
+          `client_payment ${reversalInfo.clientPaymentId} was already reversed before this dispute closed.`,
+        );
+      } else if (reversalInfo.ok && reversalInfo.clientPaymentId) {
+        descriptionParts.push(
+          `Auto-reversed client_payment ${reversalInfo.clientPaymentId}; a pending patient refund row was opened to track the AR write-off.`,
+        );
+      } else if (reversalInfo.attempted) {
+        descriptionParts.push(
+          `Auto-reversal FAILED (${reversalInfo.error ?? "no detail"}); biller must reverse manually.`,
+        );
+      } else {
+        descriptionParts.push(
+          `No matching client_payment found for charge ${chargeId ?? "n/a"}; biller must reconcile manually.`,
+        );
+      }
+    }
     await supabase
       .from("workqueue_items")
       .update({
-        status: isWon ? "resolved" : "in_progress",
-        resolved_at: isWon ? now : null,
+        status: resolved ? "resolved" : "in_progress",
+        resolved_at: resolved ? now : null,
         updated_at: now,
-        description: `Stripe dispute ${dispute.id} closed with status: ${status}.`,
+        description: descriptionParts.join(" "),
       })
       .eq("id", wqId)
       .eq("organization_id", organizationId);
-    return NextResponse.json({ success: true, workqueueItemId: wqId, disputeStatus: status });
+    return NextResponse.json({
+      success: true,
+      workqueueItemId: wqId,
+      disputeStatus: status,
+      reversal: isLost ? reversalInfo : undefined,
+    });
   }
   // No prior WQ — open one now for visibility (e.g. created event missed).
   const amountDollars = (Number(dispute.amount ?? 0) / 100).toFixed(2);
+  const reversalNote = isLost
+    ? reversalInfo.ok
+      ? ` Auto-reversed client_payment ${reversalInfo.clientPaymentId}; pending patient refund row opened.`
+      : reversalInfo.alreadyReversed
+        ? ` client_payment ${reversalInfo.clientPaymentId} was already reversed.`
+        : reversalInfo.attempted
+          ? ` Auto-reversal FAILED (${reversalInfo.error ?? "no detail"}); biller must reverse manually.`
+          : ` No matching client_payment found; biller must reconcile manually.`
+    : "";
   const queued = await writeUnmatchedWorkqueueItem(supabase, {
     organizationId,
     clientId: cp?.client_id ?? null,
     reason: `Stripe dispute closed (${status})`,
     title: `Stripe dispute $${amountDollars} closed (${status})`,
-    description: `Stripe dispute ${dispute.id} on charge ${chargeId ?? "n/a"} closed with status ${status}.`,
+    description: `Stripe dispute ${dispute.id} on charge ${chargeId ?? "n/a"} closed with status ${status}.${reversalNote}`,
     sourceObjectId: cp?.id ?? null,
     priority: isWon ? "normal" : "urgent",
     workType: "stripe_dispute_review",
@@ -921,6 +1017,7 @@ async function handleDisputeClosed(
       amount_cents: Number(dispute.amount ?? 0),
       dispute_status: status,
       event_id: event.id ?? null,
+      auto_reversal: isLost ? reversalInfo : undefined,
     },
   });
   if (!queued) {
@@ -929,7 +1026,12 @@ async function handleDisputeClosed(
       { status: 503 },
     );
   }
-  return NextResponse.json({ success: true, disputeId: dispute.id, disputeStatus: status });
+  return NextResponse.json({
+    success: true,
+    disputeId: dispute.id,
+    disputeStatus: status,
+    reversal: isLost ? reversalInfo : undefined,
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
