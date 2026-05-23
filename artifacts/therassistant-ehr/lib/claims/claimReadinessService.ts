@@ -240,6 +240,41 @@ export async function createProfessionalClaimDraft(
     }
   }
 
+  // Reference-table validation: reject any DX or CPT/HCPCS not present
+  // in the seeded code tables, so claim creation can't introduce unbillable codes.
+  const dxToCheck = [...new Set(input.diagnosisCodes.map((c) => normalizeText(c).toUpperCase()).filter(Boolean))];
+  if (dxToCheck.length > 0) {
+    const { data: dxRows } = await supabase
+      .from("diagnosis_codes")
+      .select("code")
+      .eq("is_active", true)
+      .in("code", dxToCheck);
+    const known = new Set((dxRows ?? []).map((r: DbRecord) => String(r.code).toUpperCase()));
+    for (const [index, raw] of input.diagnosisCodes.entries()) {
+      const upper = normalizeText(raw).toUpperCase();
+      if (upper && !known.has(upper)) {
+        errors.push({ field: `diagnosis_codes.${index}`, message: `Unknown ICD-10 code: ${upper}` });
+      }
+    }
+  }
+  const procToCheck = [...new Set(
+    input.serviceLines.map((l) => normalizeText(l.procedureCode).toUpperCase()).filter(Boolean),
+  )];
+  if (procToCheck.length > 0) {
+    const { data: pxRows } = await supabase
+      .from("procedure_codes")
+      .select("code")
+      .eq("is_active", true)
+      .in("code", procToCheck);
+    const known = new Set((pxRows ?? []).map((r: DbRecord) => String(r.code).toUpperCase()));
+    for (const [index, line] of input.serviceLines.entries()) {
+      const upper = normalizeText(line.procedureCode).toUpperCase();
+      if (upper && !known.has(upper)) {
+        errors.push({ field: `service_lines.${index}.procedure_code`, message: `Unknown CPT/HCPCS code: ${upper}` });
+      }
+    }
+  }
+
   const { data: client, error: clientError } = await supabase
     .from("clients")
     .select("id, organization_id, first_name, last_name, date_of_birth, sex_at_birth, address_line_1, city, state, postal_code")
@@ -419,6 +454,42 @@ export async function validateProfessionalClaimReadiness(
     .select("id, line_number, service_date_from, procedure_code, charge_amount, units, diagnosis_pointers, place_of_service, rendering_provider_npi")
     .eq("claim_id", claimId)
     .order("line_number", { ascending: true });
+
+  // Reference-table validation: reject claims whose stored DX or CPT/HCPCS codes
+  // are not in the seeded code tables (catches data loaded outside the UI).
+  const dxOnClaim = Array.isArray(claim.diagnosis_codes)
+    ? [...new Set((claim.diagnosis_codes as unknown[]).map((c) => normalizeText(c).toUpperCase()).filter(Boolean))]
+    : [];
+  if (dxOnClaim.length > 0) {
+    const { data: dxRows } = await supabase
+      .from("diagnosis_codes")
+      .select("code")
+      .eq("is_active", true)
+      .in("code", dxOnClaim);
+    const known = new Set((dxRows ?? []).map((r: DbRecord) => String(r.code).toUpperCase()));
+    for (const code of dxOnClaim) {
+      if (!known.has(code)) {
+        errors.push({ field: "claim.diagnosis_codes", message: `Unknown ICD-10 code: ${code}` });
+      }
+    }
+  }
+  const procOnClaim = Array.isArray(lines)
+    ? [...new Set((lines as DbRecord[]).map((l) => normalizeText(l.procedure_code).toUpperCase()).filter(Boolean))]
+    : [];
+  if (procOnClaim.length > 0) {
+    const { data: pxRows } = await supabase
+      .from("procedure_codes")
+      .select("code")
+      .eq("is_active", true)
+      .in("code", procOnClaim);
+    const known = new Set((pxRows ?? []).map((r: DbRecord) => String(r.code).toUpperCase()));
+    for (const line of (lines ?? []) as DbRecord[]) {
+      const code = normalizeText(line.procedure_code).toUpperCase();
+      if (code && !known.has(code)) {
+        errors.push({ field: `service_lines.${line.line_number}.procedure_code`, message: `Unknown CPT/HCPCS code: ${code}` });
+      }
+    }
+  }
 
   if (!lines || lines.length === 0) {
     errors.push({ field: "service_lines", message: "Claim requires at least one service line" });

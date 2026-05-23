@@ -73,6 +73,7 @@ export default function CodeCombobox({
   const [options, setOptions] = useState<CodeOption[]>([]);
   const [highlight, setHighlight] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [resolvedDescription, setResolvedDescription] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const reqIdRef = useRef(0);
@@ -81,6 +82,32 @@ export default function CodeCombobox({
   useEffect(() => {
     setQuery(value);
   }, [value]);
+
+  // Resolve description for the current value so preloaded codes show context
+  // (the canonical code stays in the input; description renders alongside).
+  useEffect(() => {
+    const upper = value.trim().toUpperCase();
+    if (!upper) {
+      setResolvedDescription(null);
+      return;
+    }
+    const cached = validCache[kind].get(upper);
+    if (cached) {
+      setResolvedDescription(cached.description);
+      return;
+    }
+    if (invalidCache[kind].has(upper)) {
+      setResolvedDescription(null);
+      return;
+    }
+    let cancelled = false;
+    void validateCode(kind, upper).then((opt) => {
+      if (!cancelled) setResolvedDescription(opt ? opt.description : null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [value, kind]);
 
   // Click-outside closes dropdown.
   useEffect(() => {
@@ -163,6 +190,8 @@ export default function CodeCombobox({
     [style, borderColor],
   );
 
+  const hintText = !open && resolvedDescription && value.trim() ? resolvedDescription : null;
+
   return (
     <div ref={containerRef} style={{ position: "relative", width: "100%" }}>
       <input
@@ -173,7 +202,7 @@ export default function CodeCombobox({
         placeholder={placeholder}
         aria-label={ariaLabel}
         aria-invalid={invalid ? true : undefined}
-        title={invalid ? invalidTitle : undefined}
+        title={hintText ? `${value.trim().toUpperCase()} — ${hintText}` : invalid ? invalidTitle : undefined}
         autoComplete="off"
         spellCheck={false}
         onFocus={() => setOpen(true)}
@@ -185,6 +214,22 @@ export default function CodeCombobox({
         }}
         onKeyDown={handleKey}
       />
+      {hintText ? (
+        <div
+          style={{
+            marginTop: 2,
+            fontSize: 10.5,
+            color: "#64748B",
+            lineHeight: 1.3,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+          title={hintText}
+        >
+          {hintText}
+        </div>
+      ) : null}
       {open ? (
         <div
           role="listbox"
