@@ -128,6 +128,16 @@ export function validatePatientPayment(input: CommitPatientPaymentInput): Valida
   }
   if (input.method === "transferred_balance") {
     const tf = input.transferFrom;
+    if (tf && tf.fromInvoiceId && tf.fromClaimId) {
+      // Exactly-one-source invariant: posting against BOTH would double-debit
+      // because the commit step adjusts each named source by the full amount.
+      blocking.push({
+        severity: "blocking",
+        code: "transfer_source_ambiguous",
+        field: "transferFrom",
+        message: "transferred_balance must specify exactly one of fromInvoiceId or fromClaimId, not both.",
+      });
+    }
     if (!tf || (!tf.fromInvoiceId && !tf.fromClaimId)) {
       blocking.push({
         severity: "blocking",
