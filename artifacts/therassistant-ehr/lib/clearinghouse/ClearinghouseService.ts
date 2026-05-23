@@ -1,6 +1,7 @@
 // File: lib/clearinghouse/ClearinghouseService.ts
 import { MockClearinghouseAdapter } from "@/lib/clearinghouse/MockClearinghouseAdapter";
 import { resolveAttributionRouting } from "@/lib/clearinghouse/attributionRouting";
+import { buildBenefitSegmentRow } from "@/lib/clearinghouse/buildBenefitSegmentRow";
 import { attributeResponseToPatient } from "@/lib/edi/availity270/attribution";
 import { createServerSupabaseAdminClient as createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import type {
@@ -349,39 +350,19 @@ export class ClearinghouseService {
     const benefitSegments = result.normalized.benefitSegments ?? [];
     if (benefitSegments.length > 0 && eligibilityResp.data?.id) {
       const checkId = String(eligibilityResp.data.id);
-      const segmentRows = benefitSegments.map((s) => ({
-        eligibility_check_id: checkId,
-        organization_id: organizationId,
-        client_id: patient.id,
-        payer_id: result.normalized.payerId ?? null,
-        payer_name: result.normalized.payerName ?? null,
-        service_type_code: s.serviceTypeCode ?? null,
-        benefit_information_code: s.eligibilityCode,
-        benefit_description:
-          (s.raw && typeof s.raw === "object" && "eligibilityCodeMeaning" in (s.raw as Record<string, unknown>)
-            ? String((s.raw as Record<string, unknown>).eligibilityCodeMeaning)
-            : null) ?? null,
-        coverage_level_code: s.coverageLevelCode ?? null,
-        insurance_type_code: s.insuranceTypeCode ?? null,
-        plan_coverage_description: s.planCoverageDescription ?? null,
-        time_period_qualifier: s.timePeriodQualifier ?? null,
-        monetary_amount: s.monetaryAmount ?? null,
-        percent_amount: s.percent ?? null,
-        quantity_qualifier: s.quantityQualifier ?? null,
-        quantity: s.quantity ?? null,
-        authorization_or_certification_required: s.authorizationRequired ?? null,
-        in_plan_network_indicator: s.inPlanNetworkCode ?? null,
-        messages: s.messageText ? [s.messageText] : [],
-        raw_eb_segment: s.raw ?? {},
-        // Phase 5 categorization columns.
-        segment_index: s.segmentIndex,
-        category: s.category,
-        is_remaining: s.isRemaining,
-        is_in_network: s.isInNetwork ?? null,
-        benefit_tier: s.benefitTier ?? null,
-        telemedicine_flag: s.telemedicineFlag ?? null,
-        message_text: s.messageText ?? null,
-      }));
+      // Phase 6 — child rows MUST follow the parent eligibility_check's
+      // routed owner (persistedClientId) so dependent benefits are not
+      // cross-attributed to the subscriber chart (CAQH CORE vEB.1.0).
+      const segmentRows = benefitSegments.map((s) =>
+        buildBenefitSegmentRow({
+          eligibilityCheckId: checkId,
+          organizationId,
+          routedClientId: persistedClientId,
+          payerId: result.normalized.payerId ?? null,
+          payerName: result.normalized.payerName ?? null,
+          segment: s,
+        }),
+      );
       const segResp = await supabase
         .from("eligibility_benefit_segments")
         .insert(segmentRows);
