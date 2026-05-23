@@ -211,8 +211,10 @@ type NoteSummary = {
 
 type DocumentSummary = {
   id: string;
+  type?: string | null;
   title?: string | null;
   fileName?: string | null;
+  filedAt?: string | null;
   createdAt?: string | null;
   mailroomItemId?: string | null;
 };
@@ -1656,6 +1658,56 @@ export default function PatientChartClient({
             })}
           </div>
         ) : null}
+      </section>
+
+      <section className="panel" style={{ marginBottom: "16px" }}>
+        <h2>Mailroom Documents</h2>
+        {(() => {
+          const mailroomDocs = details.documents.filter((d) => !!d.mailroomItemId);
+          if (mailroomDocs.length === 0) {
+            return (
+              <p className="muted" style={{ margin: 0 }}>
+                No mailroom documents have been filed to this patient yet.
+              </p>
+            );
+          }
+          return (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>File / Title</th>
+                  <th>Type</th>
+                  <th>Filed</th>
+                  <th aria-label="Open" />
+                </tr>
+              </thead>
+              <tbody>
+                {mailroomDocs.map((doc) => {
+                  const href = doc.mailroomItemId
+                    ? `/mailroom/${doc.mailroomItemId}?organizationId=${encodeURIComponent(organizationId)}`
+                    : null;
+                  return (
+                    <tr key={doc.id}>
+                      <td>
+                        <strong>{doc.title ?? doc.fileName ?? "Untitled"}</strong>
+                        {doc.title && doc.fileName ? (
+                          <div className="muted" style={{ fontSize: 12 }}>{doc.fileName}</div>
+                        ) : null}
+                      </td>
+                      <td>{doc.type ?? dash}</td>
+                      <td>{doc.filedAt ? formatDate(doc.filedAt) : (doc.createdAt ? formatDate(doc.createdAt) : dash)}</td>
+                      <td style={{ textAlign: "right" }}>
+                        {href ? (
+                          <Link className="button button-secondary" href={href}>Open</Link>
+                        ) : null}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          );
+        })()}
       </section>
 
       <section id="cases-editor" className="panel" style={{ marginBottom: "16px" }}>

@@ -60,6 +60,17 @@ type NoteTemplate = {
   is_default: boolean;
 };
 
+type EncounterMailroomDocument = {
+  id: string;
+  type: string | null;
+  title: string | null;
+  fileName: string | null;
+  mimeType: string | null;
+  filedAt: string | null;
+  createdAt: string | null;
+  mailroomItemId: string | null;
+};
+
 export default function EncounterNoteClient({ encounterId }: { encounterId: string }) {
   const organizationId = useMemo(() => getOrganizationId(), []);
   const [summary, setSummary] = useState<EncounterSummary | null>(null);
@@ -73,6 +84,7 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
   const [error, setError] = useState<string | null>(null);
   const [templates, setTemplates] = useState<NoteTemplate[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
+  const [mailroomDocs, setMailroomDocs] = useState<EncounterMailroomDocument[]>([]);
 
   const finalized = useMemo(
     () => summary?.encounter?.encounter_status === "signed" || summary?.clinicalNote?.note_status === "signed",
@@ -142,6 +154,28 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadEncounter();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [encounterId, organizationId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadDocs() {
+      if (!organizationId) return;
+      try {
+        const response = await fetch(
+          `/api/encounters/${encounterId}/documents?organizationId=${encodeURIComponent(organizationId)}`,
+          { cache: "no-store" },
+        );
+        const json = (await response.json()) as { success?: boolean; documents?: EncounterMailroomDocument[] };
+        if (cancelled) return;
+        if (json.success && Array.isArray(json.documents)) setMailroomDocs(json.documents);
+      } catch {
+        /* mailroom docs are best-effort */
+      }
+    }
+    loadDocs();
+    return () => {
+      cancelled = true;
+    };
   }, [encounterId, organizationId]);
 
   useEffect(() => {
@@ -372,6 +406,49 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
               </div>
             </article>
           ) : null}
+          <article className="panel">
+            <h2>Mailroom Documents</h2>
+            {mailroomDocs.length === 0 ? (
+              <p className="muted" style={{ margin: 0 }}>
+                No mailroom documents have been filed to this encounter yet.
+              </p>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>File / Title</th>
+                    <th>Type</th>
+                    <th>Filed</th>
+                    <th aria-label="Open" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {mailroomDocs.map((doc) => {
+                    const href = doc.mailroomItemId
+                      ? `/mailroom/${doc.mailroomItemId}?organizationId=${encodeURIComponent(organizationId)}`
+                      : null;
+                    return (
+                      <tr key={doc.id}>
+                        <td>
+                          <strong>{doc.title ?? doc.fileName ?? "Untitled"}</strong>
+                          {doc.title && doc.fileName ? (
+                            <div className="muted" style={{ fontSize: 12 }}>{doc.fileName}</div>
+                          ) : null}
+                        </td>
+                        <td>{doc.type ?? "—"}</td>
+                        <td>{formatDate(doc.filedAt ?? doc.createdAt)}</td>
+                        <td style={{ textAlign: "right" }}>
+                          {href ? (
+                            <Link className="button button-secondary" href={href}>Open</Link>
+                          ) : null}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </article>
           <SoapNoteEditor data={soapNote} onChange={setSoapNote} disabled={finalized} />
           <DiagnosisPicker diagnoses={diagnoses} onChange={setDiagnoses} disabled={finalized} />
           <CptCodePanel serviceLines={serviceLines} onChange={setServiceLines} disabled={finalized} serviceDate={encounter.service_date || undefined} />
