@@ -107,6 +107,47 @@ export default function ClinicianAgendaClient() {
   const [error, setError] = useState<string | null>(null);
   const [eligibilityChecking, setEligibilityChecking] = useState<Record<string, boolean>>({});
   const [eligibilityResults, setEligibilityResults] = useState<Record<string, string>>({});
+  const [joiningTelehealth, setJoiningTelehealth] = useState<Record<string, boolean>>({});
+  const [telehealthMessages, setTelehealthMessages] = useState<Record<string, string>>({});
+
+  const joinTelehealth = useCallback(async (item: AgendaItem) => {
+    setJoiningTelehealth((prev) => ({ ...prev, [item.appointmentId]: true }));
+    setTelehealthMessages((prev) => ({ ...prev, [item.appointmentId]: "" }));
+    try {
+      const res = await fetch(`/api/telehealth/appointments/${item.appointmentId}/join`, { method: "POST" });
+      const json = (await res.json()) as {
+        success?: boolean;
+        joinUrl?: string;
+        hostUrl?: string | null;
+        warning?: string;
+        error?: string;
+        hint?: string;
+        requiresConnect?: boolean;
+        platform?: string | null;
+      };
+      if (!res.ok || !json.success || !json.joinUrl) {
+        const msg =
+          json.error ??
+          (json.requiresConnect
+            ? `Connect ${json.platform ?? "telehealth"} in Settings → Providers first.`
+            : "Could not start meeting.");
+        setTelehealthMessages((prev) => ({ ...prev, [item.appointmentId]: msg }));
+        return;
+      }
+      if (json.warning) {
+        setTelehealthMessages((prev) => ({ ...prev, [item.appointmentId]: json.warning! }));
+      }
+      const url = json.hostUrl ?? json.joinUrl;
+      if (typeof window !== "undefined") window.open(url, "_blank", "noopener,noreferrer");
+    } catch (e) {
+      setTelehealthMessages((prev) => ({
+        ...prev,
+        [item.appointmentId]: e instanceof Error ? e.message : "Network error joining meeting.",
+      }));
+    } finally {
+      setJoiningTelehealth((prev) => ({ ...prev, [item.appointmentId]: false }));
+    }
+  }, []);
 
   const organizationId = useMemo(() => getOrganizationId(), []);
 
@@ -247,6 +288,19 @@ export default function ClinicianAgendaClient() {
                   ) : null}
                   {item.clientId ? <a className="button button-secondary" href={`/clients/${item.clientId}/appointments`}>Schedule Follow-up</a> : null}
                   {item.clientId ? <a className="button" href={`/billing/workqueue?clientId=${item.clientId}&appointmentId=${item.appointmentId}`}>Route to Biller</a> : null}
+                  {(item.serviceLocation === "telehealth" || item.telehealthUrl) ? (
+                    <button
+                      className="button button-primary"
+                      type="button"
+                      disabled={joiningTelehealth[item.appointmentId]}
+                      onClick={() => void joinTelehealth(item)}
+                    >
+                      {joiningTelehealth[item.appointmentId] ? "Joining…" : "Join Telehealth"}
+                    </button>
+                  ) : null}
+                  {telehealthMessages[item.appointmentId] ? (
+                    <span className="status muted-text">{telehealthMessages[item.appointmentId]}</span>
+                  ) : null}
                   <button
                     className="button button-secondary"
                     type="button"

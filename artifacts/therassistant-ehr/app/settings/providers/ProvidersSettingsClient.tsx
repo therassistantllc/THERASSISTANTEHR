@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 
+type TelehealthPlatform = "zoom" | "google_meet";
+
 type CredentialingRecord = {
   id: string;
   provider_name: string;
@@ -17,8 +19,25 @@ type CredentialingRecord = {
   payer_revalidation_date: string | null;
   telehealth_url: string | null;
   stripe_payment_link_url: string | null;
+  default_telehealth_platform: TelehealthPlatform | null;
   is_active: boolean;
   updated_at: string;
+};
+
+type TelehealthConnection = {
+  platform: TelehealthPlatform;
+  connectionId: string;
+  accountEmail: string | null;
+  status: string;
+  expiresAt: string | null;
+  lastError: string | null;
+};
+
+type TelehealthConnectionsResponse = {
+  success?: boolean;
+  error?: string;
+  platformStatus?: Record<TelehealthPlatform, { configured: boolean; missingEnv: string[] }>;
+  connections?: TelehealthConnection[];
 };
 
 function getOrganizationId() {
@@ -82,6 +101,8 @@ export default function ProvidersSettingsClient() {
 
       {!organizationId && <div className="alert-panel">No organization context.</div>}
       {error && <div className="alert-panel">{error}</div>}
+
+      <TelehealthConnectionsPanel />
 
       {warnings.length > 0 && (
         <div className="alert-panel">
@@ -162,6 +183,29 @@ function ProviderCard({
   const [stripeUrl, setStripeUrl] = useState(provider.stripe_payment_link_url ?? "");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [defaultPlatform, setDefaultPlatform] = useState<TelehealthPlatform | "">(
+    provider.default_telehealth_platform ?? "",
+  );
+  const [savingDefault, setSavingDefault] = useState(false);
+
+  const updateDefaultPlatform = async (next: TelehealthPlatform | "") => {
+    setSavingDefault(true);
+    try {
+      const res = await fetch(`/api/settings/telehealth/default`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ providerId: provider.id, platform: next === "" ? null : next }),
+      });
+      const json = (await res.json()) as { success?: boolean; error?: string };
+      if (!res.ok || !json.success) throw new Error(json.error ?? "Failed to update default platform");
+      setDefaultPlatform(next);
+      onSaved({ id: provider.id, default_telehealth_platform: next === "" ? null : next });
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : "Failed to update default platform");
+    } finally {
+      setSavingDefault(false);
+    }
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -302,7 +346,127 @@ function ProviderCard({
             </div>
           </div>
         )}
+
+        <div style={{ marginTop: "var(--space-3)", paddingTop: "var(--space-3)", borderTop: "1px dashed var(--border-default, #e2e8f0)" }}>
+          <strong style={{ fontSize: "var(--text-sm)" }}>Default Telehealth Platform</strong>
+          <div style={{ marginTop: 6, fontSize: 12, color: "var(--text-secondary)" }}>
+            Used when staff click Join Telehealth — a meeting is auto-created on the chosen platform if the clinician is connected. Falls back to the static URL above when no platform is set or no connection exists.
+          </div>
+          <select
+            value={defaultPlatform}
+            disabled={savingDefault}
+            onChange={(e) => void updateDefaultPlatform(e.target.value as TelehealthPlatform | "")}
+            style={{ marginTop: 6, padding: "6px 10px", border: "1px solid var(--border-default, #d8e1e9)", borderRadius: 4, fontSize: 13 }}
+          >
+            <option value="">— None (use static URL) —</option>
+            <option value="zoom">Zoom</option>
+            <option value="google_meet">Google Meet</option>
+          </select>
+        </div>
       </div>
     </article>
+  );
+}
+
+function TelehealthConnectionsPanel() {
+  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<TelehealthConnectionsResponse | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const refresh = () => {
+    setLoading(true);
+    fetch("/api/telehealth/connections")
+      .then((r) => r.json())
+      .then((json: TelehealthConnectionsResponse) => setData(json))
+      .catch((e: unknown) => setActionError(e instanceof Error ? e.message : "Failed to load connections"))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("telehealth_error")) setActionError(`Connection failed: ${params.get("telehealth_error")}`);
+    }
+    refresh();
+  }, []);
+
+  const connectHref = (platform: TelehealthPlatform) => `/api/telehealth/oauth/${platform}/start`;
+  const disconnect = async (platform: TelehealthPlatform) => {
+    setActionError(null);
+    try {
+      const res = await fetch(`/api/telehealth/oauth/${platform}/disconnect`, { method: "POST" });
+      const json = (await res.json()) as { success?: boolean; error?: string };
+      if (!res.ok || !json.success) throw new Error(json.error ?? "Disconnect failed");
+      refresh();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Disconnect failed");
+    }
+  };
+
+  const platforms: { key: TelehealthPlatform; label: string }[] = [
+    { key: "zoom", label: "Zoom" },
+    { key: "google_meet", label: "Google Meet" },
+  ];
+
+  const status = data?.platformStatus;
+  const connections = data?.connections ?? [];
+
+  return (
+    <section className="panel" style={{ marginTop: "var(--space-4)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-3)" }}>
+        <h2 style={{ margin: 0 }}>My Telehealth Connections</h2>
+        <button type="button" className="button button-secondary" onClick={refresh} disabled={loading}>
+          {loading ? "Loading…" : "Refresh"}
+        </button>
+      </div>
+      <p style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)", marginTop: 0 }}>
+        Connect your personal Zoom or Google account so Join Telehealth auto-creates a meeting on your account, with token refresh handled for you. Tokens are encrypted at rest.
+      </p>
+      {actionError ? <div className="alert-panel" style={{ marginBottom: 12 }}>{actionError}</div> : null}
+      <div style={{ display: "grid", gap: 12 }}>
+        {platforms.map(({ key, label }) => {
+          const conn = connections.find((c) => c.platform === key);
+          const platformStatus = status?.[key];
+          const notConfigured = platformStatus && !platformStatus.configured;
+          return (
+            <article key={key} className="metric-card" style={{ padding: "var(--space-3)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+              <div>
+                <strong>{label}</strong>
+                <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>
+                  {notConfigured ? (
+                    <span style={{ color: "var(--text-danger, #dc2626)" }}>
+                      OAuth credentials not configured. Add {platformStatus!.missingEnv.join(", ")} to project secrets to enable.
+                    </span>
+                  ) : conn ? (
+                    <>
+                      Connected as <strong>{conn.accountEmail ?? "unknown account"}</strong>
+                      {conn.lastError ? <span style={{ color: "var(--text-danger, #dc2626)", marginLeft: 8 }}>(last error: {conn.lastError})</span> : null}
+                    </>
+                  ) : (
+                    <span>Not connected.</span>
+                  )}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                {conn ? (
+                  <button type="button" className="button button-secondary" onClick={() => void disconnect(key)}>
+                    Disconnect
+                  </button>
+                ) : null}
+                <a
+                  className="button button-primary"
+                  href={connectHref(key)}
+                  aria-disabled={notConfigured ? "true" : undefined}
+                  onClick={(e) => { if (notConfigured) e.preventDefault(); }}
+                  style={notConfigured ? { opacity: 0.5, pointerEvents: "none" } : undefined}
+                >
+                  {conn ? "Reconnect" : "Connect"}
+                </a>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </section>
   );
 }

@@ -3,7 +3,7 @@ import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 
 const CREDENTIALING_SELECT =
-  "id, provider_name, credential_display, individual_npi, email, practice_name, practice_address, practice_tax_id, group_npi, group_medicaid_id, phone, taxonomy_code, individual_medicaid_id, caqh_id, other_payer_id, primary_license_number, primary_license_effective_date, payer_effective_date, payer_revalidation_date, secondary_license_number, secondary_license_effective_date, telehealth_url, stripe_payment_link_url, is_active, updated_at";
+  "id, provider_name, credential_display, individual_npi, email, practice_name, practice_address, practice_tax_id, group_npi, group_medicaid_id, phone, taxonomy_code, individual_medicaid_id, caqh_id, other_payer_id, primary_license_number, primary_license_effective_date, payer_effective_date, payer_revalidation_date, secondary_license_number, secondary_license_effective_date, telehealth_url, stripe_payment_link_url, default_telehealth_platform, is_active, updated_at";
 
 const CREDENTIALING_SELECT_FALLBACK =
   "id, provider_name, credential_display, individual_npi, email, practice_name, practice_address, practice_tax_id, group_npi, group_medicaid_id, phone, taxonomy_code, individual_medicaid_id, caqh_id, other_payer_id, primary_license_number, primary_license_effective_date, payer_effective_date, payer_revalidation_date, secondary_license_number, secondary_license_effective_date, is_active, updated_at";
@@ -22,11 +22,13 @@ function isMissingTelehealthColumns(error: unknown): boolean {
 function withNullExtras<T extends Record<string, unknown>>(row: T): T & {
   telehealth_url: string | null;
   stripe_payment_link_url: string | null;
+  default_telehealth_platform: string | null;
 } {
   return {
     ...row,
     telehealth_url: (row.telehealth_url as string | null | undefined) ?? null,
     stripe_payment_link_url: (row.stripe_payment_link_url as string | null | undefined) ?? null,
+    default_telehealth_platform: (row.default_telehealth_platform as string | null | undefined) ?? null,
   };
 }
 
@@ -64,7 +66,7 @@ export async function GET(request: Request) {
         .order("practice_name", { ascending: true })
         .order("provider_name", { ascending: true });
       if (fallback.error) throw fallback.error;
-      data = fallback.data;
+      data = fallback.data as typeof data;
     }
 
     const providers = (data ?? []).map((row) => withNullExtras(row as Record<string, unknown>));
@@ -147,7 +149,7 @@ export async function POST(request: NextRequest) {
         .select(CREDENTIALING_SELECT_FALLBACK)
         .single();
       if (fallback.error) throw fallback.error;
-      data = fallback.data;
+      data = fallback.data as typeof data;
     }
 
     return NextResponse.json({ success: true, provider: withNullExtras(data as Record<string, unknown>) }, { status: 201 });
@@ -223,7 +225,7 @@ export async function PATCH(request: NextRequest) {
         .select(CREDENTIALING_SELECT_FALLBACK)
         .single();
       if (fallback.error) throw fallback.error;
-      data = fallback.data;
+      data = fallback.data as typeof data;
     }
 
     return NextResponse.json({ success: true, provider: withNullExtras(data as Record<string, unknown>) });
