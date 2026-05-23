@@ -1,4 +1,9 @@
 import { NextResponse } from "next/server";
+import {
+  findOrCreateEncounter,
+  type EncountersSupabase,
+  type FindOrCreateAppointment,
+} from "@/lib/encounters/findOrCreate";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 
 export async function POST(request: Request) {
@@ -25,48 +30,24 @@ export async function POST(request: Request) {
     if (appointmentError || !appointment) return NextResponse.json({ success: false, error: "Appointment not found" }, { status: 404 });
     if (!appointment.client_id) return NextResponse.json({ success: false, error: "Appointment is missing client_id" }, { status: 422 });
 
-    const { data: existingEncounter, error: existingError } = await supabase
-      .from("encounters")
-      .select("id")
-      .eq("organization_id", organizationId)
-      .eq("appointment_id", appointmentId)
-      .is("archived_at", null)
-      .limit(1)
-      .maybeSingle();
+    const nowIso = new Date().toISOString();
 
-    if (existingError) throw existingError;
-    if (existingEncounter?.id) {
-      return NextResponse.json({ success: true, encounterId: existingEncounter.id, created: false });
+    // Route through the shared find-or-create helper so concurrent retries
+    // (double-click, second tab, network retry) deterministically converge on
+    // the same encounter row instead of inserting a duplicate.
+    const result = await findOrCreateEncounter(
+      supabase as unknown as EncountersSupabase,
+      organizationId,
+      appointmentId,
+      appointment as FindOrCreateAppointment,
+      nowIso,
+    );
+
+    if (!result.ok) {
+      return NextResponse.json({ success: false, error: result.error }, { status: result.status });
     }
 
-    const serviceDate = appointment.scheduled_start_at
-      ? new Date(appointment.scheduled_start_at).toISOString().slice(0, 10)
-      : new Date().toISOString().slice(0, 10);
-
-    const { data: encounter, error: encounterError } = await supabase
-      .from("encounters")
-      .insert({
-        organization_id: organizationId,
-        client_id: appointment.client_id,
-        provider_id: appointment.provider_id,
-        appointment_id: appointmentId,
-        encounter_status: "draft",
-        service_date: serviceDate,
-        required_billing_fields_complete: false,
-        started_at: appointment.scheduled_start_at ?? null,
-        ended_at: appointment.scheduled_end_at ?? null,
-      })
-      .select("id")
-      .single();
-
-    if (encounterError || !encounter) {
-      return NextResponse.json(
-        { success: false, error: encounterError?.message ?? "Failed to create encounter" },
-        { status: 422 },
-      );
-    }
-
-    return NextResponse.json({ success: true, encounterId: encounter.id, created: true });
+    return NextResponse.json({ success: true, encounterId: result.encounterId, created: result.created });
   } catch (error) {
     console.error("Create encounter from appointment API error:", error);
     return NextResponse.json(

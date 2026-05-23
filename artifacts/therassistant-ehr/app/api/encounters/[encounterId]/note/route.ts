@@ -73,13 +73,16 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
       updated_at: now,
     };
 
-    const { data: existingNote } = await supabase
-      .from("encounter_clinical_notes")
-      .select("id")
-      .eq("organization_id", organizationId)
-      .eq("encounter_id", encounterId)
-      .is("archived_at", null)
-      .maybeSingle();
+    const selectExistingNote = () =>
+      supabase
+        .from("encounter_clinical_notes")
+        .select("id")
+        .eq("organization_id", organizationId)
+        .eq("encounter_id", encounterId)
+        .is("archived_at", null)
+        .maybeSingle();
+
+    const { data: existingNote } = await selectExistingNote();
 
     let noteId: string | null = null;
     if (existingNote?.id) {
@@ -100,8 +103,27 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
         .select("id")
         .single();
 
-      if (insertError || !inserted) throw insertError ?? new Error("Failed to create note");
-      noteId = String(inserted.id);
+      if (inserted) {
+        noteId = String(inserted.id);
+      } else if ((insertError as { code?: string } | null)?.code === "23505") {
+        // Race: another concurrent save inserted the note between our SELECT
+        // and INSERT. The partial unique index on (organization_id, encounter_id)
+        // WHERE archived_at IS NULL rejected the duplicate; re-select and
+        // update the winning row instead of throwing.
+        const { data: raceRow } = await selectExistingNote();
+        if (!raceRow?.id) throw insertError ?? new Error("Failed to create note");
+        const { data: updated, error: updateError } = await supabase
+          .from("encounter_clinical_notes")
+          .update(notePayload)
+          .eq("organization_id", organizationId)
+          .eq("id", raceRow.id)
+          .select("id")
+          .single();
+        if (updateError || !updated) throw updateError ?? new Error("Failed to update note after race");
+        noteId = String(updated.id);
+      } else {
+        throw insertError ?? new Error("Failed to create note");
+      }
     }
 
     let chargeCapture = null;
