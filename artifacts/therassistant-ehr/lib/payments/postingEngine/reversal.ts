@@ -474,12 +474,16 @@ async function buildReversalPreview(
 
   let workqueueItemsToClose = 0;
   if (payment.kind === "era_835") {
+    // See .agents/memory/workqueue-items-schema.md: workqueue_items rows
+    // for ERA-domain sources are stored as source_object_type='payment_posting'
+    // with the original logical kind in context_payload.
     const { count } = await supabase
       .from("workqueue_items")
       .select("id", { count: "exact", head: true })
       .eq("organization_id", input.organizationId)
-      .eq("source_object_type", "era_claim_payment")
+      .eq("source_object_type", "payment_posting")
       .eq("source_object_id", payment.id)
+      .contains("context_payload", { logical_source_object_type: "era_claim_payment" })
       .in("status", ["open", "in_progress", "blocked"])
       .is("archived_at", null);
     workqueueItemsToClose = count ?? 0;
@@ -978,12 +982,17 @@ export async function reversePostedPayment(
   // ── 4. (parent posting_status already flipped in step 1) ───────────────────
   // ── 5. Close ERA-mismatch workqueue items that were opened for this payment
   if (payment.kind === "era_835") {
+    // See .agents/memory/workqueue-items-schema.md: workqueue_items rows for
+    // ERA-domain sources are stored as source_object_type='payment_posting'
+    // with the original logical kind in context_payload. Filtering by the
+    // old logical literal silently returned zero rows.
     const { data: wq } = await supabase
       .from("workqueue_items")
       .select("id")
       .eq("organization_id", input.organizationId)
-      .eq("source_object_type", "era_claim_payment")
+      .eq("source_object_type", "payment_posting")
       .eq("source_object_id", payment.id)
+      .contains("context_payload", { logical_source_object_type: "era_claim_payment" })
       .in("status", ["open", "in_progress", "blocked"])
       .is("archived_at", null);
     const ids = (wq ?? []).map((r) => (r as { id: string }).id);

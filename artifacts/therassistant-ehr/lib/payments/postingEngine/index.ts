@@ -653,12 +653,20 @@ async function closeRelatedEraWorkqueueItems(
   eraClaimPaymentId: string,
   now: string,
 ): Promise<number> {
+  // Schema invariant (.agents/memory/workqueue-items-schema.md):
+  // workqueue_items.source_object_type is a Postgres ENUM that does NOT
+  // include `era_claim_payment`. The insert path in workqueueRules.ts
+  // stores rows as source_object_type='payment_posting' with the original
+  // logical kind stashed in context_payload.logical_source_object_type.
+  // Filtering by the old logical literal would silently return zero rows
+  // and leave the ERA sweeps unable to close anything.
   const { data, error } = await supabase
     .from("workqueue_items")
     .select("id")
     .eq("organization_id", organizationId)
-    .eq("source_object_type", "era_claim_payment")
+    .eq("source_object_type", "payment_posting")
     .eq("source_object_id", eraClaimPaymentId)
+    .contains("context_payload", { logical_source_object_type: "era_claim_payment" })
     .in("work_type", ["era_mismatch", "era_835_exception"])
     .in("status", ["open", "in_progress", "blocked"])
     .is("archived_at", null);

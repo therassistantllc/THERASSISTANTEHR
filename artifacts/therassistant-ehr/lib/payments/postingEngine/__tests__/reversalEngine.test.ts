@@ -76,6 +76,7 @@ function makeFakeSupabase(initial: {
       filters: Array<[string, unknown]>;
       isNull: string[];
       inSpec: Array<[string, unknown[]]>;
+      containsSpec: Array<[string, Record<string, unknown>]>;
       mode: "select" | "insert" | "update" | "count" | null;
       selectCols: string;
       insertPayload: Record<string, unknown> | Array<Record<string, unknown>> | null;
@@ -91,6 +92,7 @@ function makeFakeSupabase(initial: {
       filters: [],
       isNull: [],
       inSpec: [],
+      containsSpec: [],
       mode: null,
       selectCols: "*",
       insertPayload: null,
@@ -108,6 +110,14 @@ function makeFakeSupabase(initial: {
       let res = matchAll(rows, ctx.filters);
       if (ctx.isNull.length) res = matchNullChecks(res, ctx.isNull);
       for (const [k, vs] of ctx.inSpec) res = matchIn(res, k, vs);
+      for (const [col, sub] of ctx.containsSpec) {
+        res = res.filter((r) => {
+          const raw = r[col];
+          if (!raw || typeof raw !== "object") return false;
+          const obj = raw as Record<string, unknown>;
+          return Object.entries(sub).every(([k, v]) => obj[k] === v);
+        });
+      }
       if (ctx.orFilter) {
         // simple or filter: "field.eq.value,field.eq.value"
         const parts = ctx.orFilter.split(",");
@@ -209,6 +219,10 @@ function makeFakeSupabase(initial: {
       },
       in(k: string, vs: unknown[]) {
         ctx.inSpec.push([k, vs]);
+        return chain;
+      },
+      contains(col: string, sub: Record<string, unknown>) {
+        ctx.containsSpec.push([col, sub]);
         return chain;
       },
       or(spec: string) {
@@ -455,6 +469,141 @@ describe("reversePostedPayment", () => {
     // Audit row written.
     const auditRows = fake.tables.audit_logs.filter((a) => a.action === "payment_reversed");
     assert.equal(auditRows.length, 1);
+  });
+});
+
+describe("reversePostedPayment — ERA workqueue sweep schema (Task #178)", () => {
+  // Regression: closeRelatedEraWorkqueueItems used to filter by
+  // source_object_type='era_claim_payment', a literal that is NOT a member
+  // of the public.source_object_type enum. Real rows are stored with
+  // source_object_type='payment_posting' and the logical kind in
+  // context_payload (see .agents/memory/workqueue-items-schema.md). The
+  // bad filter silently returned zero, so reversal sweeps never closed
+  // anything and the dashboard accumulated stale open items.
+  it("closes only WQ rows stored under the canonical payment_posting + logical context shape", async () => {
+    const fake = makeFakeSupabase({
+      era_claim_payments: [
+        {
+          id: "era-sweep-1",
+          organization_id: ORG,
+          client_id: "c-1",
+          professional_claim_id: "claim-sweep-1",
+          clp01_claim_control_number: "PCN-SWEEP",
+          clp04_payment_amount: 100,
+          posting_status: "posted",
+          reversed_at: null,
+          voided_at: null,
+          archived_at: null,
+        },
+      ],
+      era_posting_ledger_entries: [
+        {
+          id: "le-sweep-1",
+          organization_id: ORG,
+          source_type: "era_835",
+          source_id: "era-sweep-1",
+          era_claim_payment_id: "era-sweep-1",
+          professional_claim_id: "claim-sweep-1",
+          client_id: "c-1",
+          entry_type: "insurance_payment",
+          amount: 100,
+          archived_at: null,
+        },
+      ],
+      professional_claims: [
+        { id: "claim-sweep-1", organization_id: ORG, claim_status: "paid" },
+      ],
+      workqueue_items: [
+        // Canonical shape — MUST be closed by the sweep.
+        {
+          id: "wq-good-1",
+          organization_id: ORG,
+          source_object_type: "payment_posting",
+          source_object_id: "era-sweep-1",
+          context_payload: {
+            logical_source_object_type: "era_claim_payment",
+            logical_source_object_id: "era-sweep-1",
+          },
+          work_type: "era_mismatch",
+          status: "open",
+          archived_at: null,
+        },
+        {
+          id: "wq-good-2",
+          organization_id: ORG,
+          source_object_type: "payment_posting",
+          source_object_id: "era-sweep-1",
+          context_payload: {
+            logical_source_object_type: "era_claim_payment",
+            logical_source_object_id: "era-sweep-1",
+          },
+          work_type: "era_835_exception",
+          status: "in_progress",
+          archived_at: null,
+        },
+        // A row for a DIFFERENT logical kind (client_payment) under the
+        // same enum bucket — must NOT be touched.
+        {
+          id: "wq-other-kind",
+          organization_id: ORG,
+          source_object_type: "payment_posting",
+          source_object_id: "era-sweep-1",
+          context_payload: {
+            logical_source_object_type: "client_payment",
+            logical_source_object_id: "era-sweep-1",
+          },
+          work_type: "era_mismatch",
+          status: "open",
+          archived_at: null,
+        },
+        // A row for a different ERA — must NOT be touched.
+        {
+          id: "wq-other-era",
+          organization_id: ORG,
+          source_object_type: "payment_posting",
+          source_object_id: "era-different",
+          context_payload: {
+            logical_source_object_type: "era_claim_payment",
+            logical_source_object_id: "era-different",
+          },
+          work_type: "era_mismatch",
+          status: "open",
+          archived_at: null,
+        },
+      ],
+    });
+
+    const r = await reversePostedPayment(
+      {
+        organizationId: ORG,
+        target: { kind: "era_835", id: "era-sweep-1" },
+        reason: "duplicate ERA imported",
+        actor: ACTOR,
+      },
+      fake.client,
+    );
+
+    assert.equal(r.ok, true, r.errors.map((e) => e.message).join("; "));
+    assert.equal(
+      r.workqueueItemsClosed,
+      2,
+      "exactly the two canonical-shape rows for this ERA must be closed",
+    );
+    const byId = Object.fromEntries(
+      fake.tables.workqueue_items.map((row) => [row.id as string, row]),
+    );
+    assert.equal(byId["wq-good-1"].status, "resolved");
+    assert.equal(byId["wq-good-2"].status, "resolved");
+    assert.equal(
+      byId["wq-other-kind"].status,
+      "open",
+      "different logical kind must not be swept",
+    );
+    assert.equal(
+      byId["wq-other-era"].status,
+      "open",
+      "different source id must not be swept",
+    );
   });
 });
 
@@ -873,8 +1022,12 @@ describe("reversePostedPayment — dry-run preview", () => {
         {
           id: "wq-d-1",
           organization_id: ORG,
-          source_object_type: "era_claim_payment",
+          source_object_type: "payment_posting",
           source_object_id: "era-dry-1",
+          context_payload: {
+            logical_source_object_type: "era_claim_payment",
+            logical_source_object_id: "era-dry-1",
+          },
           status: "open",
           archived_at: null,
         },
@@ -1591,8 +1744,15 @@ describe("commitPosting → reversal dispatch", () => {
         {
           id: "wq-disp-1",
           organization_id: ORG,
-          source_object_type: "era_claim_payment",
+          // Schema invariant: ERA-domain WQ rows are stored with the
+          // payment_posting enum + logical kind in context_payload (see
+          // .agents/memory/workqueue-items-schema.md).
+          source_object_type: "payment_posting",
           source_object_id: "era-disp-1",
+          context_payload: {
+            logical_source_object_type: "era_claim_payment",
+            logical_source_object_id: "era-disp-1",
+          },
           work_type: "era_mismatch",
           status: "open",
           archived_at: null,
@@ -1600,8 +1760,12 @@ describe("commitPosting → reversal dispatch", () => {
         {
           id: "wq-disp-2",
           organization_id: ORG,
-          source_object_type: "era_claim_payment",
+          source_object_type: "payment_posting",
           source_object_id: "era-disp-1",
+          context_payload: {
+            logical_source_object_type: "era_claim_payment",
+            logical_source_object_id: "era-disp-1",
+          },
           work_type: "era_835_exception",
           status: "in_progress",
           archived_at: null,
