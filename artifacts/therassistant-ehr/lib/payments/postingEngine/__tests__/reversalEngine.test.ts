@@ -9,6 +9,7 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 
+import { validateInsert, validateWritePayload } from "./_schemaGuard";
 import {
   reversePostedPayment,
   voidPostedPayment,
@@ -162,6 +163,10 @@ function makeFakeSupabase(initial: {
             : ctx.insertPayload
               ? [ctx.insertPayload]
               : [];
+          // Task #179: catch schema drift (unknown columns, invalid enum
+          // values) at test time instead of silently passing the way
+          // Task #140's bug did.
+          for (const p of payloads) validateWritePayload(tableName, p);
           const inserted = payloads.map((p) => ({
             ...p,
             id: p.id ?? `${tableName}-${(tables[tableName].length + 1).toString().padStart(3, "0")}`,
@@ -175,6 +180,7 @@ function makeFakeSupabase(initial: {
           return Promise.resolve({ data, error: null }).then(onFul);
         }
         if (ctx.mode === "update") {
+          if (ctx.updatePayload) validateWritePayload(tableName, ctx.updatePayload);
           const targets = exec();
           for (const row of targets) Object.assign(row, ctx.updatePayload);
           return Promise.resolve({ data: targets, error: null }).then(onFul);
@@ -825,10 +831,13 @@ describe("cancelPendingRefund (Task #169)", () => {
     assert.equal(refundRow.note, "Opened in error");
     // No ledger entry was posted — cancellation is a metadata-only flip.
     assert.equal(fake.tables.era_posting_ledger_entries.length, 0);
-    // Workqueue item closed.
+    // Workqueue item closed. (status is the `workqueue_status` enum —
+    // 'cancelled' is NOT a member, so cancel-pending-refund closes with
+    // status='closed' and records the reason in `description`.)
     const wq = fake.tables.workqueue_items[0] as Record<string, unknown>;
-    assert.equal(wq.status, "cancelled");
+    assert.equal(wq.status, "closed");
     assert.ok(wq.resolved_at);
+    assert.match(String(wq.description ?? ""), /cancelled.*Opened in error/i);
     // Audit row written with refund_cancelled action.
     assert.equal(fake.tables.audit_logs.length, 1);
     assert.equal(

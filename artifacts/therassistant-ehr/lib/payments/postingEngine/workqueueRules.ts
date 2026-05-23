@@ -670,7 +670,12 @@ export async function runNoResponseAgingScan(
         .from("workqueue_items")
         .insert({
           organization_id: input.organizationId,
-          source_object_type: "professional_claim",
+          // source_object_type is a Postgres enum and 'professional_claim'
+          // is NOT a member; the valid value for claims is 'claim'. The
+          // logical entity ("professional_claim" vs. an institutional or
+          // dental claim) lives in context_payload.entity_kind so we can
+          // still distinguish in queries without breaking the enum.
+          source_object_type: "claim",
           source_object_id: claim.id,
           client_id: claim.client_id,
           professional_claim_id: claim.id,
@@ -681,6 +686,7 @@ export async function runNoResponseAgingScan(
           description: `Claim was submitted on ${claim.submitted_at} and has had no acknowledgement or payment for ${days}+ days. Follow up with payer.`,
           context_payload: {
             rule: "no_response",
+            entity_kind: "professional_claim",
             days_threshold: days,
             submitted_at: claim.submitted_at,
           },

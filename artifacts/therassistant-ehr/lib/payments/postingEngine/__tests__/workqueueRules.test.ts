@@ -11,6 +11,7 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 
+import { validateWritePayload } from "./_schemaGuard";
 import {
   computeBaseEmissions,
   applyWorkqueueRules,
@@ -245,6 +246,8 @@ function makeFake(
 
   const insertOn = (table: string, payload: Record<string, unknown> | Record<string, unknown>[]) => {
     const list = Array.isArray(payload) ? payload : [payload];
+    // Task #179: catch schema drift at test time.
+    for (const p of list) validateWritePayload(table, p);
     const rows = list.map((p, i) => ({ ...p, id: p.id ?? `${table}-${tables[table].length + i + 1}` }));
     tables[table].push(...(rows as FakeRow[]));
     return {

@@ -2210,9 +2210,14 @@ export async function cancelPendingRefund(
     const { error: wqErr } = await supabase
       .from("workqueue_items")
       .update({
-        status: "cancelled",
+        // workqueue_status is a Postgres enum: open/in_progress/blocked/
+        // resolved/closed. 'cancelled' is NOT a member — closing the
+        // queue item with status='closed' and stashing the reason in
+        // description preserves the AR audit trail without breaking
+        // the enum constraint.
+        status: "closed",
         resolved_at: now,
-        resolution_notes: `Pending refund cancelled: ${input.reason.trim()}`,
+        description: `Pending refund cancelled: ${input.reason.trim()}`,
         updated_at: now,
       })
       .eq("id", wqId)
