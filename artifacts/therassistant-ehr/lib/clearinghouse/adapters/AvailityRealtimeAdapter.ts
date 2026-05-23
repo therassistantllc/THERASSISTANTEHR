@@ -34,6 +34,10 @@ import type {
   EligibilityRequestInput,
   EligibilityResponseNormalized,
 } from "@/types/clearinghouse";
+import type {
+  CoreEligibilityAdapter,
+  CoreEligibilityRunResult,
+} from "@/lib/clearinghouse/pickEligibilityAdapter";
 
 type RealtimeConfig = {
   username: string;
@@ -275,8 +279,27 @@ export class EligibilityAcknowledgementError extends Error {
   }
 }
 
-export class AvailityRealtimeAdapter {
+export class AvailityRealtimeAdapter implements CoreEligibilityAdapter {
   readonly vendor = "availity" as const;
+
+  /**
+   * Phase 2 CORE entrypoint exposed to `ClearinghouseService` via the
+   * `pickEligibilityAdapter` factory. Thin alias around
+   * `runEligibility(Eligibility270Input)` that narrows the return shape
+   * to the subset the service persists.
+   */
+  async runEligibilityCORE(input: Eligibility270Input): Promise<CoreEligibilityRunResult> {
+    const result = await this.runEligibility(input);
+    return {
+      rawRequest: result.rawRequest,
+      rawResponse: result.rawResponse,
+      normalized: result.normalized,
+      controlNumber: result.controlNumber,
+      correlationId: result.correlationId,
+      parsed: result.parsed,
+      payloadId: result.payloadId,
+    };
+  }
 
   /**
    * Primary entrypoint — accepts the rich `Eligibility270Input` shape and

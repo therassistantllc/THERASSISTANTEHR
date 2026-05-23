@@ -2,6 +2,8 @@
 import { buildMock270Request, buildMock276Request } from "@/lib/clearinghouse/ediBuilders";
 import { parseMock271Response, parseMock277Response } from "@/lib/clearinghouse/ediParsers";
 import type { ClearinghouseAdapter } from "@/lib/clearinghouse/ClearinghouseAdapter";
+import type { CoreEligibilityAdapter, CoreEligibilityRunResult } from "@/lib/clearinghouse/pickEligibilityAdapter";
+import type { Eligibility270Input } from "@/lib/edi/availity270/types";
 import type {
   ClaimStatusRequestInput,
   ClaimStatusResponseNormalized,
@@ -33,7 +35,83 @@ function mockClaimStatus(input: ClaimStatusRequestInput): ClaimStatusResponseNor
   return current.includes("reject") ? "rejected" : "accepted";
 }
 
-export class MockClearinghouseAdapter implements ClearinghouseAdapter {
+export class MockClearinghouseAdapter implements ClearinghouseAdapter, CoreEligibilityAdapter {
+  readonly vendor = "mock" as const;
+
+  /**
+   * Phase 2 CORE entrypoint — takes the rich `Eligibility270Input` and
+   * returns the same shape `AvailityRealtimeAdapter.runEligibility`
+   * does, so `ClearinghouseService` can stay transport-agnostic. The
+   * mock derives status from the last digit of the member id (matching
+   * `runEligibility270`) so existing tests keep working.
+   */
+  async runEligibilityCORE(input: Eligibility270Input): Promise<CoreEligibilityRunResult> {
+    const seed =
+      input.subscriber.memberId ||
+      `${input.subscriber.lastName}-${input.subscriber.firstName}` ||
+      "mock";
+    const controlNumber = buildControlNumber(seed);
+    const correlationId = buildCorrelationId(`${seed}-${input.informationSource.payerId}`);
+    const status = mockEligibilityStatus(input.subscriber.memberId);
+    const serviceTypeCode = input.serviceTypeCodes[0] ?? "98";
+
+    const normalized: EligibilityResponseNormalized = {
+      status,
+      payerName: input.informationSource.payerName ?? "Mock Payer",
+      payerId: input.informationSource.payerId ?? "MOCK001",
+      planName: status === "active" ? "Mock PPO Gold" : null,
+      memberId: input.subscriber.memberId ?? null,
+      subscriberName: [input.subscriber.firstName, input.subscriber.lastName].filter(Boolean).join(" ") || null,
+      effectiveDate: status === "active" ? "2026-01-01" : null,
+      terminationDate: status === "inactive" ? "2026-03-31" : null,
+      copayAmount: status === "active" ? 25 : null,
+      deductibleTotal: status === "active" ? 1500 : null,
+      deductibleRemaining: status === "active" ? 830 : null,
+      coinsurancePercent: status === "active" ? 20 : null,
+      outOfPocketRemaining: status === "active" ? 1700 : null,
+      serviceTypeCode,
+      coverageLevel: status === "active" ? "individual" : null,
+      message:
+        status === "inactive"
+          ? "Coverage inactive based on mock 271."
+          : status === "not_found"
+          ? "Member not found based on mock 271."
+          : "Coverage active based on mock 271.",
+      rawBenefits: {
+        vendor: "mock",
+        serviceTypeCode,
+      },
+    };
+
+    const legacyInput: EligibilityRequestInput = {
+      organizationId: input.connection.organization_id,
+      patientId: seed,
+      clearinghouseConnectionId: input.connection.id ?? "mock-conn",
+      payerId: input.informationSource.payerId,
+      payerName: input.informationSource.payerName,
+      memberId: input.subscriber.memberId,
+      subscriberName: normalized.subscriberName ?? undefined,
+      patientName: normalized.subscriberName ?? undefined,
+      serviceTypeCode,
+    };
+    const rawRequest = buildMock270Request(legacyInput, controlNumber, correlationId);
+    const rawResponse = [
+      `ST*271*${controlNumber}*005010X279A1~`,
+      `TRN*2*${correlationId}*MOCKCLEARING~`,
+      `EB*1**${serviceTypeCode}***${normalized.planName ?? "Mock Plan"}~`,
+      `MSG*${normalized.message ?? "Mock eligibility response"}~`,
+      `SE*4*${controlNumber}~`,
+    ].join("\n");
+
+    return {
+      rawRequest,
+      rawResponse,
+      normalized: parseMock271Response(rawResponse, normalized),
+      controlNumber,
+      correlationId,
+    };
+  }
+
   async runEligibility270(input: EligibilityRequestInput) {
     const patientSeed = input.patientId ?? input.clientId ?? input.memberId ?? "mock";
     const controlNumber = buildControlNumber(patientSeed);

@@ -2,6 +2,8 @@
 import { MockClearinghouseAdapter } from "@/lib/clearinghouse/MockClearinghouseAdapter";
 import { resolveAttributionRouting } from "@/lib/clearinghouse/attributionRouting";
 import { buildBenefitSegmentRow } from "@/lib/clearinghouse/buildBenefitSegmentRow";
+import { buildEligibility270InputFromContext } from "@/lib/clearinghouse/buildEligibility270InputFromContext";
+import { pickEligibilityAdapter } from "@/lib/clearinghouse/pickEligibilityAdapter";
 import { attributeResponseToPatient } from "@/lib/edi/availity270/attribution";
 import { createServerSupabaseAdminClient as createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import type {
@@ -177,6 +179,27 @@ export class ClearinghouseService {
       serviceTypeCode: input.serviceTypeCode ?? "98",
     };
 
+    // Phase 2 — build the rich Eligibility270Input from patient + policy
+    // + connection so the SOAP/X12 path (AvailityRealtimeAdapter) and
+    // the Mock path share one canonical shape. The factory routes by
+    // `connection.vendor`: "availity" → CORE Phase II SOAP+WSDL,
+    // anything else → MockClearinghouseAdapter.
+    const eligibility270Input = buildEligibility270InputFromContext({
+      connection,
+      patient: {
+        first_name: patient.first_name ?? null,
+        last_name: patient.last_name ?? null,
+        date_of_birth: patient.date_of_birth ?? null,
+      },
+      policy: {
+        payer_id: policy.payer_id ?? null,
+        plan_name: policy.plan_name ?? null,
+        subscriber_id: policy.subscriber_id ?? null,
+        policy_number: policy.policy_number ?? null,
+      },
+      serviceTypeCodes: [input.serviceTypeCode ?? "98"],
+    });
+
     const outbound = await insertTransaction({
       organization_id: organizationId,
       client_id: patient.id,
@@ -189,7 +212,8 @@ export class ClearinghouseService {
       sent_at: new Date().toISOString(),
     });
 
-    const result = await this.adapter.runEligibility270(adapterInput);
+    const adapter = pickEligibilityAdapter({ vendor: connection.vendor });
+    const result = await adapter.runEligibilityCORE(eligibility270Input);
 
     const inbound = await insertTransaction({
       organization_id: organizationId,
