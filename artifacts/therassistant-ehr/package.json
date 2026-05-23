@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start --port ${PORT:-22803}",
     "lint": "eslint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test lib/edi/availity270/__tests__/*.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.104.1",
@@ -29,6 +30,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
     "tailwindcss": "^4",
+    "tsx": "catalog:",
     "typescript": "^5"
   }
 }

@@ -277,6 +277,21 @@ export interface EligibilityResponseNormalized {
     subscriberMemberId?: string | null;
     dependentName?: string | null;
     dependentDob?: string | null;
+    /** Raw subscriber loop identity preserved for downstream attribution matching. */
+    subscriber?: {
+      firstName: string | null;
+      lastName: string | null;
+      memberId: string | null;
+      dob: string | null;
+      gender: string | null;
+    };
+    /** Raw dependent loop identity preserved for downstream attribution matching. */
+    dependent?: {
+      firstName: string | null;
+      lastName: string | null;
+      dob: string | null;
+      gender: string | null;
+    } | null;
   };
   serviceTypeCode?: string | null;
   /**

@@ -1,5 +1,6 @@
 // File: lib/clearinghouse/ClearinghouseService.ts
 import { MockClearinghouseAdapter } from "@/lib/clearinghouse/MockClearinghouseAdapter";
+import { attributeResponseToPatient } from "@/lib/edi/availity270/attribution";
 import { createServerSupabaseAdminClient as createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import type {
   ClaimStatusCheck,
@@ -16,6 +17,7 @@ interface AppPatient {
   organization_id: string;
   first_name?: string | null;
   last_name?: string | null;
+  date_of_birth?: string | null;
 }
 
 interface InsurancePolicy {
@@ -253,13 +255,44 @@ export class ClearinghouseService {
       remaining_coverage_period: result.normalized.remainingCoveragePeriod ?? null,
       coverage_level: result.normalized.coverageLevel ?? null,
       raw_benefits: result.normalized.rawBenefits ?? {},
-      // Phase 6 — AAA reject reasons + Single Patient Attribution rollup
-      // surfaced to the UI via response_summary (legacy JSON column).
-      response_summary: {
-        aaaErrors: result.normalized.aaaErrors ?? [],
-        attribution: result.normalized.attribution ?? null,
-        message: result.normalized.message ?? null,
-      },
+      // Phase 6 — AAA reject reasons + Single Patient Attribution
+      // decision (vEB.1.0 §4.2–§4.3). We compare the parsed 271
+      // attribution (subscriber vs dependent and identifying details)
+      // against the patient record the user requested the check for.
+      // We DO NOT silently re-route persistence to a different patient
+      // record — there may be no chart for the dependent. Instead we
+      // attribute the response to the requested patient and flag
+      // mismatches so the UI can warn the user.
+      response_summary: (() => {
+        const parsedAttribution = result.normalized.attribution ?? null;
+        const decision = parsedAttribution && parsedAttribution.subscriber
+          ? attributeResponseToPatient(
+              {
+                target: parsedAttribution.target,
+                subscriber: parsedAttribution.subscriber,
+                dependent: parsedAttribution.dependent ?? null,
+              },
+              {
+                firstName: patient.first_name ?? null,
+                lastName: patient.last_name ?? null,
+                dob: patient.date_of_birth ?? null,
+                memberId: policy.subscriber_id ?? policy.policy_number ?? null,
+              },
+            )
+          : null;
+        if (decision && !decision.matchesRequestedPatient) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[eligibility] Attribution mismatch for patient ${patient.id}: ${decision.mismatchReasons.join(",")} (271 attributed to ${decision.target} "${decision.attributedName ?? "—"}")`,
+          );
+        }
+        return {
+          aaaErrors: result.normalized.aaaErrors ?? [],
+          attribution: parsedAttribution,
+          attributionDecision: decision,
+          message: result.normalized.message ?? null,
+        };
+      })(),
       checked_at: new Date().toISOString(),
     };
 

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import styles from "./AppShell.module.css";
 
@@ -107,9 +108,14 @@ export default function PatientContextBanner({ clientId }: { clientId: string })
         </span>
       )}
       {elig && (
-        <span className={styles.patientBannerField} style={{ color: eligColor }}>
+        <Link
+          href={`/patients/${clientId}/eligibility?organizationId=${encodeURIComponent(organizationId)}`}
+          className={styles.patientBannerField}
+          style={{ color: eligColor, textDecoration: "underline" }}
+          title="Open eligibility detail"
+        >
           Eligibility: <strong style={{ color: eligColor }}>{elig}</strong>
-        </span>
+        </Link>
       )}
       {data.copay !== null && (
         <span className={styles.patientBannerField} title="Patient copay from latest 271">

@@ -62,6 +62,7 @@ function eligibilityDto(row: DbRow, segments: DbRow[] = []) {
     subscriberName: typeof row.subscriber_name === "string" ? row.subscriber_name : null,
     aaaErrors: Array.isArray(summary?.aaaErrors) ? (summary!.aaaErrors as unknown[]) : [],
     attribution: (summary?.attribution as Record<string, unknown> | null) ?? null,
+    attributionDecision: (summary?.attributionDecision as Record<string, unknown> | null) ?? null,
     benefitSegments: segments.map((seg) => ({
       id: asString(seg.id),
       segmentIndex: asNumber(seg.segment_index),

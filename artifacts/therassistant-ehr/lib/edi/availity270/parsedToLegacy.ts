@@ -95,6 +95,11 @@ export function parsed271ToLegacyNormalized(
               .join(" ") || null
           : null,
         dependentDob: parsed.attribution.dependent?.dob ?? null,
+        // Nested raw loop identity — preserved so downstream callers
+        // (ClearinghouseService) can run attributeResponseToPatient
+        // without re-parsing.
+        subscriber: { ...parsed.attribution.subscriber },
+        dependent: parsed.attribution.dependent ? { ...parsed.attribution.dependent } : null,
       }
     : undefined;
 

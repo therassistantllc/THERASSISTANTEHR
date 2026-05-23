@@ -54,6 +54,20 @@ type Attribution = {
   dependentDob?: string | null;
 } | null;
 
+type AttributionDecision = {
+  target?: "subscriber" | "dependent";
+  attributedName?: string | null;
+  matchesRequestedPatient?: boolean;
+  mismatchReasons?: string[];
+} | null;
+
+const MISMATCH_LABELS: Record<string, string> = {
+  name_mismatch: "name does not match",
+  dob_mismatch: "date of birth does not match",
+  member_id_mismatch: "member ID does not match",
+  missing_response_identity: "payer returned no identifying details",
+};
+
 type EligibilityCheck = {
   id: string;
   status: string;
@@ -81,6 +95,7 @@ type EligibilityCheck = {
   subscriberName: string | null;
   aaaErrors: AaaError[];
   attribution: Attribution;
+  attributionDecision: AttributionDecision;
   benefitSegments: BenefitSegment[];
   responseSummary: unknown;
   rawResponse: unknown;
@@ -416,6 +431,21 @@ export default function EligibilityDetailClient({ clientId }: { clientId: string
               </li>
             ))}
           </ul>
+        </div>
+      ) : null}
+
+      {latest?.attributionDecision && latest.attributionDecision.matchesRequestedPatient === false ? (
+        <div className="alert-panel" style={{ background: "#fef2f2", borderColor: "#fecaca", color: "#991b1b" }}>
+          <strong style={{ display: "block", marginBottom: 4 }}>Patient attribution mismatch</strong>
+          <span>
+            271 was attributed to {latest.attributionDecision.target ?? "subscriber"}
+            {latest.attributionDecision.attributedName ? ` "${latest.attributionDecision.attributedName}"` : ""}
+            , which does not match this patient (
+            {(latest.attributionDecision.mismatchReasons ?? [])
+              .map((r) => MISMATCH_LABELS[r] ?? r)
+              .join("; ") || "no identifying details returned"}
+            ). Verify before billing.
+          </span>
         </div>
       ) : null}
 
