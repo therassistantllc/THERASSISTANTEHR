@@ -544,6 +544,24 @@ export async function commitPatientPayment(
       if (tAudit) result.auditLogIds.push(tAudit.id);
     }
 
+    try {
+      const { applyWorkqueueRules } = await import("./workqueueRules");
+      await applyWorkqueueRules(supabase, {
+        organizationId: input.organizationId,
+        sourceObjectType: "client_payment",
+        sourceObjectId: paymentId,
+        professionalClaimId: resolvedClaimId,
+        clientId: input.clientId,
+        sourceKind: "patient_payment",
+        actor: input.actor,
+      });
+    } catch (ruleErr) {
+      console.warn(
+        "[patientPayment] applyWorkqueueRules failed (non-fatal)",
+        ruleErr instanceof Error ? ruleErr.message : ruleErr,
+      );
+    }
+
     result.ok = true;
     result.posted = true;
     result.paymentId = paymentId;

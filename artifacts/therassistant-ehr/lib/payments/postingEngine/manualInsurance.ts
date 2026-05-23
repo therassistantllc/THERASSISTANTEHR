@@ -434,6 +434,31 @@ export async function commitManualInsurancePosting(
     });
     if (audit) result.auditLogIds.push(audit.id);
 
+    try {
+      const { applyWorkqueueRules } = await import("./workqueueRules");
+      const totalCharge = Number(hydrated!.total_charge_amount ?? 0);
+      const allowed = totalCharge > 0 ? totalCharge - adj : null;
+      await applyWorkqueueRules(supabase, {
+        organizationId,
+        sourceObjectType: "insurance_manual_payment",
+        sourceObjectId: manualId,
+        professionalClaimId: hydrated!.id,
+        clientId: src.clientId ?? hydrated!.patient_id ?? null,
+        insurancePaymentAmount: paid,
+        allowedAmount: allowed,
+        totalChargeAmount: totalCharge,
+        casAdjustments: null,
+        sourceKind: "manual_insurance",
+        postedPayerProfileId: src.payerProfileId ?? null,
+        actor,
+      });
+    } catch (ruleErr) {
+      console.warn(
+        "[manualInsurance] applyWorkqueueRules failed (non-fatal)",
+        ruleErr instanceof Error ? ruleErr.message : ruleErr,
+      );
+    }
+
     result.ok = true;
     result.posted = true;
     return result;

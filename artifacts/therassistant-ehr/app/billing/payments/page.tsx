@@ -1,5 +1,5 @@
-import PaymentsClient from "./PaymentsClient";
+import PaymentsDashboard from "./PaymentsDashboard";
 
 export default function PaymentsPage() {
-  return <PaymentsClient />;
+  return <PaymentsDashboard />;
 }

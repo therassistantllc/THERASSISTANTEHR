@@ -296,6 +296,32 @@ async function commitEra835Posting(
       );
     }
 
+    // ── 5b. Auto-generate workqueue items per PP-5 rules ─────────────────
+    try {
+      const { applyWorkqueueRules } = await import("./workqueueRules");
+      const allowed =
+        Number(row.clp03_total_charge ?? 0) - sumContractualAdjustments(row.cas_adjustments);
+      await applyWorkqueueRules(supabase, {
+        organizationId: input.organizationId,
+        sourceObjectType: "era_claim_payment",
+        sourceObjectId: row.id,
+        professionalClaimId: row.professional_claim_id,
+        clientId: row.client_id,
+        insurancePaymentAmount: insurancePayment,
+        allowedAmount: allowed > 0 ? allowed : null,
+        totalChargeAmount: Number(row.clp03_total_charge ?? 0),
+        casAdjustments: row.cas_adjustments,
+        claimMatchStatus: row.claim_match_status,
+        sourceKind: "era_835",
+        actor,
+      });
+    } catch (ruleErr) {
+      console.warn(
+        "[postingEngine] applyWorkqueueRules failed (non-fatal)",
+        ruleErr instanceof Error ? ruleErr.message : ruleErr,
+      );
+    }
+
     // ── 6. Audit ──────────────────────────────────────────────────────────
     const auditLog = await writePaymentAuditLog(supabase, {
       organizationId: input.organizationId,

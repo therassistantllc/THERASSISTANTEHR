@@ -897,6 +897,28 @@ export async function recordRecoupment(
   });
   if (audit) result.auditLogIds.push(audit.id);
 
+  // Only invoke the PP-5 rule engine if the reversal flow did not already
+  // open its own workqueue item; otherwise we'd duplicate the queue entry.
+  if (!result.workqueueItemId) {
+    try {
+      const { applyWorkqueueRules } = await import("./workqueueRules");
+      await applyWorkqueueRules(supabase, {
+        organizationId: input.organizationId,
+        sourceObjectType: "payment_recoupment",
+        sourceObjectId: result.recoupmentId,
+        professionalClaimId: payment.professionalClaimId,
+        clientId: payment.clientId,
+        sourceKind: "recoupment",
+        actor: input.actor,
+      });
+    } catch (ruleErr) {
+      console.warn(
+        "[reversal.recoupment] applyWorkqueueRules failed (non-fatal)",
+        ruleErr instanceof Error ? ruleErr.message : ruleErr,
+      );
+    }
+  }
+
   result.ok = true;
   return result;
 }
@@ -1307,6 +1329,29 @@ async function recordRefundShared(
     summary: `${refundType === "insurance" ? "Insurance" : "Patient"} refund ${amount.toFixed(2)} ${refundStatus} on ${payment.rawSourceLabel}: ${input.reason}`,
   });
   if (audit) result.auditLogIds.push(audit.id);
+
+  // Skip rule engine when (a) the reversal flow already opened its own
+  // workqueue item, or (b) the refund is already fully issued — already-
+  // issued refunds are terminal and don't need follow-up review.
+  if (!result.workqueueItemId && refundStatus !== "issued") {
+    try {
+      const { applyWorkqueueRules } = await import("./workqueueRules");
+      await applyWorkqueueRules(supabase, {
+        organizationId: input.organizationId,
+        sourceObjectType: "payment_refund",
+        sourceObjectId: result.refundId,
+        professionalClaimId: payment.professionalClaimId,
+        clientId: payment.clientId,
+        sourceKind: "refund",
+        actor: input.actor,
+      });
+    } catch (ruleErr) {
+      console.warn(
+        "[reversal.refund] applyWorkqueueRules failed (non-fatal)",
+        ruleErr instanceof Error ? ruleErr.message : ruleErr,
+      );
+    }
+  }
 
   result.ok = true;
   return result;
