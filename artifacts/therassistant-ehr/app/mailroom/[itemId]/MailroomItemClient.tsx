@@ -3,6 +3,13 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { DEFAULT_ORG_ID } from "@/lib/config";
+import {
+  buildFilePayload,
+  canFileDocument,
+  destinationRequiresTarget,
+  getEntityTypeForDestination,
+  type FilingDestination,
+} from "@/lib/mailroom/filing";
 import EntityPicker, { type EntityResult, type EntityType } from "./EntityPicker";
 
 type MailroomItem = {
@@ -33,14 +40,6 @@ type DetailResponse = {
   error?: string;
 };
 
-type FilingDestination = "patient_chart" | "claim" | "encounter" | "practice_documents";
-
-const DESTINATION_TO_ENTITY: Record<Exclude<FilingDestination, "practice_documents">, EntityType> = {
-  patient_chart: "patient",
-  claim: "claim",
-  encounter: "encounter",
-};
-
 function getOrganizationId() {
   if (typeof window === "undefined") return process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
   return new URLSearchParams(window.location.search).get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
@@ -67,8 +66,8 @@ export default function MailroomItemClient({ itemId }: { itemId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
-  const requiresTarget = filingDestination !== "practice_documents";
-  const entityType: EntityType | null = requiresTarget ? DESTINATION_TO_ENTITY[filingDestination] : null;
+  const requiresTarget = destinationRequiresTarget(filingDestination);
+  const entityType: EntityType | null = getEntityTypeForDestination(filingDestination);
 
   async function loadItem() {
     setLoading(true);
@@ -111,13 +110,15 @@ export default function MailroomItemClient({ itemId }: { itemId: string }) {
     const response = await fetch("/api/mailroom/file", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        organization_id: organizationId,
-        mailroom_item_id: itemId,
-        filing_destination: filingDestination,
-        target_id: selectedEntity?.id ?? null,
-        admin_comments: adminComments,
-      }),
+      body: JSON.stringify(
+        buildFilePayload({
+          organizationId,
+          mailroomItemId: itemId,
+          destination: filingDestination,
+          selectedEntityId: selectedEntity?.id ?? null,
+          adminComments,
+        }),
+      ),
     });
 
     const json = (await response.json()) as { success?: boolean; error?: string; document_id?: string; message?: string };
@@ -131,7 +132,12 @@ export default function MailroomItemClient({ itemId }: { itemId: string }) {
     setFiling(false);
   }
 
-  const canFile = !filing && item?.status !== "filed" && (!requiresTarget || !!selectedEntity);
+  const canFile = canFileDocument({
+    filing,
+    itemStatus: item?.status,
+    destination: filingDestination,
+    selectedEntityId: selectedEntity?.id ?? null,
+  });
 
   return (
     <main className="app-shell">
