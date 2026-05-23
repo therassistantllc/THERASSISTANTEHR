@@ -2,6 +2,11 @@ import crypto from "crypto";
 import { NextResponse } from "next/server";
 import { createServerSupabaseServiceRoleClient } from "@/lib/supabase/server";
 import type { Database } from "@/lib/supabase/database.types";
+import {
+  requireAuthenticatedPaymentPoster,
+  PaymentPostingForbiddenError,
+  PaymentPostingUnauthenticatedError,
+} from "@/lib/payments/postingEngine";
 
 type ClaimUpdate = Database["public"]["Tables"]["claims"]["Update"];
 
@@ -83,6 +88,19 @@ export async function POST(request: Request) {
     const organizationId = await resolveOrganizationId(supabase, body.organizationId);
     if (!organizationId) {
       return NextResponse.json({ success: false, error: "No organization found for payment posting." }, { status: 400 });
+    }
+
+    // Task #112 — POST_PAYMENTS gate. Clinicians lacking the permission
+    // cannot post patient payments via this legacy route.
+    try {
+      await requireAuthenticatedPaymentPoster(organizationId);
+    } catch (err) {
+      const status =
+        err instanceof PaymentPostingUnauthenticatedError ? 401 : err instanceof PaymentPostingForbiddenError ? 403 : 403;
+      return NextResponse.json(
+        { success: false, error: err instanceof Error ? err.message : "Forbidden" },
+        { status },
+      );
     }
 
     const clientId = String(body.clientId ?? "").trim();

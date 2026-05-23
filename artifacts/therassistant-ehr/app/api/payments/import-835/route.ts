@@ -4,6 +4,11 @@ import crypto from "crypto";
 import { createServerSupabaseAdminClient as createServerSupabaseServiceRoleClient } from "@/lib/supabase/server";
 import { parse835 } from "@/lib/clearinghouse/parsers/parse835";
 import type { Json } from "@/lib/supabase/database.types";
+import {
+  requireAuthenticatedPaymentPoster,
+  PaymentPostingForbiddenError,
+  PaymentPostingUnauthenticatedError,
+} from "@/lib/payments/postingEngine";
 
 function generateUuid() {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -86,6 +91,18 @@ export async function POST(request: Request) {
       return NextResponse.json(
         { success: false, error: "Create an organization before importing 835 files." },
         { status: 400 },
+      );
+    }
+
+    // Task #112 — POST_PAYMENTS gate on 835 ingest.
+    try {
+      await requireAuthenticatedPaymentPoster(organizationId);
+    } catch (err) {
+      const status =
+        err instanceof PaymentPostingUnauthenticatedError ? 401 : err instanceof PaymentPostingForbiddenError ? 403 : 403;
+      return NextResponse.json(
+        { success: false, error: err instanceof Error ? err.message : "Forbidden" },
+        { status },
       );
     }
 

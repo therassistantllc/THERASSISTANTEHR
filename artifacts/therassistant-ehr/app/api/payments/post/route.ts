@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import crypto from "crypto";
 import { createServerSupabaseServiceRoleClient } from "@/lib/supabase/server";
+import {
+  requireAuthenticatedPaymentPoster,
+  PaymentPostingForbiddenError,
+  PaymentPostingUnauthenticatedError,
+} from "@/lib/payments/postingEngine";
 
 function generateUuid() {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -53,6 +58,18 @@ export async function POST(request: Request) {
     if (itemError) throw itemError;
     if (!paymentImportItem) {
       return NextResponse.json({ success: false, error: "Payment import item not found" }, { status: 404 });
+    }
+
+    // Task #112 — POST_PAYMENTS gate (org resolved from the import item).
+    try {
+      await requireAuthenticatedPaymentPoster(String(paymentImportItem.organization_id ?? ""));
+    } catch (err) {
+      const status =
+        err instanceof PaymentPostingUnauthenticatedError ? 401 : err instanceof PaymentPostingForbiddenError ? 403 : 403;
+      return NextResponse.json(
+        { success: false, error: err instanceof Error ? err.message : "Forbidden" },
+        { status },
+      );
     }
 
     if (!paymentImportItem.posting_ready) {
