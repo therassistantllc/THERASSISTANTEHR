@@ -60,11 +60,12 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: false, error: "organizationId is required" }, { status: 400 });
     }
 
-    // Dev fallback: when no clinicianId is supplied and we're not in production,
-    // use the known test provider so today's appointments are visible without a session.
+    // Practice-scoped by default: clinicians within a practice can see each
+    // other's appointments and related records. Only narrow to a specific
+    // provider when the caller explicitly passes `clinicianId`.
     const paramClinicianId = searchParams.get("clinicianId");
-    const devFallback = !paramClinicianId && process.env.NODE_ENV !== "production";
-    const clinicianId = paramClinicianId ?? (devFallback ? "22222222-2222-2222-2222-222222222222" : null);
+    const clinicianId = paramClinicianId && paramClinicianId.trim() ? paramClinicianId : null;
+    const devFallback = false;
 
     const { start, end } = getDayRange(dateParam ? new Date(dateParam) : new Date());
 
