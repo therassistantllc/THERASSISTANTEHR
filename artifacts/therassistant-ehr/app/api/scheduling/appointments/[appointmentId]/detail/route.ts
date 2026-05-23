@@ -42,10 +42,10 @@ export async function GET(
       );
     }
 
-    // CPT and memo each have their own dedicated columns now. Fall
-    // back to the legacy heuristic (CPT-shaped string stashed in
-    // appointment_type, free-text memo stashed in reason) for rows
-    // that predate the dedicated columns and haven't been backfilled.
+    // CPT still falls back to the legacy heuristic (CPT-shaped string
+    // stashed in appointment_type) for rows that predate the dedicated
+    // cpt_code column. Memo no longer falls back to reason — historical
+    // memos have been backfilled into the memo column.
     const apptTypeRaw =
       typeof (appt as Row).appointment_type === "string"
         ? String((appt as Row).appointment_type)
@@ -55,15 +55,10 @@ export async function GET(
         ? String((appt as Row).cpt_code)
         : "";
     const cpt = cptRaw || (/^9\d{4}$/.test(apptTypeRaw) ? apptTypeRaw : null);
-    const memoRaw =
+    const memo =
       typeof (appt as Row).memo === "string"
         ? String((appt as Row).memo)
         : "";
-    const reasonRaw =
-      typeof (appt as Row).reason === "string"
-        ? String((appt as Row).reason)
-        : "";
-    const memo = memoRaw || reasonRaw;
 
     const [clientRes, providerRes, policiesRes, encounterRes] =
       await Promise.all([
