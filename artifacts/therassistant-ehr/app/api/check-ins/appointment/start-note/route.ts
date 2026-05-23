@@ -11,7 +11,164 @@ type AppointmentRow = {
   appointment_status: string | null;
 };
 
+type SupabaseClient = ReturnType<typeof createServerSupabaseAdminClient>;
+
 const ADVANCEABLE_STATUSES = new Set(["scheduled"]);
+
+// Postgres unique-violation; if a concurrent request beat us to the insert,
+// the existing row is the right answer and we just re-select it.
+const UNIQUE_VIOLATION = "23505";
+
+async function findOrCreateEncounter(
+  supabase: NonNullable<SupabaseClient>,
+  organizationId: string,
+  appointmentId: string,
+  appt: AppointmentRow,
+  nowIso: string,
+): Promise<
+  | { ok: true; encounterId: string; created: boolean; clientId: string; providerId: string | null }
+  | { ok: false; status: number; error: string }
+> {
+  const selectExisting = async () =>
+    supabase
+      .from("encounters")
+      .select("id, client_id, provider_id")
+      .eq("organization_id", organizationId)
+      .eq("appointment_id", appointmentId)
+      .is("archived_at", null)
+      .limit(1)
+      .maybeSingle();
+
+  const { data: existing, error: existingError } = await selectExisting();
+  if (existingError) {
+    return { ok: false, status: 500, error: `Failed to look up encounter: ${existingError.message}` };
+  }
+  if (existing?.id) {
+    return {
+      ok: true,
+      encounterId: String(existing.id),
+      created: false,
+      clientId: (existing.client_id as string | null) ?? (appt.client_id as string),
+      providerId: (existing.provider_id as string | null) ?? appt.provider_id,
+    };
+  }
+
+  const serviceDate = appt.scheduled_start_at
+    ? new Date(appt.scheduled_start_at).toISOString().slice(0, 10)
+    : nowIso.slice(0, 10);
+
+  const { data: inserted, error: insertError } = await supabase
+    .from("encounters")
+    .insert({
+      organization_id: organizationId,
+      client_id: appt.client_id,
+      provider_id: appt.provider_id,
+      appointment_id: appointmentId,
+      encounter_status: "draft",
+      service_date: serviceDate,
+      required_billing_fields_complete: false,
+      started_at: appt.scheduled_start_at ?? null,
+      ended_at: appt.scheduled_end_at ?? null,
+    })
+    .select("id, client_id, provider_id")
+    .single();
+
+  if (!insertError && inserted) {
+    return {
+      ok: true,
+      encounterId: String(inserted.id),
+      created: true,
+      clientId: (inserted.client_id as string | null) ?? (appt.client_id as string),
+      providerId: (inserted.provider_id as string | null) ?? appt.provider_id,
+    };
+  }
+
+  // Race: another request inserted between our SELECT and INSERT. Re-select.
+  if (insertError && (insertError as { code?: string }).code === UNIQUE_VIOLATION) {
+    const { data: raceRow } = await selectExisting();
+    if (raceRow?.id) {
+      return {
+        ok: true,
+        encounterId: String(raceRow.id),
+        created: false,
+        clientId: (raceRow.client_id as string | null) ?? (appt.client_id as string),
+        providerId: (raceRow.provider_id as string | null) ?? appt.provider_id,
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    status: 422,
+    error: `Failed to create encounter: ${insertError?.message ?? "unknown error"}`,
+  };
+}
+
+async function findOrCreateNote(
+  supabase: NonNullable<SupabaseClient>,
+  organizationId: string,
+  encounterId: string,
+  clientId: string,
+  providerId: string | null,
+  nowIso: string,
+): Promise<
+  | { ok: true; noteId: string; created: boolean }
+  | { ok: false; status: number; error: string }
+> {
+  const selectExisting = async () =>
+    supabase
+      .from("encounter_clinical_notes")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("encounter_id", encounterId)
+      .is("archived_at", null)
+      .limit(1)
+      .maybeSingle();
+
+  const { data: existing, error: existingError } = await selectExisting();
+  if (existingError) {
+    return { ok: false, status: 500, error: `Failed to look up clinical note: ${existingError.message}` };
+  }
+  if (existing?.id) {
+    return { ok: true, noteId: String(existing.id), created: false };
+  }
+
+  const { data: inserted, error: insertError } = await supabase
+    .from("encounter_clinical_notes")
+    .insert({
+      organization_id: organizationId,
+      encounter_id: encounterId,
+      client_id: clientId,
+      provider_id: providerId,
+      note_status: "draft",
+      subjective: "",
+      interventions: "",
+      plan: "",
+      signed_at: null,
+      signed_by_user_id: null,
+      created_at: nowIso,
+      updated_at: nowIso,
+    })
+    .select("id")
+    .single();
+
+  if (!insertError && inserted) {
+    return { ok: true, noteId: String(inserted.id), created: true };
+  }
+
+  if (insertError && (insertError as { code?: string }).code === UNIQUE_VIOLATION) {
+    const { data: raceRow } = await selectExisting();
+    if (raceRow?.id) {
+      return { ok: true, noteId: String(raceRow.id), created: false };
+    }
+  }
+
+  return {
+    ok: false,
+    status: 422,
+    error: `Failed to create clinical note: ${insertError?.message ?? "unknown error"}`,
+  };
+}
 
 export async function POST(request: Request) {
   try {
@@ -55,15 +212,50 @@ export async function POST(request: Request) {
     }
 
     const nowIso = new Date().toISOString();
-    let appointmentStatus = appt.appointment_status ?? "scheduled";
 
-    // Mark checked in only if still scheduled — don't regress in_progress / completed.
+    // Important: do encounter + note creation BEFORE flipping appointment_status.
+    // If either fails, status stays at 'scheduled' so the next click can retry
+    // cleanly with no half-checked-in state.
+    const encounterResult = await findOrCreateEncounter(
+      supabase,
+      organizationId,
+      appointmentId,
+      appt,
+      nowIso,
+    );
+    if (!encounterResult.ok) {
+      return NextResponse.json(
+        { success: false, error: encounterResult.error },
+        { status: encounterResult.status },
+      );
+    }
+
+    const noteResult = await findOrCreateNote(
+      supabase,
+      organizationId,
+      encounterResult.encounterId,
+      encounterResult.clientId,
+      encounterResult.providerId,
+      nowIso,
+    );
+    if (!noteResult.ok) {
+      return NextResponse.json(
+        { success: false, error: noteResult.error },
+        { status: noteResult.status },
+      );
+    }
+
+    // Only now advance status (and only from 'scheduled' so we don't regress
+    // in_progress / completed / etc.). If this fails after encounter/note are
+    // created, the retry just re-uses the existing rows and finishes the flip.
+    let appointmentStatus = appt.appointment_status ?? "scheduled";
     if (ADVANCEABLE_STATUSES.has(appointmentStatus)) {
       const { error: statusError } = await supabase
         .from("appointments")
         .update({ appointment_status: "checked_in", updated_at: nowIso })
         .eq("organization_id", organizationId)
-        .eq("id", appointmentId);
+        .eq("id", appointmentId)
+        .eq("appointment_status", "scheduled");
       if (statusError) {
         return NextResponse.json(
           { success: false, error: `Failed to update appointment status: ${statusError.message}` },
@@ -73,130 +265,15 @@ export async function POST(request: Request) {
       appointmentStatus = "checked_in";
     }
 
-    // Find-or-create encounter (same logic as /api/encounters/create-from-appointment).
-    let encounterId: string | null = null;
-    let encounterCreated = false;
-    let encounterClientId = appt.client_id;
-    let encounterProviderId: string | null = appt.provider_id;
-
-    const { data: existingEncounter, error: existingEncounterError } = await supabase
-      .from("encounters")
-      .select("id, client_id, provider_id")
-      .eq("organization_id", organizationId)
-      .eq("appointment_id", appointmentId)
-      .is("archived_at", null)
-      .limit(1)
-      .maybeSingle();
-
-    if (existingEncounterError) {
-      return NextResponse.json(
-        { success: false, error: `Failed to look up encounter: ${existingEncounterError.message}` },
-        { status: 500 },
-      );
-    }
-
-    if (existingEncounter?.id) {
-      encounterId = String(existingEncounter.id);
-      encounterClientId = (existingEncounter.client_id as string | null) ?? encounterClientId;
-      encounterProviderId = (existingEncounter.provider_id as string | null) ?? encounterProviderId;
-    } else {
-      const serviceDate = appt.scheduled_start_at
-        ? new Date(appt.scheduled_start_at).toISOString().slice(0, 10)
-        : nowIso.slice(0, 10);
-
-      const { data: newEncounter, error: encounterInsertError } = await supabase
-        .from("encounters")
-        .insert({
-          organization_id: organizationId,
-          client_id: appt.client_id,
-          provider_id: appt.provider_id,
-          appointment_id: appointmentId,
-          encounter_status: "draft",
-          service_date: serviceDate,
-          required_billing_fields_complete: false,
-          started_at: appt.scheduled_start_at ?? null,
-          ended_at: appt.scheduled_end_at ?? null,
-        })
-        .select("id")
-        .single();
-
-      if (encounterInsertError || !newEncounter) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: `Failed to create encounter: ${encounterInsertError?.message ?? "unknown error"}`,
-          },
-          { status: 422 },
-        );
-      }
-      encounterId = String(newEncounter.id);
-      encounterCreated = true;
-    }
-
-    // Find-or-create clinical note attached to that encounter.
-    let noteId: string | null = null;
-    let noteCreated = false;
-
-    const { data: existingNote, error: existingNoteError } = await supabase
-      .from("encounter_clinical_notes")
-      .select("id")
-      .eq("organization_id", organizationId)
-      .eq("encounter_id", encounterId)
-      .is("archived_at", null)
-      .limit(1)
-      .maybeSingle();
-
-    if (existingNoteError) {
-      return NextResponse.json(
-        { success: false, error: `Failed to look up clinical note: ${existingNoteError.message}` },
-        { status: 500 },
-      );
-    }
-
-    if (existingNote?.id) {
-      noteId = String(existingNote.id);
-    } else {
-      const { data: newNote, error: noteInsertError } = await supabase
-        .from("encounter_clinical_notes")
-        .insert({
-          organization_id: organizationId,
-          encounter_id: encounterId,
-          client_id: encounterClientId,
-          provider_id: encounterProviderId,
-          note_status: "draft",
-          subjective: "",
-          interventions: "",
-          plan: "",
-          signed_at: null,
-          signed_by_user_id: null,
-          created_at: nowIso,
-          updated_at: nowIso,
-        })
-        .select("id")
-        .single();
-
-      if (noteInsertError || !newNote) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: `Failed to create clinical note: ${noteInsertError?.message ?? "unknown error"}`,
-          },
-          { status: 422 },
-        );
-      }
-      noteId = String(newNote.id);
-      noteCreated = true;
-    }
-
     return NextResponse.json({
       success: true,
       appointmentId,
       appointmentStatus,
-      encounterId,
-      encounterCreated,
-      noteId,
-      noteCreated,
-      noteUrl: `/encounters/${encounterId}`,
+      encounterId: encounterResult.encounterId,
+      encounterCreated: encounterResult.created,
+      noteId: noteResult.noteId,
+      noteCreated: noteResult.created,
+      noteUrl: `/encounters/${encounterResult.encounterId}`,
     });
   } catch (error) {
     console.error("Check-in start-note API error:", error);
