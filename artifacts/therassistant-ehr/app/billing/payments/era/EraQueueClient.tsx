@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { RefreshCw, Search, ChevronRight, Archive, Clock, Copy, FileText } from "lucide-react";
+import { RefreshCw, Search, ChevronRight, Archive, Clock, Copy, FileText, Upload } from "lucide-react";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 import styles from "./era.module.css";
 
@@ -71,6 +71,7 @@ export default function EraQueueClient() {
   const [search, setSearch] = useState("");
   const [includeArchived, setIncludeArchived] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -189,6 +190,51 @@ export default function EraQueueClient() {
         <button className={styles.btn} onClick={() => void load()} disabled={loading}>
           <RefreshCw size={12} /> Refresh
         </button>
+        <label
+          className={`${styles.btn} ${styles.btnPrimary}`}
+          style={{ cursor: importing ? "not-allowed" : "pointer", opacity: importing ? 0.6 : 1 }}
+          title="Upload an X12 835 ERA file (.835, .edi, .txt)"
+        >
+          <Upload size={12} /> {importing ? "Importing…" : "Import 835"}
+          <input
+            type="file"
+            accept=".835,.edi,.txt,text/plain,application/edi-x12"
+            disabled={importing}
+            style={{ display: "none" }}
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (!file) return;
+              setImporting(true);
+              setError(null);
+              setFlash(null);
+              try {
+                const form = new FormData();
+                form.append("file", file);
+                form.append("organizationId", organizationId);
+                const res = await fetch("/api/payments/import-835", { method: "POST", body: form });
+                const json = await res.json().catch(() => ({}));
+                if (!res.ok || json?.success === false) {
+                  throw new Error(json?.error || `Import failed (${res.status})`);
+                }
+                const s = json?.summary ?? {};
+                const total = s.claimsFound;
+                const matched = s.matchedClaims;
+                const unmatched = s.unmatchedClaims;
+                const parts: string[] = [`Imported ${file.name}`];
+                if (typeof total === "number") parts.push(`${total} claim${total === 1 ? "" : "s"}`);
+                if (typeof matched === "number") parts.push(`${matched} matched`);
+                if (typeof unmatched === "number" && unmatched > 0) parts.push(`${unmatched} unmatched`);
+                setFlash(parts.join(" • "));
+                await load();
+              } catch (err) {
+                setError(err instanceof Error ? err.message : "835 import failed");
+              } finally {
+                setImporting(false);
+              }
+            }}
+          />
+        </label>
       </header>
 
       <div className={styles.tabs}>
