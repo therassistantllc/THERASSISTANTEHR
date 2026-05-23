@@ -78,6 +78,19 @@ export async function POST(request: Request) {
       applyTo = { kind: "account_balance" };
     }
 
+    let transferFrom: { fromInvoiceId?: string | null; fromClaimId?: string | null } | null = null;
+    if (body.transferFrom && (body.transferFrom.fromInvoiceId || body.transferFrom.fromClaimId)) {
+      const fromInvoiceId = body.transferFrom.fromInvoiceId ? String(body.transferFrom.fromInvoiceId) : null;
+      const fromClaimId = body.transferFrom.fromClaimId ? String(body.transferFrom.fromClaimId) : null;
+      if (fromInvoiceId) {
+        await assertFkBelongsToOrg(supabase as unknown as Parameters<typeof assertFkBelongsToOrg>[0], "patient_invoices", organizationId, fromInvoiceId, "transferFrom.fromInvoiceId");
+      }
+      if (fromClaimId) {
+        await assertFkBelongsToOrg(supabase as unknown as Parameters<typeof assertFkBelongsToOrg>[0], "professional_claims", organizationId, fromClaimId, "transferFrom.fromClaimId");
+      }
+      transferFrom = { fromInvoiceId, fromClaimId };
+    }
+
     const result = await commitPatientPayment({
       organizationId,
       clientId,
@@ -89,6 +102,8 @@ export async function POST(request: Request) {
       referenceNumber: body.reference ? String(body.reference) : null,
       note: body.note ? String(body.note) : null,
       paymentDate: body.paymentDate ? String(body.paymentDate) : null,
+      transferFrom,
+      transferReason: body.transferReason ? String(body.transferReason) : null,
       actor,
       dryRun: Boolean(body.dryRun),
     });

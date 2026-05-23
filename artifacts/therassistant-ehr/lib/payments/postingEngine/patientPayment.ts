@@ -54,6 +54,14 @@ export interface CommitPatientPaymentInput {
   paymentDate?: string | null;
   actor: PostingActor;
   dryRun?: boolean;
+  /**
+   * For method='transferred_balance': the source invoice or claim whose
+   * balance is being moved. The engine writes a payment_transfers row and
+   * paired ledger entries (negative on source, positive on destination) so
+   * net balances stay correct.
+   */
+  transferFrom?: { fromInvoiceId?: string | null; fromClaimId?: string | null } | null;
+  transferReason?: string | null;
 }
 
 export interface PatientPaymentResult extends CommitPostingResult {
@@ -118,6 +126,25 @@ export function validatePatientPayment(input: CommitPatientPaymentInput): Valida
       message: "External payment id not supplied — webhook reconciliation will be skipped.",
     });
   }
+  if (input.method === "transferred_balance") {
+    const tf = input.transferFrom;
+    if (!tf || (!tf.fromInvoiceId && !tf.fromClaimId)) {
+      blocking.push({
+        severity: "blocking",
+        code: "transfer_source_required",
+        field: "transferFrom",
+        message: "transferred_balance requires a source invoice or claim in transferFrom.",
+      });
+    }
+    if (input.applyTo.kind === "account_balance" || input.applyTo.kind === "none") {
+      blocking.push({
+        severity: "blocking",
+        code: "transfer_destination_required",
+        field: "applyTo",
+        message: "transferred_balance must land on a specific invoice, claim, or encounter.",
+      });
+    }
+  }
   if (input.method === "refund") {
     warning.push({
       severity: "warning",
@@ -131,9 +158,10 @@ export function validatePatientPayment(input: CommitPatientPaymentInput): Valida
 
 export async function commitPatientPayment(
   input: CommitPatientPaymentInput,
+  supabaseClient?: NonNullable<ReturnType<typeof createServerSupabaseAdminClient>> | null,
 ): Promise<PatientPaymentResult> {
   const result = emptyResult();
-  const supabase = createServerSupabaseAdminClient();
+  const supabase = supabaseClient ?? createServerSupabaseAdminClient();
   if (!supabase) {
     result.errors.push({ field: "system", message: "Database connection not available" });
     return result;
@@ -385,6 +413,88 @@ export async function commitPatientPayment(
     });
     if (audit) result.auditLogIds.push(audit.id);
 
+    // Paired transferred_balance entries: write payment_transfers row and a
+    // matching negative ledger entry on the source so the source balance
+    // decreases at the same time the destination credit is applied above.
+    if (input.method === "transferred_balance" && input.transferFrom && applyAmount > 0) {
+      const tf = input.transferFrom;
+      const transferId = genId();
+      const { error: tErr } = await supabase.from("payment_transfers").insert({
+        id: transferId,
+        organization_id: input.organizationId,
+        client_id: input.clientId,
+        from_invoice_id: tf.fromInvoiceId ?? null,
+        from_claim_id: tf.fromClaimId ?? null,
+        to_invoice_id: resolvedInvoiceId,
+        to_claim_id: resolvedClaimId,
+        amount: applyAmount,
+        reason: input.transferReason ?? input.note ?? null,
+        transferred_actor_id: input.actor.staffId ?? null,
+      });
+      if (tErr) throw new Error(tErr.message);
+
+      // Negative ledger entry on the source — increases source balance back
+      // (i.e. the source's previously-credited amount is moved away).
+      await supabase.from("era_posting_ledger_entries").insert({
+        organization_id: input.organizationId,
+        professional_claim_id: tf.fromClaimId ?? null,
+        client_id: input.clientId,
+        source_type: "payment_transfer",
+        source_id: transferId,
+        entry_type: "insurance_payment",
+        amount: applyAmount, // positive = restores balance on source
+        description: `Balance transferred away (${input.transferReason ?? "transfer"})`,
+      });
+      // The destination already received its negative entry in the applyAmount
+      // block above; this row pairs the source side for full audit symmetry.
+
+      if (tf.fromInvoiceId) {
+        const { data: srcInv } = await supabase
+          .from("patient_invoices")
+          .select("paid_amount, balance_amount")
+          .eq("id", tf.fromInvoiceId)
+          .maybeSingle();
+        const srcPaid = Math.max(0, round2(Number(srcInv?.paid_amount ?? 0) - applyAmount));
+        const srcBal = round2(Number(srcInv?.balance_amount ?? 0) + applyAmount);
+        await supabase
+          .from("patient_invoices")
+          .update({ paid_amount: srcPaid, balance_amount: srcBal, updated_at: now })
+          .eq("id", tf.fromInvoiceId)
+          .eq("organization_id", input.organizationId);
+      }
+      if (tf.fromClaimId) {
+        const { data: srcCl } = await supabase
+          .from("professional_claims")
+          .select("patient_responsibility_amount")
+          .eq("id", tf.fromClaimId)
+          .maybeSingle();
+        const nextPr = round2(Number(srcCl?.patient_responsibility_amount ?? 0) + applyAmount);
+        await supabase
+          .from("professional_claims")
+          .update({ patient_responsibility_amount: nextPr, updated_at: now })
+          .eq("id", tf.fromClaimId)
+          .eq("organization_id", input.organizationId);
+      }
+
+      const tAudit = await writePaymentAuditLog(supabase, {
+        organizationId: input.organizationId,
+        actor: input.actor,
+        action: "payment_adjusted",
+        objectType: "patient_invoice_payment",
+        objectId: transferId,
+        afterValue: {
+          transfer_id: transferId,
+          amount: applyAmount,
+          from_invoice_id: tf.fromInvoiceId ?? null,
+          from_claim_id: tf.fromClaimId ?? null,
+          to_invoice_id: resolvedInvoiceId,
+          to_claim_id: resolvedClaimId,
+        },
+        summary: `Transferred ${applyAmount.toFixed(2)} from ${tf.fromInvoiceId ?? tf.fromClaimId} to ${resolvedInvoiceId ?? resolvedClaimId}`,
+      });
+      if (tAudit) result.auditLogIds.push(tAudit.id);
+    }
+
     result.ok = true;
     result.posted = true;
     result.paymentId = paymentId;
@@ -425,9 +535,10 @@ export interface ApplyClientCreditResult {
 
 export async function applyClientCredit(
   input: ApplyClientCreditInput,
+  supabaseClient?: NonNullable<ReturnType<typeof createServerSupabaseAdminClient>> | null,
 ): Promise<ApplyClientCreditResult> {
   const errors: Array<{ field: string; message: string }> = [];
-  const supabase = createServerSupabaseAdminClient();
+  const supabase = supabaseClient ?? createServerSupabaseAdminClient();
   if (!supabase) {
     return { ok: false, applicationId: null, newCreditBalance: 0, errors: [{ field: "system", message: "Database connection not available" }] };
   }

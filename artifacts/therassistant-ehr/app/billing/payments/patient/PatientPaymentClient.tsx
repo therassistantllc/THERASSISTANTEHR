@@ -61,9 +61,13 @@ export default function PatientPaymentClient() {
   const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
   const [credits, setCredits] = useState<Credit[]>([]);
 
-  const [applyToKind, setApplyToKind] = useState<"invoice" | "claim" | "account_balance">("account_balance");
+  const [applyToKind, setApplyToKind] = useState<"invoice" | "claim" | "encounter" | "account_balance">("account_balance");
   const [patientInvoiceId, setPatientInvoiceId] = useState("");
   const [professionalClaimId, setProfessionalClaimId] = useState("");
+  const [appointmentId, setAppointmentId] = useState("");
+  const [transferFromInvoiceId, setTransferFromInvoiceId] = useState("");
+  const [transferFromClaimId, setTransferFromClaimId] = useState("");
+  const [transferReason, setTransferReason] = useState("");
   const [method, setMethod] = useState<(typeof METHODS)[number]>("cash");
   const [amount, setAmount] = useState("");
   const [reference, setReference] = useState("");
@@ -130,6 +134,14 @@ export default function PatientPaymentClient() {
       };
       if (applyToKind === "invoice") body.patientInvoiceId = patientInvoiceId;
       if (applyToKind === "claim") body.professionalClaimId = professionalClaimId;
+      if (applyToKind === "encounter") body.appointmentId = appointmentId;
+      if (method === "transferred_balance" && (transferFromInvoiceId || transferFromClaimId)) {
+        body.transferFrom = {
+          fromInvoiceId: transferFromInvoiceId || null,
+          fromClaimId: transferFromClaimId || null,
+        };
+        if (transferReason) body.transferReason = transferReason;
+      }
       const r = await fetch("/api/billing/payments/patient", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -221,10 +233,11 @@ export default function PatientPaymentClient() {
               <select
                 className="input"
                 value={applyToKind}
-                onChange={(e) => setApplyToKind(e.target.value as "invoice" | "claim" | "account_balance")}
+                onChange={(e) => setApplyToKind(e.target.value as "invoice" | "claim" | "encounter" | "account_balance")}
               >
                 <option value="invoice">Invoice</option>
-                <option value="claim">Claim</option>
+                <option value="claim">Claim (patient resp.)</option>
+                <option value="encounter">Encounter (appointment)</option>
                 <option value="account_balance">Account balance (unapplied credit)</option>
               </select>
             </Field>
@@ -243,9 +256,38 @@ export default function PatientPaymentClient() {
               <Field label="Claim id">
                 <input className="input" value={professionalClaimId} onChange={(e) => setProfessionalClaimId(e.target.value)} />
               </Field>
+            ) : applyToKind === "encounter" ? (
+              <Field label="Appointment id">
+                <input
+                  className="input"
+                  placeholder="appointment uuid"
+                  value={appointmentId}
+                  onChange={(e) => setAppointmentId(e.target.value)}
+                />
+              </Field>
             ) : (
               <div />
             )}
+            {method === "transferred_balance" ? (
+              <>
+                <Field label="Transfer FROM invoice (optional)">
+                  <select className="input" value={transferFromInvoiceId} onChange={(e) => setTransferFromInvoiceId(e.target.value)}>
+                    <option value="">— None —</option>
+                    {invoices.map((inv) => (
+                      <option key={inv.id} value={inv.id}>
+                        {inv.invoice_number} · {money(inv.balance_amount)}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Transfer FROM claim id (optional)">
+                  <input className="input" value={transferFromClaimId} onChange={(e) => setTransferFromClaimId(e.target.value)} />
+                </Field>
+                <Field label="Transfer reason">
+                  <input className="input" value={transferReason} onChange={(e) => setTransferReason(e.target.value)} />
+                </Field>
+              </>
+            ) : null}
             {method === "stripe" || method === "external_card" ? (
               <Field label="External payment id (Stripe charge / processor ref)">
                 <input className="input" value={externalPaymentId} onChange={(e) => setExternalPaymentId(e.target.value)} />

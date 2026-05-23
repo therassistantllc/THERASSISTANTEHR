@@ -58,6 +58,19 @@ export type PostingSource =
       mailroomItemId?: string | null;
       payerProfileId?: string | null;
       note?: string | null;
+      /**
+       * Per-service-line allocation (mirrors ERA 835 SVC line posting).
+       * When present, the engine validates each line's paid+adj+pr against
+       * its charge and writes per-line ledger entries linked to the
+       * professional_claim_service_lines row.
+       */
+      serviceLineAllocations?: Array<{
+        serviceLineId: string;
+        chargeAmount: number;
+        paidAmount: number;
+        adjustmentAmount: number;
+        patientResponsibilityAmount: number;
+      }> | null;
     }
   | {
       type: "patient_payment";
@@ -77,6 +90,11 @@ export type PostingSource =
         | "other";
       reference: string | null;
       paymentDate: string;
+      /** Source side of a transferred_balance move. */
+      transferFrom?: {
+        fromInvoiceId?: string | null;
+        fromClaimId?: string | null;
+      } | null;
     }
   | {
       type: "recoupment";

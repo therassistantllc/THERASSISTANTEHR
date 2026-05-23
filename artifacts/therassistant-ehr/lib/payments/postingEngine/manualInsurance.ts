@@ -30,6 +30,12 @@ type ManualInsuranceSource = Extract<PostingSource, { type: "manual_insurance" }
   note?: string | null;
 };
 
+export interface ManualInsuranceServiceLine {
+  id: string;
+  line_number: number;
+  charge_amount: number;
+}
+
 function round2(n: number) {
   return Math.round(n * 100) / 100;
 }
@@ -55,6 +61,7 @@ export interface ManualInsuranceHydratedClaim {
 export function validateManualInsurancePosting(
   src: ManualInsuranceSource,
   claim: ManualInsuranceHydratedClaim | null,
+  serviceLines?: ManualInsuranceServiceLine[] | null,
 ): ValidationResult {
   const blocking: ValidationIssue[] = [];
   const warning: ValidationIssue[] = [];
@@ -146,6 +153,78 @@ export function validateManualInsurancePosting(
     });
   }
 
+  // Per-line allocation validation (mirrors ERA 835 SVC poster).
+  if (src.serviceLineAllocations && src.serviceLineAllocations.length > 0) {
+    const known = new Map((serviceLines ?? []).map((l) => [l.id, l]));
+    let sumPaid = 0;
+    let sumAdj = 0;
+    let sumPr = 0;
+    for (let i = 0; i < src.serviceLineAllocations.length; i++) {
+      const a = src.serviceLineAllocations[i];
+      const lp = round2(Number(a.paidAmount ?? 0));
+      const la = round2(Number(a.adjustmentAmount ?? 0));
+      const lpr = round2(Number(a.patientResponsibilityAmount ?? 0));
+      const lc = round2(Number(a.chargeAmount ?? 0));
+      sumPaid += lp;
+      sumAdj += la;
+      sumPr += lpr;
+      const matched = known.get(a.serviceLineId);
+      if (serviceLines && !matched) {
+        blocking.push({
+          severity: "blocking",
+          code: "service_line_not_found",
+          field: `serviceLineAllocations[${i}].serviceLineId`,
+          message: `Service line ${a.serviceLineId} not found on claim.`,
+        });
+        continue;
+      }
+      if (lp < 0 || la < 0 || lpr < 0) {
+        blocking.push({
+          severity: "blocking",
+          code: "negative_line_amount",
+          field: `serviceLineAllocations[${i}]`,
+          message: `Negative amount on line ${matched?.line_number ?? a.serviceLineId}.`,
+        });
+        continue;
+      }
+      const lineCharge = matched ? round2(Number(matched.charge_amount)) : lc;
+      const lineSum = round2(lp + la + lpr);
+      if (lineCharge > 0 && Math.abs(lineSum - lineCharge) > POSTING_BALANCE_TOLERANCE * 2) {
+        blocking.push({
+          severity: "blocking",
+          code: "line_balance_mismatch",
+          field: `serviceLineAllocations[${i}]`,
+          message: `Line ${matched?.line_number ?? a.serviceLineId}: paid ${lp.toFixed(2)} + adj ${la.toFixed(2)} + pr ${lpr.toFixed(2)} = ${lineSum.toFixed(2)} ≠ charge ${lineCharge.toFixed(2)}.`,
+        });
+      }
+    }
+    const tolerance = POSTING_BALANCE_TOLERANCE * 4;
+    if (Math.abs(round2(sumPaid - paid)) > tolerance) {
+      blocking.push({
+        severity: "blocking",
+        code: "line_total_paid_mismatch",
+        field: "serviceLineAllocations",
+        message: `Per-line paid total ${sumPaid.toFixed(2)} ≠ claim paid ${paid.toFixed(2)}.`,
+      });
+    }
+    if (Math.abs(round2(sumAdj - adj)) > tolerance) {
+      blocking.push({
+        severity: "blocking",
+        code: "line_total_adj_mismatch",
+        field: "serviceLineAllocations",
+        message: `Per-line adjustment total ${sumAdj.toFixed(2)} ≠ claim adjustment ${adj.toFixed(2)}.`,
+      });
+    }
+    if (Math.abs(round2(sumPr - pr)) > tolerance) {
+      blocking.push({
+        severity: "blocking",
+        code: "line_total_pr_mismatch",
+        field: "serviceLineAllocations",
+        message: `Per-line PR total ${sumPr.toFixed(2)} ≠ claim PR ${pr.toFixed(2)}.`,
+      });
+    }
+  }
+
   return { blocking, warning };
 }
 
@@ -169,9 +248,10 @@ export async function commitManualInsurancePosting(
   src: ManualInsuranceSource,
   actor: PostingActor,
   dryRun?: boolean,
+  supabaseClient?: NonNullable<ReturnType<typeof createServerSupabaseAdminClient>> | null,
 ): Promise<CommitPostingResult> {
   const result = emptyResult();
-  const supabase = createServerSupabaseAdminClient();
+  const supabase = supabaseClient ?? createServerSupabaseAdminClient();
   if (!supabase) {
     result.errors.push({ field: "system", message: "Database connection not available" });
     return result;
@@ -191,7 +271,16 @@ export async function commitManualInsurancePosting(
   }
 
   const hydrated = (claim as ManualInsuranceHydratedClaim | null);
-  result.validation = validateManualInsurancePosting(src, hydrated);
+
+  let serviceLineRows: ManualInsuranceServiceLine[] | null = null;
+  if (hydrated && src.serviceLineAllocations && src.serviceLineAllocations.length > 0) {
+    const { data: lines } = await supabase
+      .from("professional_claim_service_lines")
+      .select("id, line_number, charge_amount")
+      .eq("claim_id", hydrated.id);
+    serviceLineRows = ((lines ?? []) as ManualInsuranceServiceLine[]);
+  }
+  result.validation = validateManualInsurancePosting(src, hydrated, serviceLineRows);
 
   if (result.validation.blocking.length > 0) {
     result.blocked = true;
@@ -241,6 +330,44 @@ export async function commitManualInsurancePosting(
   }
 
   try {
+    const allocations = src.serviceLineAllocations ?? null;
+    if (allocations && allocations.length > 0) {
+      for (const a of allocations) {
+        const lp = round2(Number(a.paidAmount ?? 0));
+        const la = round2(Number(a.adjustmentAmount ?? 0));
+        const lpr = round2(Number(a.patientResponsibilityAmount ?? 0));
+        if (lp > 0) {
+          await writeLedger(supabase, organizationId, manualId, hydrated!, clientId, {
+            entryType: "insurance_payment",
+            amount: lp,
+            description: `Manual insurance payment (line ${a.serviceLineId})`,
+          });
+          result.effects.push({ entryType: "insurance_payment", amount: lp, description: `Line ${a.serviceLineId} payment` });
+        }
+        if (la > 0) {
+          await writeLedger(supabase, organizationId, manualId, hydrated!, clientId, {
+            entryType: "contractual_adjustment",
+            amount: la,
+            groupCode: "CO",
+            description: `Contractual adjustment (line ${a.serviceLineId})`,
+          });
+          result.effects.push({ entryType: "contractual_adjustment", amount: la, groupCode: "CO", description: `Line ${a.serviceLineId} adjustment` });
+        }
+        if (lpr > 0) {
+          await writeLedger(supabase, organizationId, manualId, hydrated!, clientId, {
+            entryType: "patient_responsibility",
+            amount: lpr,
+            groupCode: "PR",
+            description: `Patient responsibility (line ${a.serviceLineId})`,
+          });
+          result.effects.push({ entryType: "patient_responsibility", amount: lpr, groupCode: "PR", description: `Line ${a.serviceLineId} PR` });
+        }
+      }
+      if (pr > 0 && clientId) {
+        const created = await createPatientInvoiceForManual(supabase, organizationId, hydrated!, clientId, manualId, pr, actor, result.auditLogIds);
+        result.patientInvoiceCreated = created;
+      }
+    } else {
     if (paid > 0) {
       await writeLedger(supabase, organizationId, manualId, hydrated!, clientId, {
         entryType: "insurance_payment",
@@ -271,6 +398,7 @@ export async function commitManualInsurancePosting(
         const created = await createPatientInvoiceForManual(supabase, organizationId, hydrated!, clientId, manualId, pr, actor, result.auditLogIds);
         result.patientInvoiceCreated = created;
       }
+    }
     }
 
     const newClaimStatus = paid > 0 || pr > 0 ? "paid" : "denied";
