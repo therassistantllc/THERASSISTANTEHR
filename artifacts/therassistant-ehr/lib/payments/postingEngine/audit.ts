@@ -15,12 +15,14 @@ import type { PostingActor } from "./types";
 export type PaymentAuditAction =
   | "payment_posted"
   | "payment_reversed"
+  | "payment_voided"
   | "payment_adjusted"
   | "era_batch_posted"
   | "era_batch_imported"
   | "patient_invoice_created"
   | "patient_invoice_updated"
   | "recoupment_recorded"
+  | "refund_requested"
   | "refund_issued"
   | "unapplied_credit_recorded";
 
@@ -31,7 +33,11 @@ export type PaymentAuditObjectType =
   | "professional_claim"
   | "patient_invoice"
   | "payment_adjustment"
-  | "patient_invoice_payment";
+  | "patient_invoice_payment"
+  | "client_payment"
+  | "insurance_manual_payment"
+  | "payment_refund"
+  | "payment_recoupment";
 
 export interface WritePaymentAuditLogInput {
   organizationId: string;

@@ -49,6 +49,24 @@ export {
   type PatientPaymentApplyTo,
   type PatientPaymentMethod,
 } from "./patientPayment";
+export {
+  reversePostedPayment,
+  voidPostedPayment,
+  recordRecoupment,
+  recordInsuranceRefund,
+  recordPatientRefund,
+  validateReversalRequest,
+  validateRefundAmount,
+  type PostedPaymentKind,
+  type PostedPaymentRef,
+  type ReverseOrVoidInput,
+  type ReversalResult,
+  type VoidResult,
+  type RecordRecoupmentInput,
+  type RecordRecoupmentResult,
+  type RecordRefundInput,
+  type RecordRefundResult,
+} from "./reversal";
 
 /** Default actor used when an internal service caller doesn't supply one. */
 const SYSTEM_ACTOR: PostingActor = {
