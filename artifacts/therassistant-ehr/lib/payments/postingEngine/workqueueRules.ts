@@ -511,6 +511,36 @@ export interface RunAgingScanResult {
  * existing open no_response workqueue item; emit one per eligible claim.
  * Designed to be called from a cron route once/day.
  */
+/**
+ * Resolve no-response aging threshold (days). Caller override beats
+ * organization_settings (`payment_posting.no_response_days`); finally
+ * fall back to DEFAULT_NO_RESPONSE_DAYS.
+ */
+async function loadNoResponseThreshold(
+  supabase: SupabaseClient,
+  organizationId: string,
+  overrideDays: number | null | undefined,
+): Promise<number> {
+  if (typeof overrideDays === "number" && Number.isFinite(overrideDays) && overrideDays > 0) {
+    return Math.floor(overrideDays);
+  }
+  try {
+    const { data } = await supabase
+      .from("organization_settings")
+      .select("setting_value")
+      .eq("organization_id", organizationId)
+      .eq("setting_key", "payment_posting.no_response_days")
+      .maybeSingle();
+    if (data && (data as { setting_value: unknown }).setting_value != null) {
+      const n = Number((data as { setting_value: unknown }).setting_value);
+      if (Number.isFinite(n) && n > 0) return Math.floor(n);
+    }
+  } catch {
+    // setting table may not exist in all environments — fall back.
+  }
+  return DEFAULT_NO_RESPONSE_DAYS;
+}
+
 export async function runNoResponseAgingScan(
   supabase: SupabaseClient,
   input: RunAgingScanInput,
@@ -521,7 +551,7 @@ export async function runNoResponseAgingScan(
     itemIds: [],
     errors: [],
   };
-  const days = input.noResponseDays ?? DEFAULT_NO_RESPONSE_DAYS;
+  const days = await loadNoResponseThreshold(supabase, input.organizationId, input.noResponseDays);
   const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
   const { data: candidates, error } = await supabase

@@ -49,6 +49,8 @@ export interface DashboardRow {
   source: PaymentSource;
   paymentType: "insurance" | "patient";
   postingStatus: string;
+  /** ERA-only; "matched" | "unmatched" | "review" | null for non-ERA. */
+  claimMatchStatus: string | null;
   payerName: string | null;
   clientId: string | null;
   clientDisplayName: string | null;
@@ -83,6 +85,33 @@ export interface DashboardResult {
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
 
+/**
+ * Pre-resolve provider NPI → list of professional_claim ids in this org.
+ * Returns null when no provider filter is active (caller should skip the
+ * predicate entirely). Returns empty array when the filter is active but
+ * no claims match — callers should use that to short-circuit row loads.
+ */
+async function resolveProviderClaimIds(
+  supabase: SupabaseClient,
+  organizationId: string,
+  providerNpi: string | null | undefined,
+): Promise<string[] | null> {
+  if (!providerNpi || !providerNpi.trim()) return null;
+  try {
+    const { data } = await supabase
+      .from("professional_claims")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .or(
+        `rendering_provider_npi.eq.${providerNpi},billing_provider_npi.eq.${providerNpi}`,
+      )
+      .limit(5000);
+    return (data ?? []).map((r) => String((r as { id: string }).id));
+  } catch {
+    return [];
+  }
+}
+
 function clampLimit(n: number | null | undefined): number {
   const v = Number(n ?? DEFAULT_LIMIT);
   if (!Number.isFinite(v) || v <= 0) return DEFAULT_LIMIT;
@@ -102,8 +131,11 @@ function wantSource(filters: DashboardFilters, src: PaymentSource): boolean {
 async function loadEraRows(
   supabase: SupabaseClient,
   filters: DashboardFilters,
+  providerClaimIds: string[] | null,
 ): Promise<DashboardRow[]> {
   if (!wantSource(filters, "era")) return [];
+  // Provider filter is active but no claim ids matched → short-circuit.
+  if (providerClaimIds && providerClaimIds.length === 0) return [];
   let q = supabase
     .from("era_claim_payments")
     .select(
@@ -114,6 +146,7 @@ async function loadEraRows(
     .order("created_at", { ascending: false })
     .limit(clampLimit(filters.limit));
   if (filters.clientId) q = q.eq("client_id", filters.clientId);
+  if (providerClaimIds) q = q.in("professional_claim_id", providerClaimIds);
   if (filters.postingStatus && filters.postingStatus.length > 0) {
     q = q.in("posting_status", filters.postingStatus);
   }
@@ -122,6 +155,8 @@ async function loadEraRows(
   if (filters.depositDateTo) q = q.lte("era_received_date", filters.depositDateTo);
   if (filters.paymentDateFrom) q = q.gte("created_at", filters.paymentDateFrom);
   if (filters.paymentDateTo) q = q.lte("created_at", filters.paymentDateTo);
+  if (filters.eraImportDateFrom) q = q.gte("created_at", filters.eraImportDateFrom);
+  if (filters.eraImportDateTo) q = q.lte("created_at", filters.eraImportDateTo);
 
   const { data, error } = await q;
   if (error) {
@@ -151,6 +186,7 @@ function mapEraRow(r: Record<string, unknown>): DashboardRow {
     source: "era",
     paymentType: "insurance",
     postingStatus: String(r["posting_status"] ?? "pending"),
+    claimMatchStatus: (r["claim_match_status"] as string | null) ?? null,
     payerName: (r["payer_name"] as string | null) ?? null,
     clientId: (r["client_id"] as string | null) ?? null,
     clientDisplayName: null,
@@ -169,8 +205,10 @@ function mapEraRow(r: Record<string, unknown>): DashboardRow {
 async function loadManualRows(
   supabase: SupabaseClient,
   filters: DashboardFilters,
+  providerClaimIds: string[] | null,
 ): Promise<DashboardRow[]> {
   if (!wantSource(filters, "manual_insurance")) return [];
+  if (providerClaimIds && providerClaimIds.length === 0) return [];
   let q = supabase
     .from("insurance_manual_payments")
     .select(
@@ -182,6 +220,7 @@ async function loadManualRows(
     .limit(clampLimit(filters.limit));
   if (filters.clientId) q = q.eq("client_id", filters.clientId);
   if (filters.payerProfileId) q = q.eq("payer_profile_id", filters.payerProfileId);
+  if (providerClaimIds) q = q.in("claim_id", providerClaimIds);
   if (filters.eftCheckNumber) q = q.ilike("eob_reference", `%${filters.eftCheckNumber}%`);
   if (filters.depositDateFrom) q = q.gte("posted_at", filters.depositDateFrom);
   if (filters.depositDateTo) q = q.lte("posted_at", filters.depositDateTo);
@@ -212,6 +251,7 @@ function mapManualRow(r: Record<string, unknown>): DashboardRow {
     source: "manual_insurance",
     paymentType: "insurance",
     postingStatus: "posted",
+    claimMatchStatus: null,
     payerName: null,
     clientId: (r["client_id"] as string | null) ?? null,
     clientDisplayName: null,
@@ -229,8 +269,10 @@ function mapManualRow(r: Record<string, unknown>): DashboardRow {
 async function loadPatientRows(
   supabase: SupabaseClient,
   filters: DashboardFilters,
+  providerClaimIds: string[] | null,
 ): Promise<DashboardRow[]> {
   if (!wantSource(filters, "patient")) return [];
+  if (providerClaimIds && providerClaimIds.length === 0) return [];
   let q = supabase
     .from("client_payments")
     .select(
@@ -241,6 +283,7 @@ async function loadPatientRows(
     .order("posted_at", { ascending: false })
     .limit(clampLimit(filters.limit));
   if (filters.clientId) q = q.eq("client_id", filters.clientId);
+  if (providerClaimIds) q = q.in("claim_id", providerClaimIds);
   if (filters.eftCheckNumber) q = q.ilike("reference_number", `%${filters.eftCheckNumber}%`);
   if (filters.postingStatus && filters.postingStatus.length > 0) {
     q = q.in("posting_status", filters.postingStatus);
@@ -274,6 +317,7 @@ function mapPatientRow(r: Record<string, unknown>): DashboardRow {
     source: "patient",
     paymentType: "patient",
     postingStatus: String(r["posting_status"] ?? "posted"),
+    claimMatchStatus: null,
     payerName: (r["payment_method"] as string | null) ?? null,
     clientId: (r["client_id"] as string | null) ?? null,
     clientDisplayName: null,
@@ -288,10 +332,17 @@ function mapPatientRow(r: Record<string, unknown>): DashboardRow {
 
 // ── Totals ──────────────────────────────────────────────────────────────────
 
+/**
+ * Derive every total from the same filtered row set + apply the same
+ * filter predicates to the side-channel count queries (recoupments /
+ * refunds / pending review / unapplied). Single source of truth for
+ * "what the user sees" — totals always match the visible table.
+ */
 async function loadTotals(
   supabase: SupabaseClient,
   filters: DashboardFilters,
   rows: DashboardRow[],
+  providerClaimIds: string[] | null,
 ): Promise<DashboardTotals> {
   const totals: DashboardTotals = {
     imported: 0,
@@ -306,7 +357,9 @@ async function loadTotals(
     amountPending: 0,
   };
 
-  // Derive what we can from rows (page-scoped) for fast paint
+  // Derive the per-row totals from the unified, already-filtered row set
+  // so they always agree with what the user is looking at. No source-only
+  // override — that was the bug the architect flagged.
   for (const r of rows) {
     totals.imported += 1;
     if (r.postingStatus === "posted") {
@@ -316,43 +369,33 @@ async function loadTotals(
       totals.amountPending += r.amount;
     }
     if (r.source === "era" && r.amount <= 0) totals.denied += 1;
+    if (r.source === "era" && r.claimMatchStatus === "unmatched") totals.unmatched += 1;
+    if (r.source === "patient" && r.professionalClaimId == null) totals.unapplied += 1;
   }
 
-  // True counts via lightweight count(*) queries scoped by filters.
-  // Apply the same filter predicates as the row queries so totals stay in
-  // sync with what the user sees in the table — otherwise KPIs lie.
+  // Cross-source side counts (not represented as rows) — apply the same
+  // org + date + client filters where the column exists so the KPI moves
+  // with the filter bar.
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  const countQ = (table: string): any =>
+    supabase.from(table).select("id", { count: "exact", head: true });
+
+  const scoped = (q: any, opts: { dateCol?: string } = {}) => {
+    let r = q.eq("organization_id", filters.organizationId).is("archived_at", null);
+    if (filters.clientId) r = r.eq("client_id", filters.clientId);
+    if (opts.dateCol) {
+      if (filters.paymentDateFrom) r = r.gte(opts.dateCol, filters.paymentDateFrom);
+      if (filters.paymentDateTo) r = r.lte(opts.dateCol, filters.paymentDateTo);
+    }
+    return r;
+  };
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
   try {
-    // supabase-js generics narrow each filter call, which trips
-    // TS2589 ("type instantiation is excessively deep") when we chain
-    // optional predicates through a helper. Cast to `any` for the builder
-    // glue — the result shape we care about ({ count }) is asserted below.
-    /* eslint-disable @typescript-eslint/no-explicit-any */
-    const applyEraFilters = (q: any) => {
-      let r = q
-        .eq("organization_id", filters.organizationId)
-        .is("archived_at", null);
-      if (filters.clientId) r = r.eq("client_id", filters.clientId);
-      if (filters.eftCheckNumber) r = r.ilike("check_number", `%${filters.eftCheckNumber}%`);
-      if (filters.depositDateFrom) r = r.gte("era_received_date", filters.depositDateFrom);
-      if (filters.depositDateTo) r = r.lte("era_received_date", filters.depositDateTo);
-      if (filters.paymentDateFrom) r = r.gte("created_at", filters.paymentDateFrom);
-      if (filters.paymentDateTo) r = r.lte("created_at", filters.paymentDateTo);
-      return r;
-    };
-    const applyOrgFilter = (q: any) =>
-      q.eq("organization_id", filters.organizationId).is("archived_at", null);
-
-    const countQ = (table: string): any =>
-      supabase.from(table).select("id", { count: "exact", head: true });
-    /* eslint-enable @typescript-eslint/no-explicit-any */
-
-    const counts = await Promise.all([
-      applyEraFilters(countQ("era_claim_payments")),
-      applyEraFilters(countQ("era_claim_payments")).eq("posting_status", "posted"),
-      applyEraFilters(countQ("era_claim_payments")).eq("claim_match_status", "unmatched"),
-      applyOrgFilter(countQ("payment_recoupments")),
-      applyOrgFilter(countQ("payment_refunds")),
-      applyOrgFilter(countQ("workqueue_items"))
+    const [recoupments, refunds, pendingReview] = await Promise.all([
+      scoped(countQ("payment_recoupments"), { dateCol: "created_at" }),
+      scoped(countQ("payment_refunds"), { dateCol: "created_at" }),
+      scoped(countQ("workqueue_items"), { dateCol: "created_at" })
         .in("work_type", [
           "denied",
           "underpayment",
@@ -366,38 +409,29 @@ async function loadTotals(
         ])
         .in("status", ["open", "in_progress", "blocked"]),
     ]);
-    if (typeof counts[0].count === "number") totals.imported = counts[0].count;
-    if (typeof counts[1].count === "number") totals.posted = counts[1].count;
-    if (typeof counts[2].count === "number") totals.unmatched = counts[2].count;
-    if (typeof counts[3].count === "number") totals.recoupments = counts[3].count;
-    if (typeof counts[4].count === "number") totals.refunds = counts[4].count;
-    if (typeof counts[5].count === "number") totals.pendingReview = counts[5].count;
+    if (typeof recoupments.count === "number") totals.recoupments = recoupments.count;
+    if (typeof refunds.count === "number") totals.refunds = refunds.count;
+    if (typeof pendingReview.count === "number") totals.pendingReview = pendingReview.count;
   } catch {
-    // Best-effort: fall back to row-derived counts.
+    // best-effort; keep row-derived totals
   }
 
-  // unapplied: client_payments with NULL claim_id and NULL patient_invoice_id
+  // Provider-scoped denied claims count when provider filter is active.
+  // We already have providerClaimIds — if not set, fall back to org-wide.
   try {
-    const { count: unappliedCount } = await supabase
-      .from("client_payments")
-      .select("id", { count: "exact", head: true })
-      .eq("organization_id", filters.organizationId)
-      .is("archived_at", null)
-      .is("claim_id", null)
-      .is("patient_invoice_id", null);
-    if (typeof unappliedCount === "number") totals.unapplied = unappliedCount;
-  } catch {
-    // ignore
-  }
-
-  // denied: professional_claims with claim_status='denied'
-  try {
-    const { count: deniedCount } = await supabase
+    let q = supabase
       .from("professional_claims")
       .select("id", { count: "exact", head: true })
       .eq("organization_id", filters.organizationId)
       .eq("claim_status", "denied");
-    if (typeof deniedCount === "number") totals.denied = deniedCount;
+    if (providerClaimIds) q = q.in("id", providerClaimIds);
+    const { count: deniedCount } = await q;
+    if (typeof deniedCount === "number") {
+      // Row-derived denied counts zero-pay ERA rows; the claim-level count
+      // is the canonical "denied claims" KPI. Take the maximum so neither
+      // signal is hidden by the other.
+      totals.denied = Math.max(totals.denied, deniedCount);
+    }
   } catch {
     // ignore
   }
@@ -411,10 +445,15 @@ export async function queryPaymentsDashboard(
   supabase: SupabaseClient,
   filters: DashboardFilters,
 ): Promise<DashboardResult> {
+  const providerClaimIds = await resolveProviderClaimIds(
+    supabase,
+    filters.organizationId,
+    filters.providerNpi,
+  );
   const [eraRows, manualRows, patientRows] = await Promise.all([
-    loadEraRows(supabase, filters),
-    loadManualRows(supabase, filters),
-    loadPatientRows(supabase, filters),
+    loadEraRows(supabase, filters, providerClaimIds),
+    loadManualRows(supabase, filters, providerClaimIds),
+    loadPatientRows(supabase, filters, providerClaimIds),
   ]);
   const merged = [...eraRows, ...manualRows, ...patientRows]
     .sort((a, b) => {
@@ -423,7 +462,7 @@ export async function queryPaymentsDashboard(
       return bd.localeCompare(ad);
     })
     .slice(0, clampLimit(filters.limit));
-  const totals = await loadTotals(supabase, filters, merged);
+  const totals = await loadTotals(supabase, filters, merged, providerClaimIds);
   return {
     rows: merged,
     totals,

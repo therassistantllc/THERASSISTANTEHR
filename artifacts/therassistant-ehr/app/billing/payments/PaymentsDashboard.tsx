@@ -60,9 +60,12 @@ interface Filters {
   depositDateTo: string;
   paymentDateFrom: string;
   paymentDateTo: string;
+  eraImportDateFrom: string;
+  eraImportDateTo: string;
   eftCheckNumber: string;
   clientId: string;
   payerProfileId: string;
+  providerNpi: string;
 }
 
 const EMPTY_FILTERS: Filters = {
@@ -73,9 +76,12 @@ const EMPTY_FILTERS: Filters = {
   depositDateTo: "",
   paymentDateFrom: "",
   paymentDateTo: "",
+  eraImportDateFrom: "",
+  eraImportDateTo: "",
   eftCheckNumber: "",
   clientId: "",
   payerProfileId: "",
+  providerNpi: "",
 };
 
 function fmtMoney(n: number) {
@@ -110,6 +116,9 @@ function buildQueryString(orgId: string, f: Filters): string {
   if (f.eftCheckNumber) p.set("eftCheckNumber", f.eftCheckNumber);
   if (f.clientId) p.set("clientId", f.clientId);
   if (f.payerProfileId) p.set("payerProfileId", f.payerProfileId);
+  if (f.providerNpi) p.set("providerNpi", f.providerNpi);
+  if (f.eraImportDateFrom) p.set("eraImportDateFrom", f.eraImportDateFrom);
+  if (f.eraImportDateTo) p.set("eraImportDateTo", f.eraImportDateTo);
   return p.toString();
 }
 
@@ -346,6 +355,31 @@ export default function PaymentsDashboard() {
               style={inputStyle}
             />
           </Field>
+          <Field label="Provider NPI">
+            <input
+              type="text"
+              value={filters.providerNpi}
+              onChange={(e) => setFilters((f) => ({ ...f, providerNpi: e.target.value }))}
+              style={inputStyle}
+              placeholder="rendering or billing NPI"
+            />
+          </Field>
+          <Field label="ERA import date from">
+            <input
+              type="date"
+              value={filters.eraImportDateFrom}
+              onChange={(e) => setFilters((f) => ({ ...f, eraImportDateFrom: e.target.value }))}
+              style={inputStyle}
+            />
+          </Field>
+          <Field label="ERA import date to">
+            <input
+              type="date"
+              value={filters.eraImportDateTo}
+              onChange={(e) => setFilters((f) => ({ ...f, eraImportDateTo: e.target.value }))}
+              style={inputStyle}
+            />
+          </Field>
           <Field label="Deposit date from">
             <input
               type="date"
@@ -466,6 +500,39 @@ export default function PaymentsDashboard() {
           style={btnStyle(false)}
         >
           Reprocess
+        </button>
+        <button
+          onClick={async () => {
+            if (selected.size === 0) return;
+            setBusy("export");
+            try {
+              const r = await fetch(`/api/billing/payments/bulk/export`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ organizationId: orgId, ids: [...selected] }),
+              });
+              if (!r.ok) {
+                const j = await r.json().catch(() => ({}));
+                throw new Error(j?.error ?? "Export failed");
+              }
+              const blob = await r.blob();
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = `payments-selected-${Date.now()}.csv`;
+              a.click();
+              URL.revokeObjectURL(url);
+              setFlash({ tone: "ok", msg: `Exported ${selected.size} rows` });
+            } catch (e) {
+              setFlash({ tone: "err", msg: e instanceof Error ? e.message : "Export failed" });
+            } finally {
+              setBusy(null);
+            }
+          }}
+          disabled={selected.size === 0 || busy !== null}
+          style={btnStyle(false)}
+        >
+          Export selected
         </button>
         <button
           onClick={() => {
