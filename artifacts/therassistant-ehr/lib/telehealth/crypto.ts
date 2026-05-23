@@ -20,7 +20,6 @@ export function isTokenEncryptionConfigured(): boolean {
   const raw = process.env.TELEHEALTH_TOKEN_ENC_KEY;
   return typeof raw === "string" && raw.length >= 24;
 }
-
 export function encryptToken(plaintext: string): string {
   const iv = randomBytes(12);
   const cipher = createCipheriv(ALGO, getKey(), iv);

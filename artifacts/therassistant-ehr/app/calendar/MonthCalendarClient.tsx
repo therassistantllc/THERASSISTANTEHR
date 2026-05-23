@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import styles from "./monthCalendar.module.css";
 import { DEFAULT_ORG_ID } from "@/lib/config";
@@ -731,6 +731,7 @@ export default function MonthCalendarClient() {
           organizationId={ORG_ID}
           clientId={detail.appointment.clientId}
           appointmentId={detail.appointment.id}
+          providerId={detail.appointment.providerId}
           openBalance={detail.balance.openBalance}
           onClose={() => setCollectOpen(false)}
           onCollected={async () => {
@@ -757,10 +758,45 @@ export default function MonthCalendarClient() {
 
 /* --- Collect modal: posts to /api/billing/payments/patient --- */
 
+type ConnectStatus = "not_connected" | "onboarding" | "connected" | "restricted";
+type ProviderConnectInfo = {
+  status: ConnectStatus;
+  chargesEnabled: boolean;
+  credentialingProfileId: string | null;
+  providerName: string | null;
+};
+
+declare global {
+  interface Window { Stripe?: (key: string, options?: { stripeAccount?: string }) => unknown }
+}
+
+const STRIPE_JS_URL = "https://js.stripe.com/v3/";
+
+function loadStripeJs(): Promise<void> {
+  if (typeof window === "undefined") return Promise.reject(new Error("Stripe.js requires browser"));
+  if (window.Stripe) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector<HTMLScriptElement>(`script[src="${STRIPE_JS_URL}"]`);
+    if (existing) {
+      existing.addEventListener("load", () => resolve());
+      existing.addEventListener("error", () => reject(new Error("Failed to load Stripe.js")));
+      if (window.Stripe) resolve();
+      return;
+    }
+    const s = document.createElement("script");
+    s.src = STRIPE_JS_URL;
+    s.async = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error("Failed to load Stripe.js"));
+    document.head.appendChild(s);
+  });
+}
+
 function CollectModal({
   organizationId,
   clientId,
   appointmentId,
+  providerId,
   openBalance,
   onClose,
   onCollected,
@@ -768,22 +804,55 @@ function CollectModal({
   organizationId: string;
   clientId: string;
   appointmentId: string;
+  providerId: string | null;
   openBalance: number;
   onClose: () => void;
   onCollected: () => void | Promise<void>;
 }) {
-  const [amount, setAmount] = useState<string>(
-    openBalance > 0 ? openBalance.toFixed(2) : "0.00",
-  );
-  const [method, setMethod] = useState<string>("cash");
-  const [applyTo, setApplyTo] = useState<string>(
-    openBalance > 0 ? "account_balance" : "encounter",
-  );
+  const [amount, setAmount] = useState<string>(openBalance > 0 ? openBalance.toFixed(2) : "0.00");
+  const [applyTo, setApplyTo] = useState<string>(openBalance > 0 ? "account_balance" : "encounter");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function submit() {
+  const [connect, setConnect] = useState<ProviderConnectInfo | null>(null);
+  const [connectLoading, setConnectLoading] = useState(true);
+  const [mode, setMode] = useState<"card" | "manual">("card");
+  const [manualMethod, setManualMethod] = useState<string>("cash");
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!providerId) {
+      setConnect({ status: "not_connected", chargesEnabled: false, credentialingProfileId: null, providerName: null });
+      setConnectLoading(false);
+      setMode("manual");
+      return;
+    }
+    setConnectLoading(true);
+    fetch(`/api/billing/stripe-connect/provider-status?providerId=${encodeURIComponent(providerId)}&organizationId=${encodeURIComponent(organizationId)}`)
+      .then((r) => r.json())
+      .then((j: { success?: boolean; status?: ConnectStatus; chargesEnabled?: boolean; credentialingProfileId?: string | null; providerName?: string | null; error?: string }) => {
+        if (cancelled) return;
+        if (!j.success) throw new Error(j.error ?? "Lookup failed");
+        const info: ProviderConnectInfo = {
+          status: (j.status ?? "not_connected") as ConnectStatus,
+          chargesEnabled: Boolean(j.chargesEnabled),
+          credentialingProfileId: j.credentialingProfileId ?? null,
+          providerName: j.providerName ?? null,
+        };
+        setConnect(info);
+        setMode(info.chargesEnabled ? "card" : "manual");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setConnect({ status: "not_connected", chargesEnabled: false, credentialingProfileId: null, providerName: null });
+        setMode("manual");
+      })
+      .finally(() => { if (!cancelled) setConnectLoading(false); });
+    return () => { cancelled = true; };
+  }, [providerId, organizationId]);
+
+  async function submitManual() {
     setBusy(true);
     setError(null);
     try {
@@ -791,13 +860,11 @@ function CollectModal({
         organizationId,
         clientId,
         amount: Number(amount),
-        method,
+        method: manualMethod,
         applyToKind: applyTo,
         note: note || null,
       };
-      if (applyTo === "encounter") {
-        body.appointmentId = appointmentId;
-      }
+      if (applyTo === "encounter") body.appointmentId = appointmentId;
       const res = await fetch(`/api/billing/payments/patient`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -805,11 +872,7 @@ function CollectModal({
       });
       const json = await res.json();
       if (!res.ok || !json.ok) {
-        throw new Error(
-          json.error ??
-            (json.errors && json.errors[0]) ??
-            "Payment posting failed",
-        );
+        throw new Error(json.error ?? (json.errors && json.errors[0]?.message) ?? "Payment posting failed");
       }
       await onCollected();
     } catch (e) {
@@ -822,64 +885,283 @@ function CollectModal({
   return (
     <div className={styles.modalOverlay} onClick={onClose}>
       <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
-        <h3>Collect payment</h3>
-        {error ? (
-          <div className={`${styles.banner} ${styles.bannerError}`}>{error}</div>
-        ) : null}
+        <h3>Collect copay</h3>
+        {error ? <div className={`${styles.banner} ${styles.bannerError}`}>{error}</div> : null}
+
+        {!connectLoading && connect && (
+          <div style={{ display: "flex", gap: 8, marginBottom: 10, fontSize: 12 }}>
+            <button
+              type="button"
+              className={mode === "card" ? styles.primaryBtn : styles.secondaryBtn}
+              style={{ padding: "6px 10px" }}
+              disabled={!connect.chargesEnabled || busy}
+              onClick={() => setMode("card")}
+            >
+              Charge card{!connect.chargesEnabled ? " (provider not connected)" : ""}
+            </button>
+            <button
+              type="button"
+              className={mode === "manual" ? styles.primaryBtn : styles.secondaryBtn}
+              style={{ padding: "6px 10px" }}
+              disabled={busy}
+              onClick={() => setMode("manual")}
+            >
+              Log payment
+            </button>
+          </div>
+        )}
+
         <div className={styles.modalRow}>
           <label className={styles.modalLabel}>Amount</label>
-          <input
-            className={styles.input}
-            inputMode="decimal"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-          />
-        </div>
-        <div className={styles.modalRow}>
-          <label className={styles.modalLabel}>Method</label>
-          <select
-            className={styles.select}
-            value={method}
-            onChange={(e) => setMethod(e.target.value)}
-          >
-            <option value="cash">Cash</option>
-            <option value="check">Check</option>
-            <option value="credit_card">Credit card</option>
-            <option value="debit_card">Debit card</option>
-            <option value="stripe">Stripe</option>
-            <option value="external_card">External card</option>
-            <option value="other">Other</option>
-          </select>
+          <input className={styles.input} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} disabled={busy} />
         </div>
         <div className={styles.modalRow}>
           <label className={styles.modalLabel}>Apply to</label>
-          <select
-            className={styles.select}
-            value={applyTo}
-            onChange={(e) => setApplyTo(e.target.value)}
-          >
+          <select className={styles.select} value={applyTo} onChange={(e) => setApplyTo(e.target.value)} disabled={busy}>
             <option value="account_balance">Account balance</option>
             <option value="encounter">This encounter</option>
           </select>
         </div>
         <div className={styles.modalRow}>
           <label className={styles.modalLabel}>Note (optional)</label>
-          <input
-            className={styles.input}
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
+          <input className={styles.input} value={note} onChange={(e) => setNote(e.target.value)} disabled={busy} />
+        </div>
+
+        {mode === "card" && connect?.chargesEnabled && connect.credentialingProfileId ? (
+          <StripeCardCharge
+            organizationId={organizationId}
+            clientId={clientId}
+            appointmentId={appointmentId}
+            credentialingProfileId={connect.credentialingProfileId}
+            amount={Number(amount)}
+            applyTo={applyTo}
+            note={note}
+            onError={setError}
+            onPosted={onCollected}
+            busy={busy}
+            setBusy={setBusy}
+            onCancel={onClose}
           />
-        </div>
-        <div className={styles.modalActions}>
-          <button className={styles.secondaryBtn} onClick={onClose} disabled={busy}>
-            Cancel
-          </button>
-          <button className={styles.primaryBtn} onClick={submit} disabled={busy}>
-            {busy ? "Posting…" : "Post payment"}
-          </button>
-        </div>
+        ) : (
+          <>
+            {mode === "card" && !connectLoading && connect && !connect.chargesEnabled && (
+              <div className={`${styles.banner}`} style={{ marginBottom: 10 }}>
+                {connect.status === "not_connected"
+                  ? "This provider has not connected a Stripe account yet. Use Settings → Providers to connect, or log the payment manually."
+                  : "Provider's Stripe account is not ready to accept charges yet. Finish onboarding in Settings → Providers, or log the payment manually."}
+              </div>
+            )}
+            <div className={styles.modalRow}>
+              <label className={styles.modalLabel}>Method</label>
+              <select className={styles.select} value={manualMethod} onChange={(e) => setManualMethod(e.target.value)} disabled={busy}>
+                <option value="cash">Cash</option>
+                <option value="check">Check</option>
+                <option value="credit_card">Credit card</option>
+                <option value="debit_card">Debit card</option>
+                <option value="external_card">External card (charged elsewhere)</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+            <div className={styles.modalActions}>
+              <button className={styles.secondaryBtn} onClick={onClose} disabled={busy}>Cancel</button>
+              <button className={styles.primaryBtn} onClick={submitManual} disabled={busy}>
+                {busy ? "Posting…" : "Log payment"}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
+  );
+}
+
+function StripeCardCharge({
+  organizationId,
+  clientId,
+  appointmentId,
+  credentialingProfileId,
+  amount,
+  applyTo,
+  note,
+  onPosted,
+  onError,
+  onCancel,
+  busy,
+  setBusy,
+}: {
+  organizationId: string;
+  clientId: string;
+  appointmentId: string;
+  credentialingProfileId: string;
+  amount: number;
+  applyTo: string;
+  note: string;
+  onPosted: () => void | Promise<void>;
+  onError: (msg: string | null) => void;
+  onCancel: () => void;
+  busy: boolean;
+  setBusy: (b: boolean) => void;
+}) {
+  type StripeInstance = {
+    elements: (opts?: Record<string, unknown>) => {
+      create: (type: string, opts?: Record<string, unknown>) => {
+        mount: (el: HTMLElement) => void;
+        unmount: () => void;
+        on?: (ev: string, cb: (e: unknown) => void) => void;
+      };
+    };
+    confirmCardPayment: (
+      clientSecret: string,
+      data: { payment_method: { card: unknown } },
+    ) => Promise<{ paymentIntent?: { id: string; status: string; latest_charge?: string | { id: string } | null }; error?: { message?: string } }>;
+  };
+
+  const cardMountRef = useRef<HTMLDivElement | null>(null);
+  const stripeRef = useRef<StripeInstance | null>(null);
+  const cardRef = useRef<{ unmount: () => void } | null>(null);
+  const stripeAccountRef = useRef<string | null>(null);
+  const intentRef = useRef<{ clientSecret: string; paymentIntentId: string } | null>(null);
+
+  const [ready, setReady] = useState(false);
+  const [bootError, setBootError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    onError(null);
+    setReady(false);
+    setBootError(null);
+    (async () => {
+      try {
+        if (!Number.isFinite(amount) || amount <= 0) {
+          throw new Error("Enter an amount greater than $0.00");
+        }
+        const amountCents = Math.round(amount * 100);
+        if (amountCents < 50) throw new Error("Stripe minimum charge is $0.50");
+
+        await loadStripeJs();
+        if (cancelled) return;
+
+        const resp = await fetch("/api/billing/stripe-connect/payment-intent", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            providerId: credentialingProfileId,
+            appointmentId,
+            clientId,
+            amountCents,
+            organizationId,
+          }),
+        });
+        const j = (await resp.json()) as {
+          success?: boolean;
+          clientSecret?: string;
+          paymentIntentId?: string;
+          stripeAccountId?: string;
+          publishableKey?: string;
+          error?: string;
+        };
+        if (!resp.ok || !j.success || !j.clientSecret || !j.publishableKey || !j.stripeAccountId) {
+          throw new Error(j.error ?? `Could not initialize card form (${resp.status})`);
+        }
+        if (cancelled) return;
+        stripeAccountRef.current = j.stripeAccountId;
+        intentRef.current = { clientSecret: j.clientSecret, paymentIntentId: j.paymentIntentId ?? "" };
+
+        const stripe = (window.Stripe as (k: string, o?: { stripeAccount?: string }) => StripeInstance)(j.publishableKey, {
+          stripeAccount: j.stripeAccountId,
+        });
+        stripeRef.current = stripe;
+        const elements = stripe.elements();
+        const card = elements.create("card", { hidePostalCode: false });
+        if (cardMountRef.current) card.mount(cardMountRef.current);
+        cardRef.current = card;
+        setReady(true);
+      } catch (e) {
+        if (!cancelled) setBootError(e instanceof Error ? e.message : "Card form failed to load");
+      }
+    })();
+    return () => {
+      cancelled = true;
+      try { cardRef.current?.unmount(); } catch { /* noop */ }
+      cardRef.current = null;
+    };
+    // Recreate intent on amount change so it matches what we charge.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [amount, credentialingProfileId, appointmentId, clientId, organizationId]);
+
+  async function pay() {
+    if (!stripeRef.current || !cardRef.current || !intentRef.current) return;
+    setBusy(true);
+    onError(null);
+    try {
+      const result = await stripeRef.current.confirmCardPayment(intentRef.current.clientSecret, {
+        payment_method: { card: cardRef.current },
+      });
+      if (result.error) throw new Error(result.error.message ?? "Card declined");
+      const pi = result.paymentIntent;
+      if (!pi || pi.status !== "succeeded") throw new Error(`Payment status: ${pi?.status ?? "unknown"}`);
+
+      const chargeId = typeof pi.latest_charge === "string" ? pi.latest_charge : pi.latest_charge?.id ?? null;
+      const externalId = chargeId ?? pi.id;
+
+      const body: Record<string, unknown> = {
+        organizationId,
+        clientId,
+        amount,
+        method: "stripe",
+        applyToKind: applyTo,
+        externalPaymentId: externalId,
+        stripeChargeId: chargeId,
+        stripeConnectedAccountId: stripeAccountRef.current,
+        reference: pi.id,
+        note: note || null,
+      };
+      if (applyTo === "encounter") body.appointmentId = appointmentId;
+
+      const postRes = await fetch(`/api/billing/payments/patient`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const postJson = await postRes.json();
+      if (!postRes.ok || !postJson.ok) {
+        // Charge succeeded but local posting failed: do NOT throw a hard error —
+        // the Connect webhook will retry posting. Surface a soft notice.
+        onError(
+          `Card charged successfully (${pi.id}) but immediate posting failed: ${postJson.error ?? "unknown"}. The webhook will retry — refresh in a moment.`,
+        );
+      }
+      await onPosted();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : "Card charge failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <div className={styles.modalRow}>
+        <label className={styles.modalLabel}>Card</label>
+        <div
+          ref={cardMountRef}
+          style={{
+            padding: "10px 12px",
+            border: "1px solid var(--border-default, #cbd5e1)",
+            borderRadius: 6,
+            background: "#fff",
+            minHeight: 38,
+          }}
+        />
+      </div>
+      {bootError && <div className={`${styles.banner} ${styles.bannerError}`}>{bootError}</div>}
+      <div className={styles.modalActions}>
+        <button className={styles.secondaryBtn} onClick={onCancel} disabled={busy}>Cancel</button>
+        <button className={styles.primaryBtn} onClick={pay} disabled={busy || !ready || bootError !== null}>
+          {busy ? "Charging…" : ready ? `Charge $${amount.toFixed(2)}` : "Loading…"}
+        </button>
+      </div>
+    </>
   );
 }
 

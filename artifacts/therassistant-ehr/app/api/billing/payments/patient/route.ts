@@ -111,6 +111,7 @@ export async function POST(request: Request) {
       applyTo,
       externalPaymentId: body.externalPaymentId ? String(body.externalPaymentId) : null,
       stripeChargeId: body.stripeChargeId ? String(body.stripeChargeId) : null,
+      stripeConnectedAccountId: body.stripeConnectedAccountId ? String(body.stripeConnectedAccountId) : null,
       referenceNumber: body.reference ? String(body.reference) : null,
       note: body.note ? String(body.note) : null,
       paymentDate: body.paymentDate ? String(body.paymentDate) : null,

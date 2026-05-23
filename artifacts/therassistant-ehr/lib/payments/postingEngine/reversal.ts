@@ -1131,13 +1131,18 @@ async function recordRefundShared(
       try {
         const { data: cpRow } = await supabase
           .from("client_payments")
-          .select("stripe_charge_id, stripe_payment_intent_id")
+          .select("stripe_charge_id, stripe_payment_intent_id, stripe_connected_account_id")
           .eq("id", payment.id)
           .eq("organization_id", input.organizationId)
           .maybeSingle();
-        const cp = cpRow as { stripe_charge_id?: string | null; stripe_payment_intent_id?: string | null } | null;
+        const cp = cpRow as {
+          stripe_charge_id?: string | null;
+          stripe_payment_intent_id?: string | null;
+          stripe_connected_account_id?: string | null;
+        } | null;
         const chargeId = cp?.stripe_charge_id ?? null;
         const piId = cp?.stripe_payment_intent_id ?? null;
+        const connectedAccountId = cp?.stripe_connected_account_id ?? null;
         if (chargeId || piId) {
           const form = new URLSearchParams();
           if (chargeId) form.set("charge", chargeId);
@@ -1146,13 +1151,17 @@ async function recordRefundShared(
           form.set("reason", "requested_by_customer");
           form.set(`metadata[reversal_refund_id]`, result.refundId ?? "");
           form.set(`metadata[organization_id]`, input.organizationId);
+          const headers: Record<string, string> = {
+            Authorization: `Bearer ${stripeKey}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Idempotency-Key": `refund-${result.refundId}`,
+          };
+          // For Stripe Connect copay charges (Task #123), refunds MUST
+          // target the connected account where the charge lives.
+          if (connectedAccountId) headers["Stripe-Account"] = connectedAccountId;
           const resp = await fetch("https://api.stripe.com/v1/refunds", {
             method: "POST",
-            headers: {
-              Authorization: `Bearer ${stripeKey}`,
-              "Content-Type": "application/x-www-form-urlencoded",
-              "Idempotency-Key": `refund-${result.refundId}`,
-            },
+            headers,
             body: form.toString(),
           });
           if (resp.ok) {

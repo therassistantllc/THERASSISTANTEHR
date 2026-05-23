@@ -3,7 +3,7 @@ import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 
 const CREDENTIALING_SELECT =
-  "id, provider_name, credential_display, individual_npi, email, practice_name, practice_address, practice_tax_id, group_npi, group_medicaid_id, phone, taxonomy_code, individual_medicaid_id, caqh_id, other_payer_id, primary_license_number, primary_license_effective_date, payer_effective_date, payer_revalidation_date, secondary_license_number, secondary_license_effective_date, telehealth_url, stripe_payment_link_url, default_telehealth_platform, is_active, updated_at";
+  "id, provider_name, credential_display, individual_npi, email, practice_name, practice_address, practice_tax_id, group_npi, group_medicaid_id, phone, taxonomy_code, individual_medicaid_id, caqh_id, other_payer_id, primary_license_number, primary_license_effective_date, payer_effective_date, payer_revalidation_date, secondary_license_number, secondary_license_effective_date, telehealth_url, stripe_payment_link_url, default_telehealth_platform, stripe_connect_account_id, stripe_charges_enabled, stripe_payouts_enabled, stripe_details_submitted, stripe_requirements, stripe_account_status_updated_at, is_active, updated_at";
 
 const CREDENTIALING_SELECT_FALLBACK =
   "id, provider_name, credential_display, individual_npi, email, practice_name, practice_address, practice_tax_id, group_npi, group_medicaid_id, phone, taxonomy_code, individual_medicaid_id, caqh_id, other_payer_id, primary_license_number, primary_license_effective_date, payer_effective_date, payer_revalidation_date, secondary_license_number, secondary_license_effective_date, is_active, updated_at";
@@ -16,19 +16,31 @@ function isMissingTelehealthColumns(error: unknown): boolean {
   const code = (error as { code?: string }).code ?? "";
   const message = String((error as { message?: string }).message ?? "");
   if (code !== "42703") return false;
-  return /telehealth_url|stripe_payment_link_url|default_telehealth_platform/i.test(message);
+  return /telehealth_url|stripe_payment_link_url|default_telehealth_platform|stripe_connect_account_id|stripe_charges_enabled|stripe_payouts_enabled|stripe_details_submitted|stripe_requirements|stripe_account_status_updated_at/i.test(message);
 }
 
 function withNullExtras<T extends Record<string, unknown>>(row: T): T & {
   telehealth_url: string | null;
   stripe_payment_link_url: string | null;
   default_telehealth_platform: string | null;
+  stripe_connect_account_id: string | null;
+  stripe_charges_enabled: boolean;
+  stripe_payouts_enabled: boolean;
+  stripe_details_submitted: boolean;
+  stripe_requirements: unknown;
+  stripe_account_status_updated_at: string | null;
 } {
   return {
     ...row,
     telehealth_url: (row.telehealth_url as string | null | undefined) ?? null,
     stripe_payment_link_url: (row.stripe_payment_link_url as string | null | undefined) ?? null,
     default_telehealth_platform: (row.default_telehealth_platform as string | null | undefined) ?? null,
+    stripe_connect_account_id: (row.stripe_connect_account_id as string | null | undefined) ?? null,
+    stripe_charges_enabled: Boolean(row.stripe_charges_enabled),
+    stripe_payouts_enabled: Boolean(row.stripe_payouts_enabled),
+    stripe_details_submitted: Boolean(row.stripe_details_submitted),
+    stripe_requirements: row.stripe_requirements ?? null,
+    stripe_account_status_updated_at: (row.stripe_account_status_updated_at as string | null | undefined) ?? null,
   };
 }
 
@@ -54,7 +66,7 @@ export async function GET(request: Request) {
       .order("practice_name", { ascending: true })
       .order("provider_name", { ascending: true });
 
-    let data = initial.data;
+    let data: unknown[] | null = (initial.data as unknown[] | null) ?? null;
     if (initial.error) {
       if (!isMissingTelehealthColumns(initial.error)) throw initial.error;
       console.warn(`[provider credentialing] telehealth_url/stripe_payment_link_url columns missing; degrading gracefully. ${MIGRATION_HINT}`);
@@ -66,7 +78,7 @@ export async function GET(request: Request) {
         .order("practice_name", { ascending: true })
         .order("provider_name", { ascending: true });
       if (fallback.error) throw fallback.error;
-      data = fallback.data as typeof data;
+      data = (fallback.data as unknown[] | null) ?? null;
     }
 
     const providers = (data ?? []).map((row) => withNullExtras(row as Record<string, unknown>));
@@ -139,7 +151,7 @@ export async function POST(request: NextRequest) {
       .select(CREDENTIALING_SELECT)
       .single();
 
-    let data = attempt.data;
+    let data: unknown = attempt.data;
     if (attempt.error) {
       if (!isMissingTelehealthColumns(attempt.error)) throw attempt.error;
       console.warn(`[provider credentialing] telehealth_url/stripe_payment_link_url columns missing on insert; degrading gracefully. ${MIGRATION_HINT}`);
@@ -209,7 +221,7 @@ export async function PATCH(request: NextRequest) {
       .select(CREDENTIALING_SELECT)
       .single();
 
-    let data = attempt.data;
+    let data: unknown = attempt.data;
     if (attempt.error) {
       if (!isMissingTelehealthColumns(attempt.error)) throw attempt.error;
       console.warn(`[provider credentialing] telehealth_url/stripe_payment_link_url columns missing on update; degrading gracefully. ${MIGRATION_HINT}`);

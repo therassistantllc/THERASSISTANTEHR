@@ -6,3 +6,4 @@
 - [Eligibility adapter routing](eligibility-adapter-routing.md) — CORE 270/271 picked from connection.vendor via pickEligibilityAdapter; legacy runEligibility270 shim throws — never add new callers.
 - [OA Phase 1 gate lessons](oa-phase1-gate-lessons.md) — enrollment gates must filter status='approved' in SQL (terminated rows are kept for history); raw-X12 endpoints can't enforce per-payer gate and must be sandbox-only.
 - [workqueue_items insert schema](workqueue-items-schema.md) — `client_id` (NOT patient_id), `work_type` (NOT queue_type), source_object_type is an enum (no `stripe_charge`); source_object_id is uuid NOT NULL — mint a synthetic uuid + stash external ids in context_payload.
+- [Stripe Connect refund header](stripe-connect-refund-header.md) — refunding a Connect charge requires `Stripe-Account: acct_…`; without it the refund 404s. Persist the connected account id at charge time.

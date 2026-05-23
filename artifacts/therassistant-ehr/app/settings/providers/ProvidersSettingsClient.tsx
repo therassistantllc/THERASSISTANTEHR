@@ -20,6 +20,12 @@ type CredentialingRecord = {
   telehealth_url: string | null;
   stripe_payment_link_url: string | null;
   default_telehealth_platform: TelehealthPlatform | null;
+  stripe_connect_account_id: string | null;
+  stripe_charges_enabled: boolean;
+  stripe_payouts_enabled: boolean;
+  stripe_details_submitted: boolean;
+  stripe_requirements: { currently_due?: string[]; disabled_reason?: string | null } | null;
+  stripe_account_status_updated_at: string | null;
   is_active: boolean;
   updated_at: string;
 };
@@ -38,6 +44,32 @@ type TelehealthConnectionsResponse = {
   error?: string;
   platformStatus?: Record<TelehealthPlatform, { configured: boolean; missingEnv: string[] }>;
   connections?: TelehealthConnection[];
+};
+
+type ConnectStatus = "not_connected" | "onboarding" | "connected" | "restricted";
+
+function connectStatusOf(p: CredentialingRecord): ConnectStatus {
+  if (!p.stripe_connect_account_id) return "not_connected";
+  if (p.stripe_charges_enabled) {
+    const due = p.stripe_requirements?.currently_due ?? [];
+    return due.length > 0 ? "restricted" : "connected";
+  }
+  if (p.stripe_details_submitted) return "restricted";
+  return "onboarding";
+}
+
+const CONNECT_LABEL: Record<ConnectStatus, string> = {
+  not_connected: "Not connected",
+  onboarding: "Onboarding in progress",
+  connected: "Connected",
+  restricted: "Action needed",
+};
+
+const CONNECT_CLASS: Record<ConnectStatus, string> = {
+  not_connected: "status status-grey",
+  onboarding: "status status-yellow",
+  connected: "status status-green",
+  restricted: "status status-red",
 };
 
 function getOrganizationId() {
@@ -135,6 +167,8 @@ export default function ProvidersSettingsClient() {
           </strong>
         </article>
       </section>
+
+      <ReturnFromStripeBanner organizationId={organizationId} onRefreshed={(updated) => setProviders((prev) => prev.map((p) => (p.id === updated.id ? { ...p, ...updated } : p)))} />
 
       <section className="panel">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-4)" }}>
@@ -263,6 +297,8 @@ function ProviderCard({
           <div><strong>Revalidation:</strong> {new Date(provider.payer_revalidation_date).toLocaleDateString()}</div>
         )}
       </div>
+
+      <StripeConnectSection provider={provider} organizationId={organizationId} onUpdated={onSaved} />
 
       <div style={{ marginTop: "var(--space-4)", padding: "var(--space-3)", background: "var(--surface-muted, #f8fafc)", border: "1px solid var(--border-default, #e2e8f0)", borderRadius: 6 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-2)" }}>
@@ -468,5 +504,211 @@ function TelehealthConnectionsPanel() {
         })}
       </div>
     </section>
+  );
+}
+
+function StripeConnectSection({
+  provider,
+  organizationId,
+  onUpdated,
+}: {
+  provider: CredentialingRecord;
+  organizationId: string;
+  onUpdated: (updated: CredentialingRecord) => void;
+}) {
+  const [busy, setBusy] = useState<null | "connect" | "refresh">(null);
+  const [error, setError] = useState<string | null>(null);
+  const status = connectStatusOf(provider);
+  const due = provider.stripe_requirements?.currently_due ?? [];
+  const disabledReason = provider.stripe_requirements?.disabled_reason ?? null;
+
+  async function startOnboarding() {
+    setBusy("connect");
+    setError(null);
+    try {
+      const resp = await fetch("/api/billing/stripe-connect/onboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ providerId: provider.id, organizationId }),
+      });
+      const json = (await resp.json()) as { success?: boolean; url?: string; error?: string };
+      if (!resp.ok || !json.success || !json.url) {
+        throw new Error(json.error ?? `Onboarding failed (${resp.status})`);
+      }
+      window.location.href = json.url;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Onboarding failed");
+      setBusy(null);
+    }
+  }
+
+  async function refreshStatus() {
+    setBusy("refresh");
+    setError(null);
+    try {
+      const resp = await fetch("/api/billing/stripe-connect/refresh-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ providerId: provider.id, organizationId }),
+      });
+      const json = (await resp.json()) as {
+        success?: boolean;
+        stripe_charges_enabled?: boolean;
+        stripe_payouts_enabled?: boolean;
+        stripe_details_submitted?: boolean;
+        stripe_requirements?: { currently_due?: string[]; disabled_reason?: string | null } | null;
+        stripe_account_status_updated_at?: string;
+        accountId?: string | null;
+        error?: string;
+      };
+      if (!resp.ok || !json.success) throw new Error(json.error ?? `Refresh failed (${resp.status})`);
+      onUpdated({
+        ...provider,
+        stripe_connect_account_id: json.accountId ?? provider.stripe_connect_account_id ?? null,
+        stripe_charges_enabled: Boolean(json.stripe_charges_enabled),
+        stripe_payouts_enabled: Boolean(json.stripe_payouts_enabled),
+        stripe_details_submitted: Boolean(json.stripe_details_submitted),
+        stripe_requirements: json.stripe_requirements ?? null,
+        stripe_account_status_updated_at: json.stripe_account_status_updated_at ?? new Date().toISOString(),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Refresh failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        marginTop: "var(--space-4)",
+        padding: "var(--space-3)",
+        background: "var(--surface-muted, #f8fafc)",
+        border: "1px solid var(--border-default, #e2e8f0)",
+        borderRadius: 6,
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-2)", gap: 8 }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <strong style={{ fontSize: "var(--text-sm)" }}>Stripe Connect (in-app card payments)</strong>
+          <span className={CONNECT_CLASS[status]} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 999 }}>
+            {CONNECT_LABEL[status]}
+          </span>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          {status === "not_connected" && (
+            <button type="button" className="button button-primary" disabled={busy !== null} onClick={startOnboarding} style={{ padding: "4px 10px", fontSize: 12 }}>
+              {busy === "connect" ? "Opening Stripe…" : "Connect Stripe"}
+            </button>
+          )}
+          {(status === "onboarding" || status === "restricted") && (
+            <button type="button" className="button button-primary" disabled={busy !== null} onClick={startOnboarding} style={{ padding: "4px 10px", fontSize: 12 }}>
+              {busy === "connect" ? "Opening Stripe…" : "Continue onboarding"}
+            </button>
+          )}
+          {status !== "not_connected" && (
+            <button type="button" className="button button-secondary" disabled={busy !== null} onClick={refreshStatus} style={{ padding: "4px 10px", fontSize: 12 }}>
+              {busy === "refresh" ? "Refreshing…" : "Refresh status"}
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div style={{ fontSize: 12, color: "var(--text-muted, #475569)", display: "grid", gap: 4 }}>
+        {provider.stripe_connect_account_id ? (
+          <div>
+            <strong>Account:</strong> <code>{provider.stripe_connect_account_id}</code>
+          </div>
+        ) : (
+          <div>Connect a Stripe account so the “Collect Copay” button can charge patient cards and route funds directly to this clinician.</div>
+        )}
+        {provider.stripe_connect_account_id && (
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+            <span>Charges: <strong>{provider.stripe_charges_enabled ? "enabled" : "disabled"}</strong></span>
+            <span>Payouts: <strong>{provider.stripe_payouts_enabled ? "enabled" : "disabled"}</strong></span>
+            <span>Details submitted: <strong>{provider.stripe_details_submitted ? "yes" : "no"}</strong></span>
+          </div>
+        )}
+        {due.length > 0 && (
+          <div style={{ color: "var(--text-danger)" }}>
+            Stripe needs: {due.join(", ")}
+          </div>
+        )}
+        {disabledReason && (
+          <div style={{ color: "var(--text-danger)" }}>Disabled reason: {disabledReason}</div>
+        )}
+        {provider.stripe_account_status_updated_at && (
+          <div style={{ fontSize: 11, opacity: 0.7 }}>
+            Last synced {new Date(provider.stripe_account_status_updated_at).toLocaleString()}
+          </div>
+        )}
+        {error && <div style={{ color: "var(--text-danger)" }}>{error}</div>}
+      </div>
+    </div>
+  );
+}
+
+function ReturnFromStripeBanner({
+  organizationId,
+  onRefreshed,
+}: {
+  organizationId: string;
+  onRefreshed: (updated: Partial<CredentialingRecord> & { id: string }) => void;
+}) {
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const returned = url.searchParams.get("stripeConnect");
+    const refreshed = url.searchParams.get("stripeConnectRefresh");
+    const providerId = returned || refreshed;
+    if (!providerId) return;
+    url.searchParams.delete("stripeConnect");
+    url.searchParams.delete("stripeConnectRefresh");
+    window.history.replaceState({}, "", url.toString());
+    setMsg(returned ? "Pulling updated Stripe account status…" : "Resuming Stripe onboarding…");
+    fetch("/api/billing/stripe-connect/refresh-status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ providerId, organizationId }),
+    })
+      .then((r) => r.json())
+      .then((json: {
+        success?: boolean;
+        stripe_charges_enabled?: boolean;
+        stripe_payouts_enabled?: boolean;
+        stripe_details_submitted?: boolean;
+        stripe_requirements?: { currently_due?: string[]; disabled_reason?: string | null } | null;
+        stripe_account_status_updated_at?: string;
+        accountId?: string | null;
+        error?: string;
+      }) => {
+        if (!json.success) {
+          setMsg(`Could not refresh Stripe status: ${json.error ?? "unknown error"}`);
+          return;
+        }
+        onRefreshed({
+          id: providerId,
+          stripe_connect_account_id: json.accountId ?? null,
+          stripe_charges_enabled: Boolean(json.stripe_charges_enabled),
+          stripe_payouts_enabled: Boolean(json.stripe_payouts_enabled),
+          stripe_details_submitted: Boolean(json.stripe_details_submitted),
+          stripe_requirements: json.stripe_requirements ?? null,
+          stripe_account_status_updated_at: json.stripe_account_status_updated_at ?? new Date().toISOString(),
+        });
+        setMsg(json.stripe_charges_enabled ? "Stripe account is ready to accept charges." : "Stripe status refreshed — onboarding still needed.");
+      })
+      .catch((e: unknown) => {
+        setMsg(`Could not refresh Stripe status: ${e instanceof Error ? e.message : "error"}`);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (!msg) return null;
+  return (
+    <div className="alert-panel" style={{ marginBottom: "var(--space-3)" }}>
+      {msg}
+    </div>
   );
 }

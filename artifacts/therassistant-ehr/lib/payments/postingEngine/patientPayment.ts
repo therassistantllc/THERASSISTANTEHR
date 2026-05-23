@@ -49,6 +49,7 @@ export interface CommitPatientPaymentInput {
   applyTo: PatientPaymentApplyTo;
   externalPaymentId?: string | null;
   stripeChargeId?: string | null;
+  stripeConnectedAccountId?: string | null;
   referenceNumber?: string | null;
   note?: string | null;
   paymentDate?: string | null;
@@ -350,6 +351,7 @@ export async function commitPatientPayment(
       reference_number: input.referenceNumber ?? null,
       external_payment_id: input.externalPaymentId ?? null,
       stripe_charge_id: input.stripeChargeId ?? null,
+      stripe_connected_account_id: input.stripeConnectedAccountId ?? null,
       source_label: input.applyTo.kind,
       note: input.note ?? null,
       posted_actor_id: input.actor.staffId ?? null,
