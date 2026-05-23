@@ -128,6 +128,19 @@ function wantSource(filters: DashboardFilters, src: PaymentSource): boolean {
 
 // ── ERA rows ────────────────────────────────────────────────────────────────
 
+/**
+ * For correct global pagination across 3 union'd sources we must fetch
+ * `offset + limit` rows from each source (the merged page can draw any
+ * subset of those rows after sorting). Without this, a single-source
+ * dataset >limit rows truncates and the export pager returns empty
+ * pages past the first.
+ */
+function pageSize(filters: DashboardFilters): number {
+  const lim = clampLimit(filters.limit);
+  const off = Math.max(0, Math.floor(Number(filters.offset ?? 0)) || 0);
+  return Math.min(MAX_LIMIT * 50, off + lim);
+}
+
 async function loadEraRows(
   supabase: SupabaseClient,
   filters: DashboardFilters,
@@ -144,9 +157,13 @@ async function loadEraRows(
     .eq("organization_id", filters.organizationId)
     .is("archived_at", null)
     .order("created_at", { ascending: false })
-    .limit(clampLimit(filters.limit));
+    .limit(pageSize(filters));
   if (filters.clientId) q = q.eq("client_id", filters.clientId);
   if (providerClaimIds) q = q.in("professional_claim_id", providerClaimIds);
+  // Payer filter parity: ERA carries payer_identifier (X12 payer key);
+  // we also accept payer_profile_id matches in case the org's payer
+  // profile id was mirrored into the identifier column.
+  if (filters.payerProfileId) q = q.eq("payer_identifier", filters.payerProfileId);
   if (filters.postingStatus && filters.postingStatus.length > 0) {
     q = q.in("posting_status", filters.postingStatus);
   }
@@ -217,7 +234,7 @@ async function loadManualRows(
     .eq("organization_id", filters.organizationId)
     .is("archived_at", null)
     .order("posted_at", { ascending: false })
-    .limit(clampLimit(filters.limit));
+    .limit(pageSize(filters));
   if (filters.clientId) q = q.eq("client_id", filters.clientId);
   if (filters.payerProfileId) q = q.eq("payer_profile_id", filters.payerProfileId);
   if (providerClaimIds) q = q.in("claim_id", providerClaimIds);
@@ -281,7 +298,7 @@ async function loadPatientRows(
     .eq("organization_id", filters.organizationId)
     .is("archived_at", null)
     .order("posted_at", { ascending: false })
-    .limit(clampLimit(filters.limit));
+    .limit(pageSize(filters));
   if (filters.clientId) q = q.eq("client_id", filters.clientId);
   if (providerClaimIds) q = q.in("claim_id", providerClaimIds);
   if (filters.eftCheckNumber) q = q.ilike("reference_number", `%${filters.eftCheckNumber}%`);
@@ -362,12 +379,15 @@ async function loadTotals(
     supabase.from(table).select("id", { count: "exact", head: true });
 
   // Apply the dashboard's filter predicates to an ERA count query.
+  // Per-source filter scopers — keep these in exact parity with the row
+  // loaders above so every KPI matches what the user sees in the table.
   const eraScoped = (q: any) => {
     let r = q
       .eq("organization_id", filters.organizationId)
       .is("archived_at", null);
     if (filters.clientId) r = r.eq("client_id", filters.clientId);
     if (providerClaimIds) r = r.in("professional_claim_id", providerClaimIds);
+    if (filters.payerProfileId) r = r.eq("payer_identifier", filters.payerProfileId);
     if (filters.postingStatus && filters.postingStatus.length > 0) {
       r = r.in("posting_status", filters.postingStatus);
     }
@@ -389,6 +409,10 @@ async function loadTotals(
     if (filters.payerProfileId) r = r.eq("payer_profile_id", filters.payerProfileId);
     if (providerClaimIds) r = r.in("claim_id", providerClaimIds);
     if (filters.eftCheckNumber) r = r.ilike("eob_reference", `%${filters.eftCheckNumber}%`);
+    // Manual rows have a single posted_at; deposit and payment date
+    // filters both narrow against it (same as the row loader).
+    if (filters.depositDateFrom) r = r.gte("posted_at", filters.depositDateFrom);
+    if (filters.depositDateTo) r = r.lte("posted_at", filters.depositDateTo);
     if (filters.paymentDateFrom) r = r.gte("posted_at", filters.paymentDateFrom);
     if (filters.paymentDateTo) r = r.lte("posted_at", filters.paymentDateTo);
     return r;
@@ -404,6 +428,8 @@ async function loadTotals(
     if (filters.postingStatus && filters.postingStatus.length > 0) {
       r = r.in("posting_status", filters.postingStatus);
     }
+    if (filters.depositDateFrom) r = r.gte("posted_at", filters.depositDateFrom);
+    if (filters.depositDateTo) r = r.lte("posted_at", filters.depositDateTo);
     if (filters.paymentDateFrom) r = r.gte("posted_at", filters.paymentDateFrom);
     if (filters.paymentDateTo) r = r.lte("posted_at", filters.paymentDateTo);
     return r;
