@@ -17,19 +17,19 @@ const POLICY = "pol-1";
 type Row = Record<string, unknown>;
 type Filter = { field: string; value: unknown };
 type Result = { data: Row | Row[] | null; error: { message: string } | null };
-type Handler = (filters: Filter[], op: "select" | "update") => Result;
+type Handler = (filters: Filter[], op: "select" | "update" | "insert") => Result;
 
-const handlers: Record<string, { select?: Handler; update?: Handler }> = {};
+const handlers: Record<string, { select?: Handler; update?: Handler; insert?: Handler }> = {};
 let lastUpdate: { table: string; values: Row } | null = null;
 
 function builder(table: string) {
   const filters: Filter[] = [];
-  let op: "select" | "update" = "select";
+  let op: "select" | "update" | "insert" = "select";
   let updateValues: Row | null = null;
 
   function settle(): Result {
     const h = handlers[table];
-    const fn = op === "update" ? h?.update : h?.select;
+    const fn = op === "update" ? h?.update : op === "insert" ? h?.insert : h?.select;
     if (op === "update" && updateValues) {
       lastUpdate = { table, values: updateValues };
     }
@@ -41,6 +41,14 @@ function builder(table: string) {
   chain.update = (values: Row) => {
     op = "update";
     updateValues = values;
+    return chain;
+  };
+  // Audit-log inserts go through .from("audit_logs").insert(rows) and are
+  // awaited as a thenable without further chaining. We don't assert on the
+  // rows here (chartObjectAudit has its own dedicated tests); just satisfy
+  // the API surface so the await resolves to { data: null, error: null }.
+  chain.insert = () => {
+    op = "insert";
     return chain;
   };
   chain.eq = (field: string, value: unknown) => {

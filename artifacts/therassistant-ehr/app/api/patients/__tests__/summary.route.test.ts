@@ -69,6 +69,35 @@ before(() => {
       }),
     },
   });
+  // The route is tenant-isolated via requireOrgAccess; stub it out so the
+  // tests can exercise the credit-rollup logic without a real Supabase
+  // auth cookie. We return the org the test passes via ?organizationId=.
+  mock.module("@/lib/auth/requireOrgAccess", {
+    namedExports: {
+      requireOrgAccess: async (options: { requestedOrganizationId?: string | null } = {}) => ({
+        organizationId: options.requestedOrganizationId || ORG,
+        staffId: "staff-test",
+        userId: "user-test",
+        roles: [],
+        permissions: [],
+        isDevPassthrough: false,
+      }),
+    },
+  });
+  mock.module("@/lib/rbac/auth", {
+    namedExports: {
+      requireAuthenticatedStaff: async () => ({
+        organizationId: ORG,
+        staffId: "staff-test",
+        userId: "user-test",
+        email: null,
+        firstName: null,
+        lastName: null,
+        roles: [],
+        permissions: [],
+      }),
+    },
+  });
 });
 
 const defaultClient: Row = {

@@ -204,12 +204,19 @@ function refundResultToCommitResult(
   out.posted = r.ok && !!r.refundId;
   out.auditLogIds = r.auditLogIds;
   out.errors = r.errors;
-  out.refund = {
-    refundId: r.refundId,
-    refundStatus: r.refundStatus,
-    workqueueItemId: r.workqueueItemId,
-    preview: r.preview,
-  };
+  // Dry-run path (no refund row written): expose the preview separately
+  // and leave `out.refund` undefined so dashboard callers can distinguish
+  // "would refund" from "did refund" by presence of `out.refund` alone.
+  if (r.refundId == null && r.preview) {
+    out.refundPreview = r.preview;
+  } else {
+    out.refund = {
+      refundId: r.refundId,
+      refundStatus: r.refundStatus,
+      workqueueItemId: r.workqueueItemId,
+      preview: r.preview,
+    };
+  }
   // Dry-run: surface compensating-ledger preview as `effects` so existing
   // UI that already iterates result.effects "just works" for the confirm
   // modal (insurance refunds only — patient refunds reduce invoice paid

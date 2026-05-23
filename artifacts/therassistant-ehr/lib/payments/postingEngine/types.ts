@@ -204,6 +204,12 @@ export interface CommitPostingResult {
    */
   reversalPreview?: import("./reversal").ReversalPreview;
   /**
+   * PP-4 dry-run: populated when source.type === 'refund' and dryRun=true.
+   * Surfaced separately from `refund` so callers can distinguish a real
+   * (live) refund result from a preview-only result by which field is set.
+   */
+  refundPreview?: import("./reversal").RefundPreview;
+  /**
    * PP-4: present only when source.type === 'reversal'. True when the
    * reversal engine treated this as a no-op replay of an already-reversed
    * payment (distinct from `alreadyPosted` which targets posting replays).

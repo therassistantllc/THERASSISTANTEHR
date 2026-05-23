@@ -447,13 +447,20 @@ test("GET /audit returns rows newest-first and resolves staff display names", as
     "audit_logs query must request descending created_at order",
   );
 
-  // Filtered to this org + this client + demographic action.
+  // Filtered to this org + this patient + the tracked chart actions.
+  // The route filters by patient_id (set on every chart-tracked audit row)
+  // rather than object_type/object_id, so policy/case rows surface alongside
+  // client rows in the patient audit log.
   const has = (field: string, value: unknown) =>
     auditFilters.some((f) => f.field === field && f.value === value);
+  const hasIn = (field: string, predicate: (value: unknown) => boolean) =>
+    auditFilters.some((f) => f.field === field && predicate(f.value));
   assert.ok(has("organization_id", ORG));
-  assert.ok(has("object_type", "client"));
-  assert.ok(has("object_id", CLIENT));
-  assert.ok(has("action", "demographic_field_updated"));
+  assert.ok(has("patient_id", CLIENT));
+  assert.ok(
+    hasIn("action", (v) => Array.isArray(v) && v.includes("demographic_field_updated")),
+    "must constrain to the tracked chart actions",
+  );
 
   // Row 1: user_id resolves to the staff display name from staff_profiles.
   const first = body.entries[0];

@@ -225,7 +225,7 @@ export function extractPaymentDetails(event: StripeEvent): {
  *     and stash the Stripe ids in context_payload.
  */
 async function writeUnmatchedWorkqueueItem(
-  supabase: SupabaseAdmin,
+  supabase: SupabaseAdmin | null,
   params: {
     organizationId: string;
     clientId: string | null;
@@ -246,6 +246,15 @@ async function writeUnmatchedWorkqueueItem(
       "[stripe-webhook] cannot create workqueue item (no org):",
       params.reason,
       params.contextPayload,
+    );
+    return false;
+  }
+  if (!supabase) {
+    // No DB connection. Same fail-loud contract: return false so the
+    // caller returns 5xx and Stripe retries once the DB is reachable.
+    console.error(
+      "[stripe-webhook] cannot create workqueue item (no supabase):",
+      params.reason,
     );
     return false;
   }
@@ -323,14 +332,6 @@ export async function processStripeWebhook(
     return NextResponse.json({ success: false, error: "Invalid signature" }, { status: 401 });
   }
 
-  const supabase = deps.getSupabase();
-  if (!supabase) {
-    return NextResponse.json(
-      { success: false, error: "Database connection not available" },
-      { status: 503 },
-    );
-  }
-
   let event: StripeEvent;
   try {
     event = JSON.parse(rawBody) as StripeEvent;
@@ -339,22 +340,56 @@ export async function processStripeWebhook(
   }
 
   const eventType = String(event.type ?? "");
+
+  // Ignored events: acknowledge immediately so Stripe doesn't retry, and
+  // skip the supabase fetch entirely (an unrelated event type doesn't
+  // need DB access — failing it on a missing DB connection would be
+  // gratuitous noise).
+  const HANDLED_TYPES = new Set([
+    "charge.succeeded",
+    "payment_intent.succeeded",
+    "charge.refunded",
+    "refund.updated",
+    "charge.dispute.created",
+    "charge.dispute.closed",
+  ]);
+  if (!HANDLED_TYPES.has(eventType)) {
+    return NextResponse.json({ success: true, ignored: true, type: eventType });
+  }
+
+  // Fetch supabase lazily — handlers that need it gate themselves on a
+  // missing client and return 5xx so Stripe retries. handlePaymentSucceeded
+  // only needs it on the fallback (queued-for-review) path; the happy
+  // dedupe path goes through deps.commitPayment without touching the DB.
+  const supabase = deps.getSupabase();
+
   switch (eventType) {
     case "charge.succeeded":
     case "payment_intent.succeeded":
       return handlePaymentSucceeded(event, supabase, deps);
     case "charge.refunded":
+      if (!supabase) return dbUnavailable();
       return handleChargeRefunded(event, supabase);
     case "refund.updated":
+      if (!supabase) return dbUnavailable();
       return handleRefundUpdated(event, supabase);
     case "charge.dispute.created":
+      if (!supabase) return dbUnavailable();
       return handleDisputeCreated(event, supabase);
     case "charge.dispute.closed":
+      if (!supabase) return dbUnavailable();
       return handleDisputeClosed(event, supabase, deps);
     default:
-      // Acknowledge so Stripe doesn't retry; we just don't act on other types.
+      // Unreachable — HANDLED_TYPES guards above.
       return NextResponse.json({ success: true, ignored: true, type: eventType });
   }
+}
+
+function dbUnavailable(): Response {
+  return NextResponse.json(
+    { success: false, error: "Database connection not available" },
+    { status: 503 },
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -363,9 +398,14 @@ export async function processStripeWebhook(
 
 async function handlePaymentSucceeded(
   event: StripeEvent,
-  supabase: SupabaseAdmin,
+  supabase: SupabaseAdmin | null,
   deps: StripeWebhookDeps,
 ): Promise<Response> {
+  // supabase may be null here: the happy dedupe path goes through
+  // deps.commitPayment without touching the DB. The fallback paths that
+  // need to write a workqueue_items row pass supabase to
+  // writeUnmatchedWorkqueueItem, which already fails-loud (returns false
+  // → caller returns 5xx so Stripe retries) when supabase is missing.
   const details = extractPaymentDetails(event);
   if (!details) {
     return NextResponse.json({ success: false, error: "Could not parse event object" }, { status: 400 });

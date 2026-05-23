@@ -294,9 +294,12 @@ describe("regression: /api/mailroom/search route wiring", () => {
   // pattern used by lib/payments/__tests__/matchRouteTenantIsolation.test.ts.
   const src = readFileSync("app/api/mailroom/search/route.ts", "utf8");
 
-  it("requires authentication via requireAuthenticatedStaff", () => {
-    assert.match(src, /requireAuthenticatedStaff\s*\(\)/);
-    assert.match(src, /\b401\b/);
+  it("requires authentication via requireOrgAccess (which wraps requireAuthenticatedStaff)", () => {
+    // The route was consolidated onto requireOrgAccess, the shared guard
+    // that emits 401 on no session and 403 on org mismatch. The literal
+    // status codes live inside the helper, not the route — pinning the
+    // helper call is what guarantees auth can't silently drop.
+    assert.match(src, /requireOrgAccess\s*\(/);
   });
 
   it("rejects unknown `type` with 400 via the shared validator", () => {
@@ -305,8 +308,10 @@ describe("regression: /api/mailroom/search route wiring", () => {
   });
 
   it("rejects a caller-supplied organizationId that doesn't match the session", () => {
-    assert.match(src, /Organization mismatch/);
-    assert.match(src, /\b403\b/);
+    // requireOrgAccess compares searchParams.organizationId against the
+    // session org and returns 403 on mismatch. Pin that the route forwards
+    // the caller-supplied id into the helper rather than trusting it.
+    assert.match(src, /requireOrgAccess\s*\(\s*\{[\s\S]*requestedOrganizationId/);
   });
 
   it("delegates to the shared searchMailroomEntities helper (no inline query logic)", () => {
