@@ -42,6 +42,11 @@ const SETTINGS_SECTIONS = [
     description: "Default diagnosis codes, fee schedules, and billing rules.",
   },
   {
+    label: "Reference Code Sets",
+    href: "/settings/code-sets",
+    description: "When ICD-10-CM, HCPCS, and CPT reference data were last loaded — flags stale releases.",
+  },
+  {
     label: "Note Templates",
     href: "/admin/note-templates",
     description: "Pre-populated note scaffolding per service type or CPT so clinicians don't start from blank.",

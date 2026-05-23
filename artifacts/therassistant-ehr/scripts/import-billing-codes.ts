@@ -298,6 +298,13 @@ async function upsertBatched<T extends { code: string; code_system: string }>(
 ): Promise<{ inserted: number }> {
   if (dryRun || rows.length === 0) return { inserted: rows.length };
 
+  // Stamp `updated_at` on every row so the in-app code-set freshness
+  // panel (Task #197) reflects when this refresh ran. The DB trigger
+  // also touches `updated_at` on UPDATE, but setting it explicitly
+  // here also covers fresh INSERTs and keeps the column consistent.
+  const stampedAt = new Date().toISOString();
+  rows = rows.map((r) => ({ ...r, updated_at: stampedAt })) as T[];
+
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key =
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
