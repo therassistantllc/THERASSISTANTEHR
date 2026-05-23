@@ -5389,6 +5389,7 @@ export type Database = {
           created_by_user_id: string | null
           deductible_amount: number | null
           effective_date: string
+          group_number: string | null
           id: string
           legacy_availity_plan_code: string | null
           organization_id: string
@@ -5398,6 +5399,7 @@ export type Database = {
           policy_number: string | null
           priority: Database["public"]["Enums"]["insurance_policy_priority"]
           subscriber_id: string
+          subscriber_relationship: string | null
           termination_date: string | null
           updated_at: string
           updated_by_user_id: string | null
@@ -5412,6 +5414,7 @@ export type Database = {
           created_by_user_id?: string | null
           deductible_amount?: number | null
           effective_date: string
+          group_number?: string | null
           id?: string
           legacy_availity_plan_code?: string | null
           organization_id: string
@@ -5421,6 +5424,7 @@ export type Database = {
           policy_number?: string | null
           priority?: Database["public"]["Enums"]["insurance_policy_priority"]
           subscriber_id: string
+          subscriber_relationship?: string | null
           termination_date?: string | null
           updated_at?: string
           updated_by_user_id?: string | null
@@ -5435,6 +5439,7 @@ export type Database = {
           created_by_user_id?: string | null
           deductible_amount?: number | null
           effective_date?: string
+          group_number?: string | null
           id?: string
           legacy_availity_plan_code?: string | null
           organization_id?: string
@@ -5444,6 +5449,7 @@ export type Database = {
           policy_number?: string | null
           priority?: Database["public"]["Enums"]["insurance_policy_priority"]
           subscriber_id?: string
+          subscriber_relationship?: string | null
           termination_date?: string | null
           updated_at?: string
           updated_by_user_id?: string | null
@@ -7412,8 +7418,10 @@ export type Database = {
           appointment_id: string | null
           benefits_assignment: boolean | null
           billing_notes: string | null
+          case_id: string | null
           claim_number: string | null
           claim_status: string
+          client_id: string | null
           created_at: string
           days_in_ar: number | null
           denial_reason_code: string | null
@@ -7424,6 +7432,7 @@ export type Database = {
           id: string
           last_billed_date: string | null
           last_validated_at: string | null
+          legacy_claim_id: string | null
           organization_id: string
           patient_account_number: string | null
           patient_id: string | null
@@ -7446,8 +7455,10 @@ export type Database = {
           appointment_id?: string | null
           benefits_assignment?: boolean | null
           billing_notes?: string | null
+          case_id?: string | null
           claim_number?: string | null
           claim_status?: string
+          client_id?: string | null
           created_at?: string
           days_in_ar?: number | null
           denial_reason_code?: string | null
@@ -7458,6 +7469,7 @@ export type Database = {
           id?: string
           last_billed_date?: string | null
           last_validated_at?: string | null
+          legacy_claim_id?: string | null
           organization_id: string
           patient_account_number?: string | null
           patient_id?: string | null
@@ -7480,8 +7492,10 @@ export type Database = {
           appointment_id?: string | null
           benefits_assignment?: boolean | null
           billing_notes?: string | null
+          case_id?: string | null
           claim_number?: string | null
           claim_status?: string
+          client_id?: string | null
           created_at?: string
           days_in_ar?: number | null
           denial_reason_code?: string | null
@@ -7492,6 +7506,7 @@ export type Database = {
           id?: string
           last_billed_date?: string | null
           last_validated_at?: string | null
+          legacy_claim_id?: string | null
           organization_id?: string
           patient_account_number?: string | null
           patient_id?: string | null
