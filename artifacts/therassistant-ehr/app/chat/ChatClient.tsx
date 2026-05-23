@@ -8,10 +8,14 @@ type Profile = { id: string; fullName: string; email: string; role: string };
 
 // ── Presence model (Task #124) ────────────────────────────────────────────
 type PresenceState = "online" | "idle" | "offline" | "unknown";
-// Store raw beat data only; derive state at render time so the 15s
-// re-render clock can age users from online → idle → offline without
-// needing a fresh presence event.
-type PresenceMap = Record<string, { focused: boolean; lastSeenAt: number }>;
+// Per-user aggregate across all open tabs. We track the freshest
+// focused beat AND the freshest beat overall so multi-tab presence
+// is "any tab focused & recent" → online; "any recent beat" → idle.
+type PresenceBeat = {
+  lastFocusedAt: number; // most recent beat where focused=true (0 if none)
+  lastSeenAt: number; // most recent beat from any tab
+};
+type PresenceMap = Record<string, PresenceBeat>;
 // Online if presence beat in the last 60s; idle if last 5min.
 const ONLINE_WINDOW_MS = 60_000;
 const IDLE_WINDOW_MS = 5 * 60_000;
@@ -80,10 +84,16 @@ function formatTime(value: string) {
     : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function derivePresenceState(lastSeenAt: number, focused: boolean): PresenceState {
-  const age = Date.now() - lastSeenAt;
-  if (focused && age <= ONLINE_WINDOW_MS) return "online";
-  if (age <= IDLE_WINDOW_MS) return "idle";
+function derivePresenceState(beat: PresenceBeat): PresenceState {
+  const now = Date.now();
+  // Online if ANY tab had a focused heartbeat in the online window.
+  if (beat.lastFocusedAt > 0 && now - beat.lastFocusedAt <= ONLINE_WINDOW_MS) {
+    return "online";
+  }
+  // Idle if ANY tab had a heartbeat (focused or not) in the idle window.
+  if (beat.lastSeenAt > 0 && now - beat.lastSeenAt <= IDLE_WINDOW_MS) {
+    return "idle";
+  }
   return "offline";
 }
 
@@ -262,18 +272,18 @@ export default function ChatClient() {
       >;
       const next: PresenceMap = {};
       for (const key of Object.keys(raw)) {
-        // Latest presence beat across this user's open tabs wins.
-        let bestAt = 0;
-        let bestFocused = false;
+        // Aggregate across ALL open tabs for this user: track freshest
+        // beat overall and freshest focused beat. A blurred tab beating
+        // later than a focused tab must NOT mask the focused tab.
+        let lastSeenAt = 0;
+        let lastFocusedAt = 0;
         for (const meta of raw[key] ?? []) {
           const at = Number(meta?.lastSeenAt ?? 0);
-          if (at > bestAt) {
-            bestAt = at;
-            bestFocused = Boolean(meta?.focused);
-          }
+          if (at > lastSeenAt) lastSeenAt = at;
+          if (Boolean(meta?.focused) && at > lastFocusedAt) lastFocusedAt = at;
         }
-        if (bestAt > 0) {
-          next[key] = { focused: bestFocused, lastSeenAt: bestAt };
+        if (lastSeenAt > 0) {
+          next[key] = { lastSeenAt, lastFocusedAt };
         }
       }
       setPresence(next);
@@ -481,9 +491,7 @@ export default function ChatClient() {
     };
     for (const p of others) {
       const beat = presence[p.userId];
-      const ps: PresenceState = beat
-        ? derivePresenceState(beat.lastSeenAt, beat.focused)
-        : "offline";
+      const ps: PresenceState = beat ? derivePresenceState(beat) : "offline";
       if (rank[ps] > rank[best]) best = ps;
     }
     return best;
@@ -492,7 +500,7 @@ export default function ChatClient() {
     if (!realtimeOk) return "unknown";
     const beat = presence[userId];
     if (!beat) return "offline";
-    return derivePresenceState(beat.lastSeenAt, beat.focused);
+    return derivePresenceState(beat);
   }
   const billers = profiles.filter((p) => p.role === "biller" && p.id !== currentUserId);
   const otherProfiles = profiles.filter((p) => p.id !== currentUserId);
