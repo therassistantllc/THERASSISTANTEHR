@@ -110,3 +110,76 @@ test("parseCpt throws when required columns are missing", () => {
   const path = tmpFile("bad.csv", "foo,bar\n1,2\n");
   assert.throws(() => parseCpt(path), /missing required columns/i);
 });
+
+// ---------------------------------------------------------------------------
+// Validator contract tests — Charge Capture relies on (is_active, expiration_date)
+// to tell retired, header, and unknown codes apart. These assertions pin down
+// exactly what the importer must write for each row class so that a regression
+// in the parsers (e.g. forgetting to mark terminated CPTs inactive, or losing
+// the expiration date) fails loudly here instead of silently corrupting the
+// validator at runtime.
+// ---------------------------------------------------------------------------
+
+test("validator contract: active ICD-10 codes are is_active=true with no expiration", () => {
+  const path = tmpFile(
+    "icd10cm-codes-2026.txt",
+    "F320    Major depressive disorder, single episode, mild\n",
+  );
+  const [row] = parseIcd10(path);
+  assert.equal(row.is_active, true);
+  assert.equal(row.expiration_date, null);
+});
+
+test("validator contract: ICD-10 header/parent codes are is_active=false with no expiration", () => {
+  const pad = (s: string, n: number) => s.padEnd(n, " ");
+  const mkRow = (order: string, code: string, header: "0" | "1", short: string, long: string) =>
+    `${pad(order, 5)} ${pad(code, 7)} ${header} ${pad(short, 60)} ${long}`;
+  const path = tmpFile(
+    "icd10cm-order-2026.txt",
+    `${mkRow("00050", "A00", "1", "Cholera", "Cholera")}\n`,
+  );
+  const [row] = parseIcd10(path);
+  assert.equal(row.code, "A00");
+  assert.equal(row.is_active, false, "header-only codes must be inactive");
+  assert.equal(row.expiration_date, null, "headers have no expiration date");
+});
+
+test("validator contract: terminated HCPCS codes are is_active=false with correct expiration_date", () => {
+  const csv = [
+    "HCPC,SHORT DESCRIPTION,LONG DESCRIPTION,ACT EFF DATE,TERM DATE",
+    'J9999,"Old code","Discontinued procedure",20100101,20180630',
+  ].join("\n");
+  const [row] = parseHcpcs(tmpFile("HCPC.csv", csv));
+  assert.equal(row.is_active, false);
+  assert.equal(row.expiration_date, "2018-06-30");
+});
+
+test("validator contract: active HCPCS codes are is_active=true with expiration_date=null", () => {
+  const csv = [
+    "HCPC,SHORT DESCRIPTION,LONG DESCRIPTION,ACT EFF DATE,TERM DATE",
+    'H0001,"Alcohol/drug assessment","Alcohol and/or drug assessment",20200101,',
+  ].join("\n");
+  const [row] = parseHcpcs(tmpFile("HCPC.csv", csv));
+  assert.equal(row.is_active, true);
+  assert.equal(row.expiration_date, null);
+});
+
+test("validator contract: active CPT codes are is_active=true with expiration_date=null", () => {
+  const csv = [
+    "code,description,effective_date,expiration_date",
+    "90837,Psychotherapy 60 minutes,2013-01-01,",
+  ].join("\n");
+  const [row] = parseCpt(tmpFile("cpt.csv", csv));
+  assert.equal(row.is_active, true);
+  assert.equal(row.expiration_date, null);
+});
+
+test("validator contract: terminated CPT codes are is_active=false with correct expiration_date", () => {
+  const csv = [
+    "code,description,effective_date,expiration_date",
+    "99199,Retired special service,2000-01-01,2019-12-31",
+  ].join("\n");
+  const [row] = parseCpt(tmpFile("cpt.csv", csv));
+  assert.equal(row.is_active, false, "terminated CPTs must be inactive");
+  assert.equal(row.expiration_date, "2019-12-31");
+});
