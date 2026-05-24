@@ -106,7 +106,8 @@ function Toast({ message, onClose }: { message: string; onClose: () => void }) {
 }
 
 function docTypeIcon(mimeType: string | null | undefined): string {
-  const m = (mimeType ?? "").toLowerCase();
+  if (!mimeType) return "📎";
+  const m = mimeType.toLowerCase();
   if (m.startsWith("image/")) return "🖼️";
   if (m === "application/pdf") return "📕";
   if (m.includes("word") || m.includes("officedocument.wordprocessing")) return "📝";
@@ -154,6 +155,7 @@ export default function MedicalReviewClient() {
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [uploadingClaim, setUploadingClaim] = useState<string | null>(null);
+  const [packetClaim, setPacketClaim] = useState<string | null>(null);
   const [chartPickerOpen, setChartPickerOpen] = useState(false);
   const [chartDocs, setChartDocs] = useState<Array<{ id: string; title: string | null; fileName: string | null; type: string | null; mimeType: string | null; claimId: string | null; createdAt: string | null }>>([]);
   const [chartLoading, setChartLoading] = useState(false);
@@ -345,7 +347,7 @@ export default function MedicalReviewClient() {
     })();
   }, [selectedRow, organizationId, ctxByClaim, ctxLoading]);
 
-  // ── Cover-letter compose modal ─────────────────────────────────────────
+  // ── Cover-letter compose modal ──
   const openCoverLetterModal = useCallback((row: MedicalReviewRow) => {
     // Selecting the row triggers the existing context fetch that hydrates
     // ctxByClaim[row.claimId] with the documents we'll pre-populate from.
@@ -493,6 +495,100 @@ export default function MedicalReviewClient() {
         setToast(e instanceof Error ? e.message : "Upload failed");
       } finally {
         setUploadingClaim(null);
+      }
+    },
+    [organizationId, refreshContext],
+  );
+
+  const removeDocument = useCallback(
+    async (row: MedicalReviewRow, documentId: string, label: string) => {
+      if (typeof window !== "undefined" && !window.confirm(`Remove "${label}" from this claim?`)) return;
+      setRemovingDocId(documentId);
+      try {
+        const params = new URLSearchParams({ organizationId });
+        const res = await fetch(
+          `/api/billing/claims/${row.claimId}/documents/${documentId}?${params.toString()}`,
+          { method: "DELETE" },
+        );
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json?.success === false) throw new Error(json?.error ?? "Remove failed");
+        refreshContext(row.claimId);
+        setRows((prev) => prev.map((r) => r.claimId === row.claimId ? { ...r, lastActionAt: new Date().toISOString() } : r));
+        setToast("Document removed");
+      } catch (e) {
+        setToast(e instanceof Error ? e.message : "Remove failed");
+      } finally {
+        setRemovingDocId(null);
+      }
+    },
+    [organizationId, refreshContext],
+  );
+
+  const downloadSubmissionPacket = useCallback(
+    async (row: MedicalReviewRow) => {
+      setPacketClaim(row.claimId);
+      try {
+        const res = await fetch("/api/billing/medical-review/actions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            organizationId,
+            action: "download_submission_packet",
+            claimId: row.claimId,
+            clientId: row.clientId,
+            appointmentId: row.appointmentId,
+            providerId: row.providerId,
+          }),
+        });
+        const json = await res.json();
+        if (!res.ok || json?.success === false) {
+          throw new Error(json?.error ?? "Packet build failed");
+        }
+        const included = Array.isArray(json.included) ? json.included.length : 0;
+        const skipped: Array<{ title: string; reason: string }> = Array.isArray(json.skipped)
+          ? json.skipped
+          : [];
+        const doc = json.document as
+          | { downloadUrl: string; fileName: string }
+          | undefined;
+        if (doc?.downloadUrl) {
+          // Stream the merged PDF into a blob so the browser triggers
+          // a real download (the file route returns inline content).
+          try {
+            const fileRes = await fetch(doc.downloadUrl, { cache: "no-store" });
+            if (!fileRes.ok) throw new Error("Could not fetch packet");
+            const blob = await fileRes.blob();
+            const url = URL.createObjectURL(blob);
+            const a = window.document.createElement("a");
+            a.href = url;
+            a.download = doc.fileName || "submission-packet.pdf";
+            window.document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 2000);
+          } catch {
+            window.open(doc.downloadUrl, "_blank", "noopener,noreferrer");
+          }
+        }
+        refreshContext(row.claimId);
+        setRows((prev) =>
+          prev.map((r) =>
+            r.claimId === row.claimId ? { ...r, lastActionAt: new Date().toISOString() } : r,
+          ),
+        );
+        const base = `Packet ready (${included} attachment${included === 1 ? "" : "s"})`;
+        setToast(
+          skipped.length === 0
+            ? base
+            : `${base}. Skipped ${skipped.length}: ${skipped
+                .slice(0, 2)
+                .map((s) => s.title)
+                .join(", ")}${skipped.length > 2 ? "…" : ""}`,
+        );
+      } catch (e) {
+        setToast(e instanceof Error ? e.message : "Packet build failed");
+      } finally {
+        setPacketClaim(null);
       }
     },
     [organizationId, refreshContext],
@@ -672,6 +768,7 @@ export default function MedicalReviewClient() {
           const row = selectedRow;
           const docs = ctx?.documents ?? [];
           const isUploading = uploadingClaim === row.claimId;
+          const isBuildingPacket = packetClaim === row.claimId;
           const selectedChartCount = Object.values(chartSelection).filter(Boolean).length;
           return (
             <div>
@@ -707,6 +804,15 @@ export default function MedicalReviewClient() {
                   title={row.clientId ? "Pick from patient chart" : "No patient on this claim"}
                 >
                   {chartPickerOpen ? "Hide chart picker" : "Attach from chart"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void downloadSubmissionPacket(row)}
+                  disabled={isBuildingPacket}
+                  style={{ padding: "6px 12px", border: "1px solid #16A34A", background: isBuildingPacket ? "#94A3B8" : "#16A34A", color: "#fff", borderRadius: 4, fontSize: 13, cursor: isBuildingPacket ? "wait" : "pointer" }}
+                  title="Merge the cover letter and attached documents into one PDF"
+                >
+                  {isBuildingPacket ? "Bundling…" : "Download submission packet"}
                 </button>
                 <span style={{ fontSize: 12, color: "#64748B" }}>Files go to the claim and appear below.</span>
               </div>
@@ -893,6 +999,7 @@ export default function MedicalReviewClient() {
     [
       selectedRow, ctx, ctxIsLoading,
       uploadingClaim, uploadFiles,
+      packetClaim, downloadSubmissionPacket,
       chartPickerOpen, chartDocs, chartLoading, chartError, chartSelection,
       loadChartDocs, attachFromChart, attaching,
       organizationId, removingDocId, removeDocument,
@@ -902,14 +1009,16 @@ export default function MedicalReviewClient() {
   const detailActions: PrimaryAction[] = useMemo(() => {
     if (!selectedRow) return [];
     const r = selectedRow;
+    const buildingPacket = packetClaim === r.claimId;
     return [
       { id: "attach", label: "Attach records", onClick: () => void performAction(r, "attach_records"), disabled: actingId === r.id },
       { id: "send", label: "Send documentation", variant: "primary", onClick: () => void performAction(r, "send_documentation"), disabled: actingId === r.id },
       { id: "cover", label: "Create cover letter", onClick: () => openCoverLetterModal(r), disabled: actingId === r.id },
+      { id: "packet", label: buildingPacket ? "Bundling…" : "Download submission packet", onClick: () => void downloadSubmissionPacket(r), disabled: buildingPacket },
       { id: "route", label: "Route to clinician", onClick: () => void performAction(r, "route_to_clinician"), disabled: actingId === r.id },
       { id: "submit", label: "Mark submitted", variant: "success", onClick: () => void performAction(r, "mark_submitted"), disabled: actingId === r.id },
     ];
-  }, [selectedRow, actingId, performAction, openCoverLetterModal]);
+  }, [selectedRow, actingId, performAction, openCoverLetterModal, packetClaim, downloadSubmissionPacket]);
 
   const primaryTabs = useMemo(
     () => MEDICAL_REVIEW_TABS.map((t) => ({ id: t.id, label: t.label, count: tabCounts[t.id] })),

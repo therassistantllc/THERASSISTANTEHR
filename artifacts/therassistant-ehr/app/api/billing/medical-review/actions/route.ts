@@ -6,6 +6,10 @@ import {
   sendPayerDocumentationEmail,
   type PayerDocumentationAttachment,
 } from "@/lib/email/resend";
+import {
+  buildSubmissionPacket,
+  type PacketAttachmentInput,
+} from "@/lib/pdf/submissionPacket";
 
 const COVER_LETTER_BUCKET = "mailroom-documents";
 
@@ -34,6 +38,7 @@ type ActionName =
   | "attach_records"
   | "send_documentation"
   | "create_cover_letter"
+  | "download_submission_packet"
   | "route_to_clinician"
   | "route_to_admin"
   | "assign_biller"
@@ -51,6 +56,13 @@ interface ActionBody {
   followUpDueAt?: string | null;
   note?: string;
   documentTitles?: string[];
+  /**
+   * For `download_submission_packet`: optional subset of claim
+   * `documents.id`s to include. If omitted, every non-archived attachment
+   * on the claim (other than previously-generated packets/cover letters)
+   * is bundled.
+   */
+  documentIds?: string[];
   recipientEmail?: string;
   payerAttention?: string | null;
 }
@@ -702,6 +714,313 @@ export async function POST(request: Request) {
             title: docTitle,
             fileName,
             fileSizeBytes: pdfBytes.byteLength,
+            downloadUrl: `/api/billing/claims/${claimId}/documents/${docRow.id}/file?organizationId=${encodeURIComponent(organizationId)}`,
+          },
+        });
+      }
+      case "download_submission_packet": {
+        // Resolve the documents we are going to bundle. Either the caller
+        // hand-picked a subset (documentIds) or we use every non-archived
+        // attachment on the claim except previously-generated cover
+        // letters / packets (we always regenerate the cover letter and
+        // never want to recursively merge a prior packet into the new
+        // one).
+        const requestedIds = (body.documentIds ?? [])
+          .map((s) => String(s).trim())
+          .filter(Boolean);
+
+        let docsQuery = sb
+          .from("documents")
+          .select(
+            "id, title, file_name, mime_type, document_type, storage_bucket, storage_path, file_size_bytes",
+          )
+          .eq("organization_id", organizationId)
+          .eq("claim_id", claimId)
+          .is("archived_at", null)
+          .order("created_at", { ascending: true });
+        if (requestedIds.length > 0) {
+          docsQuery = docsQuery.in("id", requestedIds);
+        } else {
+          docsQuery = docsQuery.not(
+            "document_type",
+            "in",
+            "(cover_letter,submission_packet)",
+          );
+        }
+        const { data: docRows, error: docsErr } = await docsQuery;
+        if (docsErr) {
+          return NextResponse.json(
+            { success: false, error: docsErr.message ?? "Failed to load attachments" },
+            { status: 500 },
+          );
+        }
+        const docs = (docRows ?? []) as Array<{
+          id: string;
+          title: string | null;
+          file_name: string | null;
+          mime_type: string | null;
+          document_type: string | null;
+          storage_bucket: string | null;
+          storage_path: string | null;
+          file_size_bytes: number | null;
+        }>;
+
+        // Hydrate cover-letter inputs (mirror of create_cover_letter).
+        const [
+          { data: org },
+          { data: client },
+          { data: payer },
+          { data: appt },
+        ] = await Promise.all([
+          sb.from("organizations").select("name").eq("id", organizationId).maybeSingle(),
+          clientId
+            ? sb.from("clients")
+                .select("first_name, last_name, date_of_birth")
+                .eq("id", clientId)
+                .eq("organization_id", organizationId)
+                .maybeSingle()
+            : Promise.resolve({ data: null }),
+          claim.payer_profile_id
+            ? sb.from("payer_profiles")
+                .select("payer_name")
+                .eq("id", claim.payer_profile_id)
+                .eq("organization_id", organizationId)
+                .maybeSingle()
+            : Promise.resolve({ data: null }),
+          appointmentId
+            ? sb.from("appointments")
+                .select("scheduled_start_at, provider_id")
+                .eq("id", appointmentId)
+                .eq("organization_id", organizationId)
+                .maybeSingle()
+            : Promise.resolve({ data: null }),
+        ]);
+
+        let providerName: string | null = null;
+        const providerId = appt ? String(appt.provider_id ?? "") : "";
+        if (providerId) {
+          const { data: prov } = await sb
+            .from("providers")
+            .select("first_name, last_name")
+            .eq("id", providerId)
+            .eq("organization_id", organizationId)
+            .maybeSingle();
+          if (prov) {
+            const fn = String(prov.first_name ?? "").trim();
+            const ln = String(prov.last_name ?? "").trim();
+            providerName = `${fn} ${ln}`.trim() || null;
+          }
+        }
+
+        const coverAttachments: CoverLetterAttachment[] = docs.map((d) => ({
+          title: d.title || d.file_name || "Document",
+          description: d.document_type ?? null,
+        }));
+
+        const clientFirst = client ? String(client.first_name ?? "").trim() : "";
+        const clientLast = client ? String(client.last_name ?? "").trim() : "";
+        const clientFullName =
+          `${clientFirst} ${clientLast}`.trim() || "Unknown patient";
+        const clientDob = client ? (client.date_of_birth as string | null) : null;
+        const orgName = (org?.name as string | null) || "Billing Office";
+        const payerName = (payer?.payer_name as string | null) || "Insurance Payer";
+        const claimNumber = (claim.claim_number as string | null) || claimId;
+        const dos = appt ? (appt.scheduled_start_at as string | null) : null;
+        const totalCharge = Number(claim.total_charge ?? 0);
+
+        const generatedAt = new Date();
+        let coverBytes: Uint8Array;
+        try {
+          coverBytes = generateCoverLetterPdf({
+            organizationName: orgName,
+            payerName,
+            clientName: clientFullName,
+            clientDob,
+            claimNumber,
+            dateOfService: dos,
+            providerName,
+            totalCharge: Number.isFinite(totalCharge) ? totalCharge : null,
+            requestReference: note || null,
+            attachments: coverAttachments,
+            notes: note || null,
+            generatedAt,
+          });
+        } catch (e) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: `Failed to render cover letter: ${e instanceof Error ? e.message : String(e)}`,
+            },
+            { status: 500 },
+          );
+        }
+
+        // Download each attachment from storage in parallel, but preserve
+        // the original `docs` order (which is `created_at asc`, or the
+        // caller-supplied id list) when feeding the merger. `Promise.all`
+        // resolves results positionally, so we keep one slot per source
+        // doc and either fill it with bytes or record a per-slot skip.
+        type Slot =
+          | { ok: true; input: PacketAttachmentInput }
+          | { ok: false; title: string; fileName: string; reason: string };
+        const slots: Slot[] = await Promise.all(
+          docs.map(async (d): Promise<Slot> => {
+            const bucket = (d.storage_bucket ?? "").trim();
+            const path = (d.storage_path ?? "").trim();
+            const title = d.title || d.file_name || "Document";
+            const fileName = d.file_name || `${d.id}.bin`;
+            if (!bucket || !path) {
+              return {
+                ok: false,
+                title,
+                fileName,
+                reason: "No file is stored for this document",
+              };
+            }
+            const { data: blob, error: dlErr } = await supabase.storage
+              .from(bucket)
+              .download(path);
+            if (dlErr || !blob) {
+              return {
+                ok: false,
+                title,
+                fileName,
+                reason: dlErr?.message || "File not available in storage",
+              };
+            }
+            const bytes = new Uint8Array(await blob.arrayBuffer());
+            return {
+              ok: true,
+              input: { title, fileName, bytes, mimeType: d.mime_type ?? null },
+            };
+          }),
+        );
+        const downloaded: PacketAttachmentInput[] = [];
+        const downloadSkipped: Array<{ title: string; fileName: string; reason: string }> = [];
+        for (const slot of slots) {
+          if (slot.ok) downloaded.push(slot.input);
+          else downloadSkipped.push({ title: slot.title, fileName: slot.fileName, reason: slot.reason });
+        }
+
+        let packet;
+        try {
+          packet = await buildSubmissionPacket(coverBytes, downloaded);
+        } catch (e) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: `Failed to build submission packet: ${e instanceof Error ? e.message : String(e)}`,
+            },
+            { status: 500 },
+          );
+        }
+
+        const skipped = [
+          ...packet.skipped,
+          ...downloadSkipped.map((s) => ({
+            title: s.title,
+            fileName: s.fileName,
+            kind: "skipped" as const,
+            reason: s.reason,
+          })),
+        ];
+
+        await ensureCoverLetterBucket(supabase);
+        const stamp = generatedAt.toISOString().replace(/[:.]/g, "-");
+        const safeClaim = String(claimNumber).replace(/[^\w.-]+/g, "_");
+        const fileName = `submission-packet-${safeClaim}-${stamp}.pdf`;
+        const storagePath = `${organizationId}/submission-packets/${claimId}/${fileName}`;
+
+        const { error: upErr } = await supabase.storage
+          .from(COVER_LETTER_BUCKET)
+          .upload(storagePath, packet.pdfBytes, {
+            contentType: "application/pdf",
+            upsert: false,
+          });
+        if (upErr) {
+          return NextResponse.json(
+            { success: false, error: `Storage upload failed: ${upErr.message}` },
+            { status: 500 },
+          );
+        }
+
+        const docTitle = `Submission packet - claim ${claimNumber}`;
+        const skippedSummary = skipped.length
+          ? ` Skipped ${skipped.length} unsupported attachment(s): ` +
+            skipped.map((s) => `${s.title} (${s.reason})`).join("; ")
+          : "";
+        const { data: docRow, error: docErr } = await sb
+          .from("documents")
+          .insert({
+            organization_id: organizationId,
+            claim_id: claimId,
+            client_id: clientId,
+            encounter_id: claim.encounter_id ?? null,
+            document_scope: "claim",
+            document_type: "submission_packet",
+            title: docTitle,
+            file_name: fileName,
+            mime_type: "application/pdf",
+            file_size_bytes: packet.pdfBytes.byteLength,
+            storage_bucket: COVER_LETTER_BUCKET,
+            storage_path: storagePath,
+            filed_at: generatedAt.toISOString(),
+            filed_by_user_id: userId,
+            uploaded_by_user_id: userId,
+            notes:
+              `Combined cover letter + ${packet.included.length} attachment(s) for ${payerName}.` +
+              skippedSummary +
+              (note ? ` ${note}` : ""),
+          })
+          .select("id, title, file_name, storage_path, storage_bucket, file_size_bytes, created_at")
+          .single();
+
+        if (docErr || !docRow) {
+          await supabase.storage
+            .from(COVER_LETTER_BUCKET)
+            .remove([storagePath])
+            .catch(() => {});
+          return NextResponse.json(
+            { success: false, error: docErr?.message ?? "Failed to record packet document" },
+            { status: 500 },
+          );
+        }
+
+        const audit = await writeAuditStrict(supabase, {
+          organizationId, userId,
+          action: "medical_review_submission_packet_created",
+          claimId, clientId, appointmentId,
+          summary:
+            note ||
+            `Submission packet generated for ${payerName} (${packet.included.length} attachment(s)` +
+              (skipped.length ? `, ${skipped.length} skipped` : "") +
+              ")",
+          metadata: {
+            note,
+            documentId: String(docRow.id),
+            fileName,
+            storageBucket: COVER_LETTER_BUCKET,
+            storagePath,
+            fileSizeBytes: packet.pdfBytes.byteLength,
+            includedCount: packet.included.length,
+            skippedCount: skipped.length,
+            included: packet.included,
+            skipped,
+          },
+        });
+        if (!audit.ok) {
+          return NextResponse.json({ success: false, error: audit.error }, { status: 500 });
+        }
+        return NextResponse.json({
+          success: true,
+          createdAt: generatedAt.toISOString(),
+          included: packet.included,
+          skipped,
+          document: {
+            id: String(docRow.id),
+            title: docTitle,
+            fileName,
+            fileSizeBytes: packet.pdfBytes.byteLength,
             downloadUrl: `/api/billing/claims/${claimId}/documents/${docRow.id}/file?organizationId=${encodeURIComponent(organizationId)}`,
           },
         });
