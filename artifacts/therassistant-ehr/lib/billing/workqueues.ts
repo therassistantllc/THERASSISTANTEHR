@@ -62,7 +62,7 @@ export const WORKQUEUES: WorkqueueDef[] = [
     description: "Encounters released to billing but missing a signed clinical note.",
     href: "/billing/documentation-pending",
     stage: "pre_submission",
-    status: "coming_soon",
+    status: "live",
   },
   {
     id: "eligibility_issues",

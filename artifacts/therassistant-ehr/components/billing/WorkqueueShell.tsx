@@ -60,6 +60,12 @@ export interface DetailTab {
   render: () => ReactNode;
 }
 
+export interface PrimaryTab {
+  id: string;
+  label: string;
+  count?: number;
+}
+
 export interface WorkqueueShellProps<TRow> {
   title: string;
   description?: string;
@@ -67,6 +73,10 @@ export interface WorkqueueShellProps<TRow> {
   headerActions?: PrimaryAction[];
   /** Summary strip metrics (count, total $, oldest age, urgent count, …) */
   summary?: SummaryMetric[];
+  /** Primary tabs rendered between the summary strip and filter rail. */
+  primaryTabs?: PrimaryTab[];
+  activePrimaryTabId?: string;
+  onPrimaryTabChange?: (tabId: string) => void;
   /** Top filter rail */
   filters?: FilterDef[];
   filterValues?: Record<string, string>;
@@ -184,6 +194,9 @@ export default function WorkqueueShell<TRow>(props: WorkqueueShellProps<TRow>) {
     description,
     headerActions,
     summary,
+    primaryTabs,
+    activePrimaryTabId,
+    onPrimaryTabChange,
     filters,
     filterValues,
     onFilterChange,
@@ -303,6 +316,47 @@ export default function WorkqueueShell<TRow>(props: WorkqueueShellProps<TRow>) {
               <span className={styles.summaryLabel}>{s.label}</span>
             </div>
           ))}
+        </div>
+      ) : null}
+
+      {/* Primary tabs */}
+      {primaryTabs && primaryTabs.length > 0 ? (
+        <div
+          className={styles.filterRail}
+          role="tablist"
+          aria-label="Workqueue tabs"
+          style={{ gap: 4 }}
+        >
+          {primaryTabs.map((t) => {
+            const isActive = t.id === activePrimaryTabId;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => onPrimaryTabChange?.(t.id)}
+                className={isActive ? styles.primaryBtn : styles.secondaryBtn}
+                style={{ height: 32, padding: "0 12px", fontSize: 13 }}
+              >
+                {t.label}
+                {typeof t.count === "number" ? (
+                  <span
+                    style={{
+                      marginLeft: 6,
+                      background: isActive ? "rgba(255,255,255,0.25)" : "#f1f5f9",
+                      color: isActive ? "white" : "#475569",
+                      padding: "1px 7px",
+                      borderRadius: 999,
+                      fontSize: 11,
+                    }}
+                  >
+                    {t.count}
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
         </div>
       ) : null}
 
