@@ -55,7 +55,7 @@ export async function GET(
 
     const { data, error } = await (supabase as any)
       .from("claim_notes")
-      .select("id, body, defer_until, author_user_id, author_display_name, created_at")
+      .select("id, body, defer_until, author_user_id, author_display_name, rarc_codes, resolved_denial, created_at")
       .eq("organization_id", organizationId)
       .eq("claim_id", claimId)
       .order("created_at", { ascending: false });
@@ -77,6 +77,45 @@ interface NoteBody {
   organizationId?: string;
   body?: string;
   defer_until?: string | null;
+  rarc_codes?: string[] | null;
+  resolved_denial?: boolean | null;
+}
+
+/**
+ * Best-effort lookup of the RARC codes that apply to a claim. We union
+ * what the ERA layer recorded (era_claim_payments.rarc_codes) with what
+ * the denials workqueue surfaced (claim_workqueue_items.rarc_code). Used
+ * to auto-tag notes added on denied claims so the "Denials by RARC"
+ * detail panel can pull them as historical resolution notes.
+ */
+async function inferRarcCodesForClaim(
+  supabase: NonNullable<ReturnType<typeof createServerSupabaseAdminClient>>,
+  claimId: string,
+): Promise<string[]> {
+  const codes = new Set<string>();
+  const [{ data: eraRows }, { data: wqRows }] = await Promise.all([
+    (supabase as any)
+      .from("era_claim_payments")
+      .select("rarc_codes")
+      .eq("professional_claim_id", claimId),
+    (supabase as any)
+      .from("claim_workqueue_items")
+      .select("rarc_code")
+      .eq("claim_id", claimId)
+      .is("archived_at", null),
+  ]);
+  for (const row of (eraRows as any[]) ?? []) {
+    const arr = Array.isArray(row?.rarc_codes) ? row.rarc_codes : [];
+    for (const c of arr) {
+      const s = text(c).toUpperCase();
+      if (s) codes.add(s);
+    }
+  }
+  for (const row of (wqRows as any[]) ?? []) {
+    const s = text(row?.rarc_code).toUpperCase();
+    if (s) codes.add(s);
+  }
+  return Array.from(codes);
 }
 
 export async function POST(
@@ -137,6 +176,16 @@ export async function POST(
       }
     }
 
+    const explicitCodes = Array.isArray(body.rarc_codes)
+      ? body.rarc_codes
+          .map((c) => text(c).toUpperCase())
+          .filter(Boolean)
+      : null;
+    const rarcCodes =
+      explicitCodes && explicitCodes.length > 0
+        ? explicitCodes
+        : await inferRarcCodesForClaim(supabase, claimId);
+
     const insertRow = {
       organization_id: organizationId,
       claim_id: claimId,
@@ -144,12 +193,14 @@ export async function POST(
       author_display_name: authorDisplayName,
       body: noteBody,
       defer_until: deferUntil,
+      rarc_codes: rarcCodes,
+      resolved_denial: Boolean(body.resolved_denial),
     };
 
     const { data: inserted, error: insertError } = await (supabase as any)
       .from("claim_notes")
       .insert(insertRow)
-      .select("id, body, defer_until, author_user_id, author_display_name, created_at")
+      .select("id, body, defer_until, author_user_id, author_display_name, rarc_codes, resolved_denial, created_at")
       .single();
 
     if (insertError) {

@@ -384,9 +384,15 @@ export default function DenialsByRarcClient() {
     author: string;
     body: string;
     createdAt: string;
+    resolvedDenial: boolean;
+    rarcCodes: string[];
   };
-  const [historyByGroup, setHistoryByGroup] = useState<Record<string, HistoryEntry[]>>({});
+  // History cache is keyed by `${groupId}:${resolvedOnly ? "resolved" : "all"}`
+  // so toggling the "Resolved by" filter refetches without trampling the
+  // unfiltered list.
+  const [historyByKey, setHistoryByKey] = useState<Record<string, HistoryEntry[]>>({});
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [resolvedOnlyByGroup, setResolvedOnlyByGroup] = useState<Record<string, boolean>>({});
 
   const load = useCallback(async () => {
     if (!organizationId) return;
@@ -410,9 +416,12 @@ export default function DenialsByRarcClient() {
   useEffect(() => { void load(); }, [load]);
 
   // Load historical resolution notes for the selected group on demand.
+  // Refetches when the "Resolved by" toggle flips for this group.
   useEffect(() => {
     if (!selectedRowId || !organizationId) return;
-    if (historyByGroup[selectedRowId]) return;
+    const resolvedOnly = Boolean(resolvedOnlyByGroup[selectedRowId]);
+    const cacheKey = `${selectedRowId}:${resolvedOnly ? "resolved" : "all"}`;
+    if (historyByKey[cacheKey]) return;
     const group = groups.find((g) => g.id === selectedRowId);
     if (!group) return;
     setHistoryLoading(true);
@@ -422,20 +431,22 @@ export default function DenialsByRarcClient() {
       body: JSON.stringify({
         organizationId,
         claimIds: group.claims.map((c) => c.claimId),
+        rarcCode: group.rarcCode,
+        resolvedOnly,
       }),
     })
       .then((r) => r.json())
       .then((json) => {
         if (json?.success) {
-          setHistoryByGroup((prev) => ({
+          setHistoryByKey((prev) => ({
             ...prev,
-            [selectedRowId]: json.entries ?? [],
+            [cacheKey]: json.entries ?? [],
           }));
         }
       })
       .catch(() => undefined)
       .finally(() => setHistoryLoading(false));
-  }, [selectedRowId, organizationId, groups, historyByGroup]);
+  }, [selectedRowId, organizationId, groups, historyByKey, resolvedOnlyByGroup]);
 
   // ── Filter rail (universal) ─────────────────────────────────────────────
   const payerOptions = useMemo(() => {
@@ -734,63 +745,106 @@ export default function DenialsByRarcClient() {
         label: "Historical resolution notes",
         render: () => {
           if (!selectedGroup) return null;
-          const entries = historyByGroup[selectedGroup.id] ?? [];
+          const resolvedOnly = Boolean(resolvedOnlyByGroup[selectedGroup.id]);
+          const cacheKey = `${selectedGroup.id}:${resolvedOnly ? "resolved" : "all"}`;
+          const entries = historyByKey[cacheKey] ?? [];
+          const toggle = (
+            <label
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 6,
+                fontSize: 12, color: "#0F172A", cursor: "pointer",
+                userSelect: "none",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={resolvedOnly}
+                onChange={(ev) =>
+                  setResolvedOnlyByGroup((prev) => ({
+                    ...prev,
+                    [selectedGroup.id]: ev.target.checked,
+                  }))
+                }
+              />
+              Resolved by only (notes that closed the denial)
+            </label>
+          );
+          let bodyEl: React.ReactNode;
           if (historyLoading && entries.length === 0) {
-            return (
+            bodyEl = (
               <div style={{ fontSize: 13, color: "#64748B" }}>
                 Loading resolution history…
               </div>
             );
-          }
-          if (entries.length === 0) {
-            return (
+          } else if (entries.length === 0) {
+            bodyEl = (
               <div style={{ fontSize: 13, color: "#64748B", lineHeight: 1.5 }}>
-                No prior notes or audit events on the claims in this RARC
-                group. Use the actions above to start one.
+                {resolvedOnly
+                  ? `No notes have been marked as resolving RARC ${selectedGroup.rarcCode} yet.`
+                  : `No prior notes or audit events tagged with RARC ${selectedGroup.rarcCode}. Use the actions above to start one — new notes added to denied claims are tagged automatically.`}
               </div>
+            );
+          } else {
+            bodyEl = (
+              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                {entries.map((e) => (
+                  <li
+                    key={e.id}
+                    style={{
+                      padding: "8px 0",
+                      borderBottom: "1px solid #F1F5F9",
+                      fontSize: 13,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    <div style={{ fontSize: 11, color: "#64748B", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                      <span
+                        style={{
+                          textTransform: "uppercase",
+                          fontWeight: 600,
+                          color: e.kind === "audit" ? "#0369A1" : "#475569",
+                        }}
+                      >
+                        {e.kind}
+                      </span>
+                      <span style={{ fontFamily: "ui-monospace, monospace" }}>
+                        {e.claimNumber || e.claimId.slice(0, 8)}
+                      </span>
+                      <span>·</span>
+                      <span>{e.author}</span>
+                      <span>·</span>
+                      <span>{e.createdAt ? new Date(e.createdAt).toLocaleString() : "—"}</span>
+                      {e.resolvedDenial ? (
+                        <span
+                          style={{
+                            background: "#DCFCE7", color: "#15803D",
+                            padding: "1px 6px", borderRadius: 999,
+                            fontSize: 10, fontWeight: 600,
+                            textTransform: "uppercase", letterSpacing: 0.3,
+                          }}
+                        >
+                          Resolved
+                        </span>
+                      ) : null}
+                    </div>
+                    <div style={{ marginTop: 2, color: "#0F172A", whiteSpace: "pre-wrap" }}>
+                      {e.body}
+                    </div>
+                  </li>
+                ))}
+              </ul>
             );
           }
           return (
-            <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-              {entries.map((e) => (
-                <li
-                  key={e.id}
-                  style={{
-                    padding: "8px 0",
-                    borderBottom: "1px solid #F1F5F9",
-                    fontSize: 13,
-                    lineHeight: 1.5,
-                  }}
-                >
-                  <div style={{ fontSize: 11, color: "#64748B", display: "flex", gap: 8 }}>
-                    <span
-                      style={{
-                        textTransform: "uppercase",
-                        fontWeight: 600,
-                        color: e.kind === "audit" ? "#0369A1" : "#475569",
-                      }}
-                    >
-                      {e.kind}
-                    </span>
-                    <span style={{ fontFamily: "ui-monospace, monospace" }}>
-                      {e.claimNumber || e.claimId.slice(0, 8)}
-                    </span>
-                    <span>·</span>
-                    <span>{e.author}</span>
-                    <span>·</span>
-                    <span>{e.createdAt ? new Date(e.createdAt).toLocaleString() : "—"}</span>
-                  </div>
-                  <div style={{ marginTop: 2, color: "#0F172A", whiteSpace: "pre-wrap" }}>
-                    {e.body}
-                  </div>
-                </li>
-              ))}
-            </ul>
+            <div>
+              <div style={{ marginBottom: 10 }}>{toggle}</div>
+              {bodyEl}
+            </div>
           );
         },
       },
     ],
-    [selectedGroup, historyByGroup, historyLoading],
+    [selectedGroup, historyByKey, historyLoading, resolvedOnlyByGroup],
   );
 
   const detailActions = selectedGroup
@@ -847,11 +901,13 @@ export default function DenialsByRarcClient() {
           onClose={() => setTemplateModal(null)}
           onSaved={(msg) => {
             setToast(msg);
-            // Template creation writes an audit_log; clear the cached
-            // history for this group so the History tab refetches.
-            setHistoryByGroup((prev) => {
+            // Template creation writes an audit_log; drop both cache
+            // variants (all / resolved-only) for this group so the
+            // History tab refetches.
+            const prefix = `${templateModal.group.id}:`;
+            setHistoryByKey((prev) => {
               const next = { ...prev };
-              delete next[templateModal.group.id];
+              for (const k of Object.keys(next)) if (k.startsWith(prefix)) delete next[k];
               return next;
             });
             void load();
@@ -864,9 +920,10 @@ export default function DenialsByRarcClient() {
           onClose={() => setAssignModal(null)}
           onSaved={(msg) => {
             setToast(msg);
-            setHistoryByGroup((prev) => {
+            const prefix = `${assignModal.id}:`;
+            setHistoryByKey((prev) => {
               const next = { ...prev };
-              delete next[assignModal.id];
+              for (const k of Object.keys(next)) if (k.startsWith(prefix)) delete next[k];
               return next;
             });
             void load();
@@ -879,9 +936,10 @@ export default function DenialsByRarcClient() {
           onClose={() => setRuleModal(null)}
           onSaved={(msg) => {
             setToast(msg);
-            setHistoryByGroup((prev) => {
+            const prefix = `${ruleModal.id}:`;
+            setHistoryByKey((prev) => {
               const next = { ...prev };
-              delete next[ruleModal.id];
+              for (const k of Object.keys(next)) if (k.startsWith(prefix)) delete next[k];
               return next;
             });
             void load();
