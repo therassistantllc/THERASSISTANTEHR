@@ -22,6 +22,24 @@ const CPT_OPTIONS: Array<{ value: string; label: string }> = [
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+const TIME_CHIP_OPTIONS: Array<{ value: string; label: string }> = (() => {
+  const opts: Array<{ value: string; label: string }> = [];
+  for (let hour = 8; hour <= 18; hour++) {
+    for (const minute of [0, 30]) {
+      if (hour === 18 && minute === 30) continue;
+      const h24 = String(hour).padStart(2, "0");
+      const mm = String(minute).padStart(2, "0");
+      const h12 = ((hour + 11) % 12) + 1;
+      const suffix = hour < 12 ? "a" : "p";
+      opts.push({
+        value: `${h24}:${mm}`,
+        label: `${h12}:${mm}${suffix}`,
+      });
+    }
+  }
+  return opts;
+})();
+
 type ListAppointment = {
   id: string;
   clientId: string | null;
@@ -1537,6 +1555,25 @@ function CreateAppointmentModal({
         </div>
         <div className={styles.modalRow}>
           <label className={styles.modalLabel}>Start time</label>
+          <div className={styles.timeChips}>
+            {TIME_CHIP_OPTIONS.map((opt) => {
+              const active = startAt.slice(11, 16) === opt.value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  className={`${styles.timeChip} ${active ? styles.timeChipActive : ""}`}
+                  onClick={() => {
+                    const datePart = startAt.slice(0, 10) || (initialDate ?? "");
+                    if (datePart) setStartAt(`${datePart}T${opt.value}`);
+                  }}
+                  disabled={busy}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
           <input
             className={styles.input}
             type="datetime-local"
