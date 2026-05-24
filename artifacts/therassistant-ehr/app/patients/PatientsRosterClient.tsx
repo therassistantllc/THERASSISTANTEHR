@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MoreVertical, Plus, Search, Upload } from "lucide-react";
 import { DEFAULT_ORG_ID } from "@/lib/config";
@@ -145,6 +146,7 @@ export default function PatientsRosterClient({
     () => resolveOrganizationId(initialOrganizationId),
     [initialOrganizationId],
   );
+  const router = useRouter();
   const [query, setQuery] = useState("");
   const [needsFilter, setNeedsFilter] = useState<NeedsFilter>("all");
   const [payload, setPayload] = useState<Payload | null>(null);
@@ -272,7 +274,12 @@ export default function PatientsRosterClient({
         open={addOpen}
         organizationId={organizationId}
         onClose={() => setAddOpen(false)}
-        onCreated={() => loadClients(query)}
+        onCreated={(newClientId) => {
+          loadClients(query);
+          if (newClientId) {
+            router.push(clientHref(newClientId));
+          }
+        }}
       />
 
 

@@ -7,12 +7,13 @@ type Props = {
   open: boolean;
   organizationId: string;
   onClose: () => void;
-  onCreated: () => void;
+  onCreated: (clientId?: string) => void;
 };
 
 type CreateResponse = {
   success: boolean;
   error?: string;
+  client?: { id?: string };
 };
 
 export default function AddClientDialog({ open, organizationId, onClose, onCreated }: Props) {
@@ -74,7 +75,7 @@ export default function AddClientDialog({ open, organizationId, onClose, onCreat
       if (!res.ok || !json.success) {
         throw new Error(json.error ?? "Failed to create client");
       }
-      onCreated();
+      onCreated(json.client?.id);
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create client");
