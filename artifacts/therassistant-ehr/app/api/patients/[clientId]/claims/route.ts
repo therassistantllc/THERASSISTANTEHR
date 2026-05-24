@@ -22,13 +22,19 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
     if (guard instanceof NextResponse) return guard;
     const organizationId = guard.organizationId;
 
+    const includeArchivedParam = (searchParams.get("includeArchived") ?? "").toLowerCase();
+    const includeArchived = includeArchivedParam === "1" || includeArchivedParam === "true";
+
     // professional_claims uses patient_id which maps to clients.id
-    const { data: claims, error } = await supabase
+    let query = supabase
       .from("professional_claims")
-      .select("id, claim_number, claim_status, total_charge, patient_responsibility_amount, diagnosis_codes, created_at, submitted_at, appointment_id, encounter_id, payer_profile_id")
+      .select("id, claim_number, claim_status, total_charge, patient_responsibility_amount, diagnosis_codes, created_at, submitted_at, appointment_id, encounter_id, payer_profile_id, archived_at")
       .eq("organization_id", organizationId)
-      .eq("patient_id", clientId)
-      .is("archived_at", null)
+      .eq("patient_id", clientId);
+    if (!includeArchived) {
+      query = query.is("archived_at", null);
+    }
+    const { data: claims, error } = await query
       .order("created_at", { ascending: false })
       .limit(50);
 
@@ -97,6 +103,7 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
         appointmentId: claim.appointment_id as string | null,
         encounterId: claim.encounter_id as string | null,
         payerName,
+        archivedAt: (claim.archived_at as string | null) ?? null,
       };
     });
 

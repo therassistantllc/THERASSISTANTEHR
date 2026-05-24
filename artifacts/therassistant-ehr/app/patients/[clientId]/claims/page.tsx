@@ -15,6 +15,7 @@ type ClaimItem = {
   appointmentId: string | null;
   encounterId: string | null;
   payerName: string | null;
+  archivedAt: string | null;
 };
 
 function formatDate(v: string | null | undefined) {
@@ -46,6 +47,8 @@ export default function ClaimsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [archivingId, setArchivingId] = useState<string | null>(null);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
   const [rowMessage, setRowMessage] = useState<{ id: string; text: string; tone: "ok" | "err" } | null>(null);
 
   const submittedCount = claims.filter((claim) => String(claim.status ?? "").toLowerCase().includes("submitted")).length;
@@ -61,7 +64,9 @@ export default function ClaimsPage() {
     setLoading(true);
     setError(null);
     try {
-      const r = await fetch(`/api/patients/${clientId}/claims?organizationId=${encodeURIComponent(orgId)}`, { cache: "no-store" });
+      const qs = new URLSearchParams({ organizationId: orgId });
+      if (showArchived) qs.set("includeArchived", "1");
+      const r = await fetch(`/api/patients/${clientId}/claims?${qs.toString()}`, { cache: "no-store" });
       const json = await r.json() as { success: boolean; claims?: ClaimItem[]; error?: string };
       if (!json.success) throw new Error(json.error ?? "Failed");
       setClaims(json.claims ?? []);
@@ -70,7 +75,7 @@ export default function ClaimsPage() {
     } finally {
       setLoading(false);
     }
-  }, [clientId, orgId]);
+  }, [clientId, orgId, showArchived]);
 
   useEffect(() => {
     void loadClaims();
@@ -100,6 +105,27 @@ export default function ClaimsPage() {
     }
   }, [orgId, loadClaims]);
 
+  const restoreClaim = useCallback(async (claimId: string) => {
+    if (!orgId) return;
+    setRestoringId(claimId);
+    setRowMessage(null);
+    try {
+      const r = await fetch(`/api/claims/${encodeURIComponent(claimId)}/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ organizationId: orgId }),
+      });
+      const json = await r.json() as { success: boolean; error?: string };
+      if (!r.ok || !json.success) throw new Error(json.error ?? "Restore failed");
+      setRowMessage({ id: claimId, text: "Claim restored.", tone: "ok" });
+      await loadClaims();
+    } catch (e: unknown) {
+      setRowMessage({ id: claimId, text: e instanceof Error ? e.message : "Restore failed", tone: "err" });
+    } finally {
+      setRestoringId(null);
+    }
+  }, [orgId, loadClaims]);
+
   const orgQ = orgId ? `?organizationId=${encodeURIComponent(orgId)}` : "";
 
   return (
@@ -110,6 +136,14 @@ export default function ClaimsPage() {
           <h2>Claims History</h2>
         </div>
         <div className="hero-actions">
+          <label className="checkbox-inline" style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem" }}>
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={(e) => setShowArchived(e.target.checked)}
+            />
+            <span>Show archived</span>
+          </label>
           <Link className="button button-secondary" href={`/billing/charge-capture${orgQ}`}>
             Charge Capture
           </Link>
@@ -181,14 +215,26 @@ export default function ClaimsPage() {
                       : "—"}
                   </td>
                   <td>
-                    <button
-                      type="button"
-                      className="button button-secondary"
-                      onClick={() => void archiveClaim(claim.id)}
-                      disabled={archivingId === claim.id}
-                    >
-                      {archivingId === claim.id ? "Archiving…" : "Archive"}
-                    </button>
+                    {claim.archivedAt ? (
+                      <button
+                        type="button"
+                        className="button button-secondary"
+                        onClick={() => void restoreClaim(claim.id)}
+                        disabled={restoringId === claim.id}
+                        title={`Archived ${formatDate(claim.archivedAt)}`}
+                      >
+                        {restoringId === claim.id ? "Restoring…" : "Restore"}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="button button-secondary"
+                        onClick={() => void archiveClaim(claim.id)}
+                        disabled={archivingId === claim.id}
+                      >
+                        {archivingId === claim.id ? "Archiving…" : "Archive"}
+                      </button>
+                    )}
                     {rowMessage && rowMessage.id === claim.id ? (
                       <div className={rowMessage.tone === "ok" ? "status status-green" : "status status-red"}>
                         {rowMessage.text}
