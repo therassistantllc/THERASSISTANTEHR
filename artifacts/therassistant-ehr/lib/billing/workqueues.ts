@@ -383,6 +383,14 @@ export const WORKQUEUES: WorkqueueDef[] = [
     status: "coming_soon",
   },
   {
+    id: "vcc",
+    title: "VCC",
+    description: "Virtual credit card payments from payers — track receipt, fee review, ERA match, and posting.",
+    href: "/billing/vcc",
+    stage: "payments_era",
+    status: "live",
+  },
+  {
     id: "reconciliation_exceptions",
     title: "Reconciliation Exceptions",
     description: "Bank-to-EHR mismatches that block daily reconciliation.",
