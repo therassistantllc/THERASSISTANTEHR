@@ -170,6 +170,14 @@ export const WORKQUEUES: WorkqueueDef[] = [
     stage: "submission_rejections",
     status: "coming_soon",
   },
+  {
+    id: "corrected_claims",
+    title: "Corrected Claims",
+    description: "Denied or rejected claims that need a corrected resubmission — replacement (frequency 7) or void (frequency 8).",
+    href: "/billing/corrected-claims",
+    stage: "submission_rejections",
+    status: "live",
+  },
 
   // ── Adjudication & Denials ──────────────────────────────────────────────
   {
