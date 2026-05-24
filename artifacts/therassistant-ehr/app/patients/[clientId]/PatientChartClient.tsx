@@ -1040,8 +1040,6 @@ export default function PatientChartClient({
     .join(" · ");
 
   const railActions: Array<{ key: string; label: string; href: string }> = [
-    { key: "elig", label: "Eligibility check", href: `/clients/${patient.id}/eligibility${orgQ}` },
-    { key: "pay", label: "Enter payment", href: `/billing/payments${orgQ}` },
     { key: "notes", label: "Notes", href: `/clients/${patient.id}/notes${orgQ}` },
     { key: "portal", label: "Portal access", href: `/clients/${patient.id}/portal${orgQ}` },
   ];
@@ -1954,7 +1952,16 @@ export default function PatientChartClient({
 
         <aside className="summary-financial" aria-label="Patient financial summary">
           <section className="summary-financial-section">
-            <h3>Eligibility</h3>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <h3 style={{ margin: 0 }}>Eligibility</h3>
+              <Link
+                href={`/clients/${patient.id}/eligibility${orgQ}`}
+                className="button button-secondary"
+                style={{ fontSize: 12, padding: "4px 10px" }}
+              >
+                Eligibility check
+              </Link>
+            </div>
             <div className="summary-financial-row">
               <span>Status</span>
               <strong className={statusClass(latestEligibility?.eligibility_status)}>
@@ -2047,6 +2054,15 @@ export default function PatientChartClient({
             <div className="summary-financial-row total">
               <span>Total due</span>
               <strong>{hasAnyTotalInput ? formatMoneyOrDash(totalDue) : dash}</strong>
+            </div>
+            <div style={{ marginTop: 8, display: "flex", justifyContent: "flex-end" }}>
+              <Link
+                href={`/billing/payments${orgQ}`}
+                className="button button-primary"
+                style={{ fontSize: 12, padding: "6px 12px" }}
+              >
+                Enter payment
+              </Link>
             </div>
           </section>
 

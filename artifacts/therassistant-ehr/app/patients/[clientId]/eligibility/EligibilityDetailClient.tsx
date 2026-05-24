@@ -378,13 +378,38 @@ export default function EligibilityDetailClient({ clientId }: { clientId: string
 
   const patient = data?.patient;
   const latest = data?.latestEligibility ?? null;
+  const history = data?.eligibilityHistory ?? [];
+
+  const [selectedCheckId, setSelectedCheckId] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("checkId");
+  });
+
+  const selectedCheck = useMemo<EligibilityCheck | null>(() => {
+    if (selectedCheckId) {
+      const found = history.find((h) => h.id === selectedCheckId);
+      if (found) return found;
+    }
+    return latest;
+  }, [selectedCheckId, history, latest]);
+
   const banner = deriveBanner(latest);
   const isRunningAny = running !== null;
 
   const groupedSegments = useMemo(() => {
-    if (!latest?.benefitSegments?.length) return [];
-    return groupByCategory(latest.benefitSegments);
-  }, [latest]);
+    if (!selectedCheck?.benefitSegments?.length) return [];
+    return groupByCategory(selectedCheck.benefitSegments);
+  }, [selectedCheck]);
+
+  function selectCheck(id: string | null) {
+    setSelectedCheckId(id);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      if (id) url.searchParams.set("checkId", id);
+      else url.searchParams.delete("checkId");
+      window.history.replaceState({}, "", url.toString());
+    }
+  }
 
   return (
     <main className="app-shell">
@@ -394,13 +419,31 @@ export default function EligibilityDetailClient({ clientId }: { clientId: string
           <h1>{patient?.name || "Patient eligibility"}</h1>
           <p className="hero-copy">Coverage, copay, deductible, and benefit history for the visit workflow.</p>
         </div>
-        <div className="hero-actions">
+        <div className="hero-actions no-print">
           <button type="button" className="button button-primary" disabled={isRunningAny} onClick={() => runCheck(null)}>
             {isRunningAny ? "Checking…" : "Check eligibility"}
+          </button>
+          <button
+            type="button"
+            className="button button-secondary"
+            onClick={() => { if (typeof window !== "undefined") window.print(); }}
+            disabled={!selectedCheck}
+            title={selectedCheck ? "Print this eligibility check to PDF" : "No eligibility check to print"}
+          >
+            Print to PDF
           </button>
           <Link className="button button-secondary" href={`/clients/${clientId}`}>Patient Chart</Link>
         </div>
       </section>
+
+      <style jsx global>{`
+        @media print {
+          .no-print, nav, header[role="banner"], aside { display: none !important; }
+          .hero-panel { box-shadow: none !important; border: none !important; }
+          .panel { break-inside: avoid; page-break-inside: avoid; }
+          body { background: white !important; }
+        }
+      `}</style>
 
       {banner ? (
         <div
@@ -418,11 +461,11 @@ export default function EligibilityDetailClient({ clientId }: { clientId: string
         </div>
       ) : null}
 
-      {latest?.aaaErrors && latest.aaaErrors.length > 0 ? (
+      {selectedCheck?.aaaErrors && selectedCheck.aaaErrors.length > 0 ? (
         <div className="alert-panel" style={{ background: "#fef2f2", borderColor: "#fecaca", color: "#991b1b" }}>
           <strong style={{ display: "block", marginBottom: 6 }}>Payer rejected this inquiry</strong>
           <ul style={{ margin: 0, paddingLeft: 18 }}>
-            {latest.aaaErrors.map((err, i) => (
+            {selectedCheck.aaaErrors.map((err, i) => (
               <li key={i} style={{ marginBottom: 4 }}>
                 <strong>[{err.code || "—"}]</strong> {err.description || "Reject reason not provided."}
                 {err.followUpAction ? <span style={{ color: "#7f1d1d" }}> — {err.followUpAction}</span> : null}
@@ -433,14 +476,14 @@ export default function EligibilityDetailClient({ clientId }: { clientId: string
         </div>
       ) : null}
 
-      {latest?.attributionDecision && latest.attributionDecision.matchesRequestedPatient === false ? (
+      {selectedCheck?.attributionDecision && selectedCheck.attributionDecision.matchesRequestedPatient === false ? (
         <div className="alert-panel" style={{ background: "#fef2f2", borderColor: "#fecaca", color: "#991b1b" }}>
           <strong style={{ display: "block", marginBottom: 4 }}>Patient attribution mismatch</strong>
           <span>
-            271 was attributed to {latest.attributionDecision.target ?? "subscriber"}
-            {latest.attributionDecision.attributedName ? ` "${latest.attributionDecision.attributedName}"` : ""}
+            271 was attributed to {selectedCheck.attributionDecision.target ?? "subscriber"}
+            {selectedCheck.attributionDecision.attributedName ? ` "${selectedCheck.attributionDecision.attributedName}"` : ""}
             , which does not match this patient (
-            {(latest.attributionDecision.mismatchReasons ?? [])
+            {(selectedCheck.attributionDecision.mismatchReasons ?? [])
               .map((r) => MISMATCH_LABELS[r] ?? r)
               .join("; ") || "no identifying details returned"}
             ). Verify before billing.
@@ -448,25 +491,25 @@ export default function EligibilityDetailClient({ clientId }: { clientId: string
         </div>
       ) : null}
 
-      {latest?.attribution ? (
+      {selectedCheck?.attribution ? (
         <div
           className="alert-panel"
           style={{
-            background: latest.attribution.target === "dependent" ? "#eff6ff" : "#f8fafc",
-            borderColor: latest.attribution.target === "dependent" ? "#bfdbfe" : "#e2e8f0",
+            background: selectedCheck.attribution.target === "dependent" ? "#eff6ff" : "#f8fafc",
+            borderColor: selectedCheck.attribution.target === "dependent" ? "#bfdbfe" : "#e2e8f0",
             color: "#1f2937",
           }}
         >
           <strong style={{ display: "block", marginBottom: 4 }}>
-            Response attributed to {latest.attribution.target === "dependent" ? "dependent" : "subscriber"}
+            Response attributed to {selectedCheck.attribution.target === "dependent" ? "dependent" : "subscriber"}
           </strong>
           <span>
-            {latest.attribution.target === "dependent"
-              ? `Benefits returned for dependent ${latest.attribution.dependentName ?? "—"}${
-                  latest.attribution.dependentDob ? ` (DOB ${formatDate(latest.attribution.dependentDob)})` : ""
-                } under subscriber ${latest.attribution.subscriberName ?? "—"}.`
-              : `Benefits returned for subscriber ${latest.attribution.subscriberName ?? "—"}${
-                  latest.attribution.subscriberMemberId ? ` (Member ${latest.attribution.subscriberMemberId})` : ""
+            {selectedCheck.attribution.target === "dependent"
+              ? `Benefits returned for dependent ${selectedCheck.attribution.dependentName ?? "—"}${
+                  selectedCheck.attribution.dependentDob ? ` (DOB ${formatDate(selectedCheck.attribution.dependentDob)})` : ""
+                } under subscriber ${selectedCheck.attribution.subscriberName ?? "—"}.`
+              : `Benefits returned for subscriber ${selectedCheck.attribution.subscriberName ?? "—"}${
+                  selectedCheck.attribution.subscriberMemberId ? ` (Member ${selectedCheck.attribution.subscriberMemberId})` : ""
                 }.`}
           </span>
         </div>
@@ -495,37 +538,95 @@ export default function EligibilityDetailClient({ clientId }: { clientId: string
 
       {!loading && !error ? (
         <>
+          <section className="panel no-print" style={{ marginBottom: 16 }}>
+            <div className="panel-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h2 style={{ margin: 0 }}>
+                Eligibility history <span className="muted" style={{ fontWeight: 400 }}>({history.length})</span>
+              </h2>
+              <span className="muted" style={{ fontSize: 12 }}>
+                {selectedCheckId
+                  ? <>Viewing selected check. <button type="button" className="inline-link" onClick={() => selectCheck(null)}>Back to latest</button></>
+                  : "Viewing latest check"}
+              </span>
+            </div>
+            {history.length === 0 ? (
+              <div className="empty-state">No eligibility checks on file yet.</div>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Checked at</th>
+                    <th>Status</th>
+                    <th>Payer / plan</th>
+                    <th>Copay</th>
+                    <th>Deductible remaining</th>
+                    <th>Coverage</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {history.map((check) => {
+                    const isCurrent = (selectedCheck?.id ?? latest?.id) === check.id;
+                    return (
+                      <tr
+                        key={check.id}
+                        style={isCurrent ? { background: "#eff6ff" } : undefined}
+                      >
+                        <td>{formatDate(check.checkedAt)}</td>
+                        <td><span className={statusClass(check.status)}>{check.status || "—"}</span></td>
+                        <td>{check.payerName ?? "—"}{check.planName ? ` · ${check.planName}` : ""}</td>
+                        <td>{money(check.copayAmount)}</td>
+                        <td>{money(check.deductibleRemaining)}</td>
+                        <td>{formatDate(check.coverageStartDate)} – {formatDate(check.coverageEndDate)}</td>
+                        <td>
+                          <button
+                            type="button"
+                            className="button button-secondary"
+                            disabled={isCurrent}
+                            onClick={() => selectCheck(check.id)}
+                          >
+                            {isCurrent ? "Viewing" : "Open"}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </section>
+
           <section className="metric-grid">
             <div className="metric-card">
               <span>Status</span>
-              <strong className="metric-text">{latest?.status || "not checked"}</strong>
+              <strong className="metric-text">{selectedCheck?.status || "not checked"}</strong>
             </div>
             <div className="metric-card">
               <span>Copay</span>
-              <strong>{money(latest?.copayAmount ?? null)}</strong>
+              <strong>{money(selectedCheck?.copayAmount ?? null)}</strong>
             </div>
             <div className="metric-card">
               <span>Deductible remaining</span>
-              <strong>{money(latest?.deductibleRemaining ?? null)}</strong>
+              <strong>{money(selectedCheck?.deductibleRemaining ?? null)}</strong>
             </div>
             <div className="metric-card">
               <span>Out of pocket left</span>
-              <strong>{money(latest?.outOfPocketRemaining ?? null)}</strong>
+              <strong>{money(selectedCheck?.outOfPocketRemaining ?? null)}</strong>
             </div>
             <div className="metric-card">
               <span>Coinsurance</span>
-              <strong>{latest?.coinsurancePercent != null ? `${Math.round(latest.coinsurancePercent)}%` : "—"}</strong>
+              <strong>{selectedCheck?.coinsurancePercent != null ? `${Math.round(selectedCheck.coinsurancePercent)}%` : "—"}</strong>
             </div>
             <div className="metric-card">
               <span>Tier</span>
-              <strong className="metric-text">{latest?.benefitTier || "—"}</strong>
+              <strong className="metric-text">{selectedCheck?.benefitTier || "—"}</strong>
             </div>
             <div className="metric-card">
               <span>Telemedicine</span>
               <strong className="metric-text">
-                {latest?.telemedicineCovered === true
+                {selectedCheck?.telemedicineCovered === true
                   ? "Covered"
-                  : latest?.telemedicineCovered === false
+                  : selectedCheck?.telemedicineCovered === false
                     ? "Not covered"
                     : "—"}
               </strong>
@@ -533,35 +634,35 @@ export default function EligibilityDetailClient({ clientId }: { clientId: string
             <div className="metric-card">
               <span>Authorization</span>
               <strong className="metric-text">
-                {latest?.authorizationRequired === true
+                {selectedCheck?.authorizationRequired === true
                   ? "Required"
-                  : latest?.authorizationRequired === false
+                  : selectedCheck?.authorizationRequired === false
                     ? "Not required"
                     : "—"}
               </strong>
             </div>
             <div className="metric-card">
-              <span>Last checked</span>
-              <strong className="metric-text">{formatDate(latest?.checkedAt || "")}</strong>
+              <span>Checked at</span>
+              <strong className="metric-text">{formatDate(selectedCheck?.checkedAt || "")}</strong>
             </div>
           </section>
 
-          {(latest?.maxCoverageAmount != null || latest?.remainingCoverageAmount != null) ? (
+          {(selectedCheck?.maxCoverageAmount != null || selectedCheck?.remainingCoverageAmount != null) ? (
             <section className="panel" style={{ marginBottom: 16 }}>
               <h2>Coverage limits</h2>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
                 <div>
                   <div style={{ fontSize: 12, color: "#64748b" }}>Maximum benefit</div>
-                  <div style={{ fontSize: 20, fontWeight: 700 }}>{money(latest.maxCoverageAmount)}</div>
-                  {latest.maxCoveragePeriod ? (
-                    <div style={{ fontSize: 12, color: "#64748b" }}>per {latest.maxCoveragePeriod}</div>
+                  <div style={{ fontSize: 20, fontWeight: 700 }}>{money(selectedCheck.maxCoverageAmount)}</div>
+                  {selectedCheck.maxCoveragePeriod ? (
+                    <div style={{ fontSize: 12, color: "#64748b" }}>per {selectedCheck.maxCoveragePeriod}</div>
                   ) : null}
                 </div>
                 <div>
                   <div style={{ fontSize: 12, color: "#64748b" }}>Remaining benefit</div>
-                  <div style={{ fontSize: 20, fontWeight: 700 }}>{money(latest.remainingCoverageAmount)}</div>
-                  {latest.remainingCoveragePeriod ? (
-                    <div style={{ fontSize: 12, color: "#64748b" }}>per {latest.remainingCoveragePeriod}</div>
+                  <div style={{ fontSize: 20, fontWeight: 700 }}>{money(selectedCheck.remainingCoverageAmount)}</div>
+                  {selectedCheck.remainingCoveragePeriod ? (
+                    <div style={{ fontSize: 12, color: "#64748b" }}>per {selectedCheck.remainingCoveragePeriod}</div>
                   ) : null}
                 </div>
               </div>
@@ -575,17 +676,17 @@ export default function EligibilityDetailClient({ clientId }: { clientId: string
                   <h2>Current eligibility</h2>
                   <p>{patient?.dateOfBirth ? `DOB ${formatDate(patient.dateOfBirth)}` : "Patient benefit detail"}</p>
                 </div>
-                <span className={statusClass(latest?.status || "not_checked")}>{latest?.status || "not checked"}</span>
+                <span className={statusClass(selectedCheck?.status || "not_checked")}>{selectedCheck?.status || "not checked"}</span>
               </div>
               <div className="detail-list">
-                <p><strong>Payer:</strong> {latest?.payerName || "—"}</p>
-                <p><strong>Plan:</strong> {latest?.planName || "—"}</p>
-                <p><strong>Member ID:</strong> {latest?.memberId || "—"}</p>
-                <p><strong>Coverage start:</strong> {formatDate(latest?.coverageStartDate || "")}</p>
-                <p><strong>Coverage end:</strong> {formatDate(latest?.coverageEndDate || "")}</p>
-                <p><strong>Coverage level:</strong> {latest?.coverageLevel || "—"}</p>
-                <p><strong>Service type:</strong> {latest?.serviceTypeCode || "98"}</p>
-                {latest?.errorMessage ? <p><strong>Error:</strong> {latest.errorMessage}</p> : null}
+                <p><strong>Payer:</strong> {selectedCheck?.payerName || "—"}</p>
+                <p><strong>Plan:</strong> {selectedCheck?.planName || "—"}</p>
+                <p><strong>Member ID:</strong> {selectedCheck?.memberId || "—"}</p>
+                <p><strong>Coverage start:</strong> {formatDate(selectedCheck?.coverageStartDate || "")}</p>
+                <p><strong>Coverage end:</strong> {formatDate(selectedCheck?.coverageEndDate || "")}</p>
+                <p><strong>Coverage level:</strong> {selectedCheck?.coverageLevel || "—"}</p>
+                <p><strong>Service type:</strong> {selectedCheck?.serviceTypeCode || "98"}</p>
+                {selectedCheck?.errorMessage ? <p><strong>Error:</strong> {selectedCheck.errorMessage}</p> : null}
               </div>
             </div>
 
@@ -634,36 +735,13 @@ export default function EligibilityDetailClient({ clientId }: { clientId: string
             </div>
 
             <div className="panel wide-panel">
-              <h2>Eligibility history</h2>
-              <div className="stack-list">
-                {(data?.eligibilityHistory || []).map((check) => (
-                  <div className="stack-item" key={check.id}>
-                    <div className="stack-row">
-                      <div>
-                        <strong>{formatDate(check.checkedAt)}</strong>
-                        <span>Service type {check.serviceTypeCode || "98"}</span>
-                      </div>
-                      <span className={statusClass(check.status)}>{check.status || "unknown"}</span>
-                    </div>
-                    <div className="detail-list compact-detail-list">
-                      <p><strong>Copay:</strong> {money(check.copayAmount)}</p>
-                      <p><strong>Deductible:</strong> {money(check.deductibleRemaining)}</p>
-                      <p><strong>Coverage:</strong> {formatDate(check.coverageStartDate)} – {formatDate(check.coverageEndDate)}</p>
-                    </div>
-                  </div>
-                ))}
-                {(data?.eligibilityHistory || []).length === 0 ? <div className="empty-state">No eligibility checks found.</div> : null}
-              </div>
-            </div>
-
-            <div className="panel wide-panel">
               <h2>Response summary</h2>
-              <pre className="json-panel">{compactJson(latest?.responseSummary)}</pre>
+              <pre className="json-panel">{compactJson(selectedCheck?.responseSummary)}</pre>
             </div>
 
             <div className="panel wide-panel">
               <h2>Raw 271 payload</h2>
-              <pre className="json-panel">{compactJson(latest?.rawResponse)}</pre>
+              <pre className="json-panel">{compactJson(selectedCheck?.rawResponse)}</pre>
             </div>
           </section>
         </>
