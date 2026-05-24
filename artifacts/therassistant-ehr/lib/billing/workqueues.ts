@@ -261,6 +261,14 @@ export const WORKQUEUES: WorkqueueDef[] = [
     status: "coming_soon",
   },
   {
+    id: "medical_review",
+    title: "Medical Review / Documentation Requested",
+    description: "Claims where the payer requested records, treatment plans, notes, or other clinical support.",
+    href: "/billing/medical-review",
+    stage: "adjudication_denials",
+    status: "live",
+  },
+  {
     id: "coordination_of_benefits",
     title: "COB Issues",
     description: "Claims requiring COB updates before secondary/tertiary billing.",
