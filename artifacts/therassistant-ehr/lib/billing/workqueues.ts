@@ -131,6 +131,14 @@ export const WORKQUEUES: WorkqueueDef[] = [
     status: "live",
   },
   {
+    id: "transmission_failures",
+    title: "Transmission Failures",
+    description: "Technical failures before or during claim transmission — API, SFTP, or malformed batches.",
+    href: "/billing/transmission-failures",
+    stage: "submission_rejections",
+    status: "live",
+  },
+  {
     id: "submitted_claims",
     title: "Submitted Claims",
     description: "Individual claims that have been transmitted and are awaiting payer response.",
