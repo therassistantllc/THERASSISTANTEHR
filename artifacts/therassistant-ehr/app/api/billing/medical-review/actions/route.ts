@@ -48,6 +48,7 @@ interface ActionBody {
   note?: string;
   documentTitles?: string[];
   recipientEmail?: string;
+  payerAttention?: string | null;
 }
 
 async function writeAuditStrict(
@@ -227,10 +228,15 @@ export async function POST(request: Request) {
           }
         }
 
+        // Distinguish "caller didn't specify" from "caller intentionally sent
+        // an empty list". When the modal posts an explicit array (even empty)
+        // it is authoritative; only fall back to existing claim docs when no
+        // array was supplied at all.
+        const titlesProvided = Array.isArray(body.documentTitles);
         const titlesFromBody = (body.documentTitles ?? [])
           .map((s) => String(s).trim())
           .filter(Boolean);
-        const attachments: CoverLetterAttachment[] = titlesFromBody.length
+        const attachments: CoverLetterAttachment[] = titlesProvided
           ? titlesFromBody.map((t) => ({ title: t }))
           : ((existingDocs ?? []) as Array<{
               title: string | null;
@@ -255,9 +261,11 @@ export async function POST(request: Request) {
         const generatedAt = new Date();
         let pdfBytes: Uint8Array;
         try {
+          const payerAttention = (body.payerAttention ?? "").trim() || null;
           pdfBytes = generateCoverLetterPdf({
             organizationName: orgName,
             payerName,
+            payerAttention,
             clientName: clientFullName,
             clientDob,
             claimNumber,

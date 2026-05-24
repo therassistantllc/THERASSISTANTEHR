@@ -118,6 +118,17 @@ export default function MedicalReviewClient() {
   const [ctxByClaim, setCtxByClaim] = useState<Record<string, NonNullable<ContextPayload["context"]>>>({});
   const [ctxLoading, setCtxLoading] = useState<string | null>(null);
 
+  interface CoverLetterAttachmentDraft { key: string; title: string }
+  interface CoverLetterModalState {
+    row: MedicalReviewRow;
+    attention: string;
+    notes: string;
+    attachments: CoverLetterAttachmentDraft[];
+    attachmentsInitialized: boolean;
+    submitting: boolean;
+  }
+  const [coverModal, setCoverModal] = useState<CoverLetterModalState | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [uploadingClaim, setUploadingClaim] = useState<string | null>(null);
   const [chartPickerOpen, setChartPickerOpen] = useState(false);
@@ -310,6 +321,38 @@ export default function MedicalReviewClient() {
     })();
   }, [selectedRow, organizationId, ctxByClaim, ctxLoading]);
 
+  // ── Cover-letter compose modal ─────────────────────────────────────────
+  const openCoverLetterModal = useCallback((row: MedicalReviewRow) => {
+    // Selecting the row triggers the existing context fetch that hydrates
+    // ctxByClaim[row.claimId] with the documents we'll pre-populate from.
+    setSelectedRowId(row.id);
+    const cached = ctxByClaim[row.claimId];
+    const attachments: CoverLetterAttachmentDraft[] = cached
+      ? cached.documents.map((d, i) => ({ key: `doc-${d.id}-${i}`, title: d.title || "Document" }))
+      : [];
+    setCoverModal({
+      row,
+      attention: "Attn: Claims / Medical Review",
+      notes: "",
+      attachments,
+      attachmentsInitialized: Boolean(cached),
+      submitting: false,
+    });
+  }, [ctxByClaim]);
+
+  // Once the row's context arrives, seed the attachment list (only the first
+  // time, so we don't clobber the biller's edits on a refresh).
+  useEffect(() => {
+    if (!coverModal || coverModal.attachmentsInitialized) return;
+    const cached = ctxByClaim[coverModal.row.claimId];
+    if (!cached) return;
+    setCoverModal((prev) => prev && !prev.attachmentsInitialized ? {
+      ...prev,
+      attachments: cached.documents.map((d, i) => ({ key: `doc-${d.id}-${i}`, title: d.title || "Document" })),
+      attachmentsInitialized: true,
+    } : prev);
+  }, [coverModal, ctxByClaim]);
+
   // ── Actions ─────────────────────────────────────────────────────────────
   const performAction = useCallback(
     async (row: MedicalReviewRow, action: string, extra?: Record<string, unknown>) => {
@@ -475,11 +518,11 @@ export default function MedicalReviewClient() {
     () => [
       { id: "attach", label: "Attach records", onClick: (r) => void performAction(r, "attach_records"), disabled: (r) => actingId === r.id },
       { id: "send", label: "Send documentation", variant: "primary", onClick: (r) => void performAction(r, "send_documentation"), disabled: (r) => actingId === r.id },
-      { id: "cover", label: "Create cover letter", onClick: (r) => void performAction(r, "create_cover_letter"), disabled: (r) => actingId === r.id },
+      { id: "cover", label: "Create cover letter", onClick: (r) => openCoverLetterModal(r), disabled: (r) => actingId === r.id },
       { id: "route", label: "Route to clinician", onClick: (r) => void performAction(r, "route_to_clinician"), disabled: (r) => actingId === r.id },
       { id: "submit", label: "Mark submitted", variant: "success", onClick: (r) => void performAction(r, "mark_submitted"), disabled: (r) => actingId === r.id },
     ],
-    [actingId, performAction],
+    [actingId, performAction, openCoverLetterModal],
   );
 
   // ── Detail panel ────────────────────────────────────────────────────────
@@ -713,11 +756,11 @@ export default function MedicalReviewClient() {
     return [
       { id: "attach", label: "Attach records", onClick: () => void performAction(r, "attach_records"), disabled: actingId === r.id },
       { id: "send", label: "Send documentation", variant: "primary", onClick: () => void performAction(r, "send_documentation"), disabled: actingId === r.id },
-      { id: "cover", label: "Create cover letter", onClick: () => void performAction(r, "create_cover_letter"), disabled: actingId === r.id },
+      { id: "cover", label: "Create cover letter", onClick: () => openCoverLetterModal(r), disabled: actingId === r.id },
       { id: "route", label: "Route to clinician", onClick: () => void performAction(r, "route_to_clinician"), disabled: actingId === r.id },
       { id: "submit", label: "Mark submitted", variant: "success", onClick: () => void performAction(r, "mark_submitted"), disabled: actingId === r.id },
     ];
-  }, [selectedRow, actingId, performAction]);
+  }, [selectedRow, actingId, performAction, openCoverLetterModal]);
 
   const primaryTabs = useMemo(
     () => MEDICAL_REVIEW_TABS.map((t) => ({ id: t.id, label: t.label, count: tabCounts[t.id] })),
@@ -750,7 +793,245 @@ export default function MedicalReviewClient() {
       detailTabs={detailTabs}
       detailActions={detailActions}
       message={error ? { tone: "error", text: error } : null}
-      overlay={toast ? <Toast message={toast} onClose={() => setToast(null)} /> : null}
+      overlay={
+        <>
+          {coverModal ? (
+            <CoverLetterComposeModal
+              state={coverModal}
+              ctxLoading={ctxLoading === coverModal.row.claimId && !ctxByClaim[coverModal.row.claimId]}
+              onChange={(updater) => setCoverModal((prev) => (prev ? updater(prev) : prev))}
+              onClose={() => setCoverModal(null)}
+              onGenerate={async () => {
+                const m = coverModal;
+                setCoverModal((prev) => prev ? { ...prev, submitting: true } : prev);
+                try {
+                  const res = await fetch("/api/billing/medical-review/actions", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      organizationId,
+                      action: "create_cover_letter",
+                      claimId: m.row.claimId,
+                      clientId: m.row.clientId,
+                      appointmentId: m.row.appointmentId,
+                      providerId: m.row.providerId,
+                      payerAttention: m.attention.trim() || null,
+                      note: m.notes.trim(),
+                      // Always send as an explicit array (even when empty) so
+                      // the server treats the biller's edits as authoritative
+                      // and never silently falls back to DB-attached docs.
+                      documentTitles: m.attachments.map((a) => a.title.trim()).filter(Boolean),
+                    }),
+                  });
+                  const json = await res.json();
+                  if (!res.ok || json?.success === false) {
+                    throw new Error(json?.error ?? "Failed to generate cover letter");
+                  }
+                  refreshContext(m.row.claimId);
+                  setRows((prev) => prev.map((r) => r.claimId === m.row.claimId ? { ...r, lastActionAt: new Date().toISOString() } : r));
+                  setToast("Cover letter created");
+                  setCoverModal(null);
+                } catch (e) {
+                  // Keep the modal open so the biller can correct and retry
+                  // without losing their edits.
+                  setToast(e instanceof Error ? e.message : "Failed to generate cover letter");
+                  setCoverModal((prev) => prev ? { ...prev, submitting: false } : prev);
+                }
+              }}
+            />
+          ) : null}
+          {toast ? <Toast message={toast} onClose={() => setToast(null)} /> : null}
+        </>
+      }
     />
+  );
+}
+
+interface CoverLetterModalProps {
+  state: {
+    row: MedicalReviewRow;
+    attention: string;
+    notes: string;
+    attachments: Array<{ key: string; title: string }>;
+    attachmentsInitialized: boolean;
+    submitting: boolean;
+  };
+  ctxLoading: boolean;
+  onChange: (updater: (prev: CoverLetterModalProps["state"]) => CoverLetterModalProps["state"]) => void;
+  onClose: () => void;
+  onGenerate: () => void;
+}
+
+function CoverLetterComposeModal({ state, ctxLoading, onChange, onClose, onGenerate }: CoverLetterModalProps) {
+  const r = state.row;
+  const moveAttachment = (idx: number, dir: -1 | 1) => {
+    onChange((prev) => {
+      const next = [...prev.attachments];
+      const target = idx + dir;
+      if (target < 0 || target >= next.length) return prev;
+      [next[idx], next[target]] = [next[target], next[idx]];
+      return { ...prev, attachments: next };
+    });
+  };
+  const removeAttachment = (idx: number) => {
+    onChange((prev) => ({ ...prev, attachments: prev.attachments.filter((_, i) => i !== idx) }));
+  };
+  const addAttachment = () => {
+    onChange((prev) => ({
+      ...prev,
+      attachments: [...prev.attachments, { key: `new-${Date.now()}-${prev.attachments.length}`, title: "" }],
+      attachmentsInitialized: true,
+    }));
+  };
+  const editAttachment = (idx: number, title: string) => {
+    onChange((prev) => {
+      const next = [...prev.attachments];
+      next[idx] = { ...next[idx], title };
+      return { ...prev, attachments: next };
+    });
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Compose cover letter"
+      style={{
+        position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.45)",
+        zIndex: 1200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+      }}
+      onClick={(e) => { if (e.target === e.currentTarget && !state.submitting) onClose(); }}
+    >
+      <div style={{
+        background: "#fff", borderRadius: 8, width: "100%", maxWidth: 640,
+        maxHeight: "90vh", overflowY: "auto", boxShadow: "0 24px 60px rgba(0,0,0,0.25)",
+      }}>
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid #E2E8F0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 16, color: "#0F172A" }}>Compose cover letter</h2>
+            <div style={{ fontSize: 12, color: "#64748B", marginTop: 2 }}>
+              Review the details before generating the PDF.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={state.submitting}
+            style={{ border: "none", background: "transparent", fontSize: 20, color: "#64748B", cursor: state.submitting ? "wait" : "pointer", lineHeight: 1 }}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+
+        <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 6, padding: 12, fontSize: 12, color: "#475569" }}>
+            <div><strong style={{ color: "#0F172A" }}>Payer:</strong> {r.payerName || "—"}</div>
+            <div><strong style={{ color: "#0F172A" }}>Client:</strong> {r.clientName}</div>
+            <div><strong style={{ color: "#0F172A" }}>Claim:</strong> {r.claimNumber || r.claimId.slice(0, 8)}</div>
+            <div><strong style={{ color: "#0F172A" }}>Date of service:</strong> {formatDate(r.dateOfService)}</div>
+          </div>
+
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, color: "#0F172A" }}>
+            <span style={{ fontWeight: 600 }}>Attention line</span>
+            <input
+              type="text"
+              value={state.attention}
+              onChange={(e) => onChange((prev) => ({ ...prev, attention: e.target.value }))}
+              disabled={state.submitting}
+              placeholder="Attn: Claims / Medical Review"
+              style={{ padding: "8px 10px", border: "1px solid #CBD5E1", borderRadius: 4, fontSize: 13 }}
+            />
+            <span style={{ fontSize: 11, color: "#64748B" }}>
+              e.g. &ldquo;Attn: Utilization Review&rdquo; or &ldquo;Attn: Claims Department&rdquo;.
+            </span>
+          </label>
+
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, color: "#0F172A" }}>
+            <span style={{ fontWeight: 600 }}>Notes / body</span>
+            <textarea
+              value={state.notes}
+              onChange={(e) => onChange((prev) => ({ ...prev, notes: e.target.value }))}
+              disabled={state.submitting}
+              placeholder="Optional context, payer reference number, instructions…"
+              rows={4}
+              style={{ padding: "8px 10px", border: "1px solid #CBD5E1", borderRadius: 4, fontSize: 13, resize: "vertical", fontFamily: "inherit" }}
+            />
+          </label>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: 13, color: "#0F172A", fontWeight: 600 }}>Enclosures</span>
+              <button
+                type="button"
+                onClick={addAttachment}
+                disabled={state.submitting}
+                style={{ padding: "4px 10px", border: "1px solid #CBD5E1", background: "#fff", color: "#0F172A", borderRadius: 4, fontSize: 12, cursor: "pointer" }}
+              >
+                + Add enclosure
+              </button>
+            </div>
+            {ctxLoading && state.attachments.length === 0 ? (
+              <p style={{ fontSize: 12, color: "#64748B", margin: "4px 0" }}>Loading attached documents…</p>
+            ) : state.attachments.length === 0 ? (
+              <p style={{ fontSize: 12, color: "#64748B", margin: "4px 0" }}>
+                No enclosures. The cover letter will note that no supporting documents are attached.
+              </p>
+            ) : (
+              <ul style={{ listStyle: "none", padding: 0, margin: 0, border: "1px solid #E2E8F0", borderRadius: 6 }}>
+                {state.attachments.map((att, i) => (
+                  <li
+                    key={att.key}
+                    style={{
+                      display: "flex", gap: 6, alignItems: "center",
+                      padding: "6px 8px",
+                      borderBottom: i === state.attachments.length - 1 ? "none" : "1px solid #F1F5F9",
+                    }}
+                  >
+                    <span style={{ fontSize: 12, color: "#64748B", width: 22, textAlign: "right" }}>{i + 1}.</span>
+                    <input
+                      type="text"
+                      value={att.title}
+                      onChange={(e) => editAttachment(i, e.target.value)}
+                      disabled={state.submitting}
+                      placeholder="Document title"
+                      style={{ flex: 1, padding: "5px 8px", border: "1px solid #CBD5E1", borderRadius: 4, fontSize: 12 }}
+                    />
+                    <button type="button" onClick={() => moveAttachment(i, -1)} disabled={state.submitting || i === 0}
+                      title="Move up"
+                      style={{ border: "1px solid #CBD5E1", background: "#fff", borderRadius: 4, padding: "2px 6px", fontSize: 12, cursor: i === 0 ? "not-allowed" : "pointer", opacity: i === 0 ? 0.4 : 1 }}>↑</button>
+                    <button type="button" onClick={() => moveAttachment(i, 1)} disabled={state.submitting || i === state.attachments.length - 1}
+                      title="Move down"
+                      style={{ border: "1px solid #CBD5E1", background: "#fff", borderRadius: 4, padding: "2px 6px", fontSize: 12, cursor: i === state.attachments.length - 1 ? "not-allowed" : "pointer", opacity: i === state.attachments.length - 1 ? 0.4 : 1 }}>↓</button>
+                    <button type="button" onClick={() => removeAttachment(i)} disabled={state.submitting}
+                      title="Remove"
+                      style={{ border: "1px solid #FCA5A5", background: "#fff", color: "#B91C1C", borderRadius: 4, padding: "2px 8px", fontSize: 12, cursor: "pointer" }}>×</button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+
+        <div style={{ padding: "12px 20px", borderTop: "1px solid #E2E8F0", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={state.submitting}
+            style={{ padding: "8px 14px", border: "1px solid #CBD5E1", background: "#fff", color: "#0F172A", borderRadius: 4, fontSize: 13, cursor: state.submitting ? "wait" : "pointer" }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onGenerate}
+            disabled={state.submitting}
+            style={{ padding: "8px 14px", border: "1px solid #2563EB", background: "#2563EB", color: "#fff", borderRadius: 4, fontSize: 13, fontWeight: 600, cursor: state.submitting ? "wait" : "pointer" }}
+          >
+            {state.submitting ? "Generating…" : "Generate PDF"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
