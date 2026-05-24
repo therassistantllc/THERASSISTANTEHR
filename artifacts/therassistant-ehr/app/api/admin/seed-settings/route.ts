@@ -4,6 +4,10 @@ import { requireRoleInRoute } from "@/lib/rbac/middleware";
 import { STAFF_ROLES } from "@/lib/rbac/constants";
 import { ORGANIZATION_ID as DEMO_ORG_ID } from "@/lib/config";
 
+// Fixed UUID for the seeded chat "Test User" so re-seeding is idempotent and
+// existing conversations / chat_participants rows keep referencing the same id.
+const DEMO_TEST_USER_ID = "00000000-0000-4000-8000-000000000777";
+
 export async function POST(request: NextRequest) {
   // Require admin role — this endpoint performs privileged service-role writes
   const authOrError = await requireRoleInRoute(STAFF_ROLES.ADMIN);
@@ -380,6 +384,32 @@ export async function POST(request: NextRequest) {
         results.clearinghouse = "already exists";
       }
     }
+  }
+
+  // ── 6b. Chat demo "Test User" profile ───────────────────────────────────────
+  // A seeded peer so a single-user demo account can exercise the Chat flow
+  // (start conversation, send message, see presence). Idempotent: re-running
+  // simply re-upserts the same fixed-UUID row.
+  {
+    const now = new Date().toISOString();
+    const { error } = await supabase.from("profiles").upsert(
+      {
+        id: DEMO_TEST_USER_ID,
+        organization_id: DEMO_ORG_ID,
+        email: "test-user@demo.local",
+        full_name: "Test User (Demo)",
+        role: "clinician",
+        credentials: "Demo Account",
+        is_active: true,
+        notification_email: false,
+        notification_sms: false,
+        created_at: now,
+        updated_at: now,
+      },
+      { onConflict: "id" },
+    );
+    if (error) errors.chat_test_user = error.message;
+    else results.chat_test_user = "upserted";
   }
 
   // ── 7. ERA / payment demo data (force mode only) ────────────────────────────
