@@ -10,6 +10,7 @@ import WorkqueueShell, {
   type RowAction,
   type SummaryMetric,
 } from "@/components/billing/WorkqueueShell";
+import PlaceClaimOnHoldModal from "@/components/billing/PlaceClaimOnHoldModal";
 import { getWorkqueue } from "@/lib/billing/workqueues";
 
 type Item = {
@@ -144,6 +145,7 @@ export default function ReadyToGenerateClient() {
   }>({ loading: false, text: null, error: null });
   const [holdReason, setHoldReason] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [holdTarget, setHoldTarget] = useState<Item | null>(null);
 
   // ── Initial load + URL tab sync ─────────────────────────────────────────
   useEffect(() => {
@@ -768,6 +770,12 @@ export default function ReadyToGenerateClient() {
           void runAction(r.id, r.ready_status === "on_hold" ? "unhold" : "hold", "Held from row"),
         disabled: () => busy,
       },
+      {
+        id: "place_on_hold",
+        label: "Place on hold",
+        onClick: (r) => setHoldTarget(r),
+        disabled: (r) => busy || r.ready_status === "on_hold",
+      },
     ],
     [busy, runAction],
   );
@@ -1077,29 +1085,46 @@ export default function ReadyToGenerateClient() {
   ]);
 
   return (
-    <WorkqueueShell<Item>
-      title={queueDef?.title ?? "Ready to Generate"}
-      description={queueDef?.description}
-      headerActions={headerActions}
-      summary={summary}
-      filters={filters}
-      filterValues={filterValues}
-      onFilterChange={setFilterValues}
-      filterUrlNamespace="rtg"
-      rows={rows}
-      columns={columns}
-      rowId={(r) => r.id}
-      loading={loading}
-      emptyMessage="No claims in this view."
-      selectedRowId={selectedId}
-      onSelectRow={setSelectedId}
-      selectedRowIds={selectedIds}
-      onSelectionChange={setSelectedIds}
-      rowActions={rowActions}
-      detailTabs={detailTabs}
-      detailActions={detailActions}
-      message={message}
-    />
+    <>
+      <WorkqueueShell<Item>
+        title={queueDef?.title ?? "Ready to Generate"}
+        description={queueDef?.description}
+        headerActions={headerActions}
+        summary={summary}
+        filters={filters}
+        filterValues={filterValues}
+        onFilterChange={setFilterValues}
+        filterUrlNamespace="rtg"
+        rows={rows}
+        columns={columns}
+        rowId={(r) => r.id}
+        loading={loading}
+        emptyMessage="No claims in this view."
+        selectedRowId={selectedId}
+        onSelectRow={setSelectedId}
+        selectedRowIds={selectedIds}
+        onSelectionChange={setSelectedIds}
+        rowActions={rowActions}
+        detailTabs={detailTabs}
+        detailActions={detailActions}
+        message={message}
+      />
+      {holdTarget ? (
+        <PlaceClaimOnHoldModal
+          claimId={holdTarget.id}
+          organizationId={organizationId}
+          subtitle={`Claim ${holdTarget.claim_number ?? holdTarget.id} · ${holdTarget.payer_name ?? "—"}`}
+          onClose={() => setHoldTarget(null)}
+          onPlaced={() => {
+            const label = holdTarget.claim_number ?? holdTarget.id;
+            setItems((prev) => prev.filter((i) => i.id !== holdTarget.id));
+            if (selectedId === holdTarget.id) setSelectedId(null);
+            setMessage({ tone: "success", text: `Claim ${label} placed on hold.` });
+            setReloadKey((k) => k + 1);
+          }}
+        />
+      ) : null}
+    </>
   );
 }
 

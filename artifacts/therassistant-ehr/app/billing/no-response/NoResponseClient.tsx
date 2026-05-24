@@ -9,6 +9,7 @@ import WorkqueueShell, {
   type RowAction,
   type SummaryMetric,
 } from "@/components/billing/WorkqueueShell";
+import PlaceClaimOnHoldModal from "@/components/billing/PlaceClaimOnHoldModal";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -631,6 +632,7 @@ export default function NoResponseClient() {
 
   const [noteRow, setNoteRow] = useState<Row | null>(null);
   const [callRow, setCallRow] = useState<Row | null>(null);
+  const [holdRow, setHoldRow] = useState<Row | null>(null);
   const [bumpKey, setBumpKey] = useState(0);
 
   const load = useCallback(async () => {
@@ -928,6 +930,7 @@ export default function NoResponseClient() {
       { id: "note", label: "Add follow-up note", onClick: (r) => setNoteRow(r) },
       { id: "resubmit", label: "Resubmit", variant: "primary", onClick: (r) => void handleResubmit(r) },
       { id: "escalate", label: "Escalate", variant: "danger", onClick: (r) => void handleEscalate(r) },
+      { id: "hold", label: "Place on hold", onClick: (r) => setHoldRow(r) },
     ],
     [handleRunStatus, handleResubmit, handleEscalate],
   );
@@ -1053,6 +1056,11 @@ export default function NoResponseClient() {
           variant: "danger" as const,
           onClick: () => void handleEscalate(selectedRow),
         },
+        {
+          id: "hold",
+          label: "Place on hold",
+          onClick: () => setHoldRow(selectedRow),
+        },
       ]
     : [];
 
@@ -1156,6 +1164,19 @@ export default function NoResponseClient() {
         />
       ) : null}
       {callRow ? <CallPayerModal row={callRow} onClose={() => setCallRow(null)} /> : null}
+      {holdRow ? (
+        <PlaceClaimOnHoldModal
+          claimId={holdRow.id}
+          organizationId={organizationId}
+          subtitle={`Claim ${holdRow.claim_number ?? holdRow.id} · ${holdRow.payer_name ?? "—"}`}
+          onClose={() => setHoldRow(null)}
+          onPlaced={() => {
+            const label = holdRow.claim_number ?? holdRow.id;
+            removeRow(holdRow.id);
+            setToast(`Claim ${label} placed on hold.`);
+          }}
+        />
+      ) : null}
       {toast ? <Toast message={toast} onClose={() => setToast(null)} /> : null}
     </>
   );

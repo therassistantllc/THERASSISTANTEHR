@@ -27,6 +27,7 @@ import WorkqueueShell, {
   type PrimaryAction,
   type RowAction,
 } from "@/components/billing/WorkqueueShell";
+import PlaceClaimOnHoldModal from "@/components/billing/PlaceClaimOnHoldModal";
 import { getWorkqueue } from "@/lib/billing/workqueues";
 
 // ── Types matching the new list API ────────────────────────────────────
@@ -233,6 +234,11 @@ export default function ChargeCaptureClient() {
 
   const [activeTab, setActiveTab] = useState<TabId>("ready_for_review");
   const [filterValues, setFilterValues] = useState<Record<string, string>>({});
+  const [holdTarget, setHoldTarget] = useState<{
+    claimId: string;
+    subtitle: string;
+    sourceRowId: string;
+  } | null>(null);
 
   // ── List fetch ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -895,6 +901,19 @@ export default function ChargeCaptureClient() {
         },
         disabled: (r) => acting || r.chargeStatus === "claim_created",
       },
+      {
+        id: "place_on_hold",
+        label: "Place on hold",
+        onClick: (r) => {
+          if (!r.claimId) return;
+          setHoldTarget({
+            claimId: r.claimId,
+            subtitle: `${r.client?.name ?? "Patient"} · ${r.payer?.name ?? "—"}`,
+            sourceRowId: r.id,
+          });
+        },
+        disabled: (r) => acting || !r.claimId,
+      },
     ],
     [runAction, acting],
   );
@@ -910,8 +929,23 @@ export default function ChargeCaptureClient() {
       { id: "add_modifier", label: "Add modifier", onClick: () => setMessage({ tone: "success", text: "Add modifiers on a procedure line in the Claim lines tab, then Save." }) },
       { id: "save", label: saving ? "Saving…" : "Save edits", onClick: () => void saveCharge(), disabled: saving },
       { id: "release", label: "Release to claim creation", variant: "primary", onClick: () => void releaseCharge(detail.id), disabled: acting || detail.status !== "ready_for_claim" },
+      {
+        id: "place_on_hold",
+        label: "Place on hold",
+        onClick: () => {
+          const row = items.find((r) => r.id === detail.id);
+          const claimId = row?.claimId ?? null;
+          if (!claimId) return;
+          setHoldTarget({
+            claimId,
+            subtitle: `${row?.client?.name ?? "Patient"} · ${row?.payer?.name ?? "—"}`,
+            sourceRowId: detail.id,
+          });
+        },
+        disabled: acting || !(items.find((r) => r.id === detail.id)?.claimId),
+      },
     ];
-  }, [detail, acting, saving, runAction, releaseCharge, saveCharge]);
+  }, [detail, acting, saving, runAction, releaseCharge, saveCharge, items]);
 
   // ── Render ─────────────────────────────────────────────────────────
   return (
@@ -980,6 +1014,18 @@ export default function ChargeCaptureClient() {
           message={message}
         />
       </div>
+      {holdTarget ? (
+        <PlaceClaimOnHoldModal
+          claimId={holdTarget.claimId}
+          organizationId={organizationId}
+          subtitle={holdTarget.subtitle}
+          onClose={() => setHoldTarget(null)}
+          onPlaced={() => {
+            setMessage({ tone: "success", text: "Claim placed on hold." });
+            setReloadKey((k) => k + 1);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

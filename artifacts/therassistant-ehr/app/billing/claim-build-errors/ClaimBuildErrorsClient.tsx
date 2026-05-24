@@ -11,6 +11,7 @@ import WorkqueueShell, {
   type PrimaryAction,
   type DetailTab,
 } from "@/components/billing/WorkqueueShell";
+import PlaceClaimOnHoldModal from "@/components/billing/PlaceClaimOnHoldModal";
 import ClaimSubmissionReadinessPanel from "@/components/claim/ClaimSubmissionReadinessPanel";
 import {
   BUILD_ERROR_TABS,
@@ -122,6 +123,7 @@ export default function ClaimBuildErrorsClient() {
   const [message, setMessage] = useState<
     { tone: "success" | "error"; text: string } | null
   >(null);
+  const [holdTarget, setHoldTarget] = useState<BuildErrorRow | null>(null);
 
   // ── Load ────────────────────────────────────────────────────────────────
   // Filter values are also forwarded to the server so it can do cheap
@@ -529,6 +531,12 @@ export default function ClaimBuildErrorsClient() {
         onClick: (r) => void runAction(r.claimId, "hold"),
         disabled: (r) => busyId === r.claimId || r.status === "held",
       },
+      {
+        id: "place_on_hold",
+        label: "Place on hold",
+        onClick: (r) => setHoldTarget(r),
+        disabled: (r) => busyId === r.claimId || r.status === "held",
+      },
     ],
     [busyId, runAction, organizationId],
   );
@@ -583,6 +591,12 @@ export default function ClaimBuildErrorsClient() {
         label: "Hold claim",
         variant: "danger",
         onClick: () => void runAction(selectedRow.claimId, "hold"),
+        disabled: busyId === selectedRow.claimId,
+      });
+      acts.push({
+        id: "place_on_hold",
+        label: "Place on hold",
+        onClick: () => setHoldTarget(selectedRow),
         disabled: busyId === selectedRow.claimId,
       });
     }
@@ -801,6 +815,23 @@ export default function ClaimBuildErrorsClient() {
         detailActions={detailActions}
         message={message}
       />
+      {holdTarget ? (
+        <PlaceClaimOnHoldModal
+          claimId={holdTarget.claimId}
+          organizationId={organizationId}
+          subtitle={`Claim ${holdTarget.claimNumber ?? holdTarget.claimId.slice(0, 8)} · ${holdTarget.payerName ?? "—"}`}
+          onClose={() => setHoldTarget(null)}
+          onPlaced={() => {
+            const label = holdTarget.claimNumber ?? holdTarget.claimId.slice(0, 8);
+            setItems((prev) => prev.filter((r) => r.claimId !== holdTarget.claimId));
+            if (selectedRowId && items.find((r) => r.id === selectedRowId)?.claimId === holdTarget.claimId) {
+              setSelectedRowId(null);
+            }
+            setMessage({ tone: "success", text: `Claim ${label} placed on hold.` });
+            setReloadKey((k) => k + 1);
+          }}
+        />
+      ) : null}
     </main>
   );
 }
