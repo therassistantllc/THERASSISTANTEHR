@@ -355,18 +355,105 @@ function faxHref(value: string): string {
   return `fax:${value.replace(/[^\d+]/g, "")}`;
 }
 
-function CallPayerModal({ row, onClose }: { row: Row; onClose: () => void }) {
+const DISPOSITIONS = ["Left voicemail", "Spoke with rep", "No answer"] as const;
+type Disposition = (typeof DISPOSITIONS)[number];
+
+function CallPayerModal({
+  row,
+  organizationId,
+  onClose,
+  onLogged,
+}: {
+  row: Row;
+  organizationId: string;
+  onClose: () => void;
+  onLogged: (note: { body: string; created_at: string }) => void;
+}) {
   const claimsPhone = row.payer_claims_phone;
   const claimsFax = row.payer_claims_fax;
   const providerPhone = row.payer_provider_services_phone;
   const hasAnyContact = Boolean(claimsPhone || claimsFax || providerPhone);
+
+  const [logging, setLogging] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [lastContact, setLastContact] = useState<{
+    label: string;
+    number: string;
+    kind: "phone" | "fax";
+  } | null>(null);
+  const [callLogged, setCallLogged] = useState(false);
+
+  async function postNote(body: string): Promise<boolean> {
+    setLogging(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/billing/claims/${row.id}/notes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ organizationId, body }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json?.success === false) {
+        setError(json?.error || "Failed to log call");
+        return false;
+      }
+      onLogged({
+        body,
+        created_at: json?.note?.created_at ?? new Date().toISOString(),
+      });
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to log call");
+      return false;
+    } finally {
+      setLogging(false);
+    }
+  }
+
+  function handleDial(
+    label: string,
+    number: string,
+    kind: "phone" | "fax",
+  ) {
+    setLastContact({ label, number, kind });
+    const verb = kind === "fax" ? "Faxed payer at" : "Called payer at";
+    void postNote(`${verb} ${number} (${label})`).then((ok) => {
+      if (ok) setCallLogged(true);
+    });
+    // Do not preventDefault — the tel:/fax: link should still dial.
+  }
+
+  async function handleDisposition(disp: Disposition) {
+    const ref = lastContact
+      ? ` — ${lastContact.label} ${lastContact.number}`
+      : "";
+    await postNote(`${disp}${ref}`);
+  }
+
+  function ContactLink({
+    label,
+    number,
+    kind,
+  }: {
+    label: string;
+    number: string;
+    kind: "phone" | "fax";
+  }) {
+    const href = kind === "fax" ? faxHref(number) : telHref(number);
+    return (
+      <a href={href} onClick={() => handleDial(label, number, kind)}>
+        {number}
+      </a>
+    );
+  }
 
   return (
     <ModalShell title={`Call payer — ${row.payer_name ?? "—"}`} onClose={onClose}>
       <div style={{ fontSize: 13, lineHeight: 1.6 }}>
         <div style={{ marginBottom: 12, color: "#6B7280" }}>
           Use the contact info below to call the payer about claim{" "}
-          {row.claim_number ?? row.id}.
+          {row.claim_number ?? row.id}. Clicking a number dials it and logs a
+          call note automatically.
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "6px 14px" }}>
           <strong>Payer</strong>
@@ -386,7 +473,7 @@ function CallPayerModal({ row, onClose }: { row: Row; onClose: () => void }) {
           <strong>Claims phone</strong>
           <span>
             {claimsPhone ? (
-              <a href={telHref(claimsPhone)}>{claimsPhone}</a>
+              <ContactLink label="Claims phone" number={claimsPhone} kind="phone" />
             ) : (
               <span style={{ color: "#94A3B8" }}>—</span>
             )}
@@ -394,7 +481,7 @@ function CallPayerModal({ row, onClose }: { row: Row; onClose: () => void }) {
           <strong>Claims fax</strong>
           <span>
             {claimsFax ? (
-              <a href={faxHref(claimsFax)}>{claimsFax}</a>
+              <ContactLink label="Claims fax" number={claimsFax} kind="fax" />
             ) : (
               <span style={{ color: "#94A3B8" }}>—</span>
             )}
@@ -402,7 +489,11 @@ function CallPayerModal({ row, onClose }: { row: Row; onClose: () => void }) {
           <strong>Provider services</strong>
           <span>
             {providerPhone ? (
-              <a href={telHref(providerPhone)}>{providerPhone}</a>
+              <ContactLink
+                label="Provider services"
+                number={providerPhone}
+                kind="phone"
+              />
             ) : (
               <span style={{ color: "#94A3B8" }}>—</span>
             )}
@@ -421,6 +512,55 @@ function CallPayerModal({ row, onClose }: { row: Row; onClose: () => void }) {
             Tip: maintain payer phone/fax in Settings → Payers so reps can dial
             directly from this panel.
           </p>
+        ) : null}
+
+        {hasAnyContact ? (
+          <div style={{ marginTop: 18 }}>
+            <div
+              style={{
+                fontSize: 11,
+                fontWeight: 600,
+                color: "#64748B",
+                textTransform: "uppercase",
+                letterSpacing: 0.4,
+                marginBottom: 6,
+              }}
+            >
+              Log disposition
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {DISPOSITIONS.map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => void handleDisposition(d)}
+                  disabled={logging}
+                  style={{
+                    border: "1px solid #CBD5E1",
+                    background: "#F8FAFC",
+                    color: "#0F172A",
+                    padding: "6px 10px",
+                    borderRadius: 999,
+                    fontSize: 12,
+                    fontWeight: 500,
+                    cursor: logging ? "wait" : "pointer",
+                  }}
+                >
+                  {d}
+                </button>
+              ))}
+            </div>
+            {callLogged && !error ? (
+              <div style={{ color: "#15803D", fontSize: 12, marginTop: 8 }}>
+                Call logged to claim notes.
+              </div>
+            ) : null}
+            {error ? (
+              <div style={{ color: "#B91C1C", fontSize: 12, marginTop: 8 }}>
+                {error}
+              </div>
+            ) : null}
+          </div>
         ) : null}
       </div>
       <div style={buttonRow}>
@@ -1315,7 +1455,22 @@ export default function NoResponseClient() {
           }}
         />
       ) : null}
-      {callRow ? <CallPayerModal row={callRow} onClose={() => setCallRow(null)} /> : null}
+      {callRow ? (
+        <CallPayerModal
+          row={callRow}
+          organizationId={organizationId}
+          onClose={() => setCallRow(null)}
+          onLogged={(note) => {
+            patchRow(callRow.id, {
+              note_count: callRow.note_count + 1,
+              latest_note_excerpt: note.body.slice(0, 117),
+              latest_note_at: note.created_at,
+            });
+            setBumpKey((k) => k + 1);
+            setToast("Call logged to claim notes");
+          }}
+        />
+      ) : null}
       {holdRow ? (
         <PlaceClaimOnHoldModal
           claimId={holdRow.id}
