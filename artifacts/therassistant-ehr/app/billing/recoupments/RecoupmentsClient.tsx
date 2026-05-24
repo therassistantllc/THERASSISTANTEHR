@@ -16,6 +16,10 @@ import WorkqueueShell, {
   type SummaryMetric,
 } from "@/components/billing/WorkqueueShell";
 import { DEFAULT_ORG_ID } from "@/lib/config";
+import {
+  suggestOffsetPayment,
+  type PaymentSuggestion,
+} from "@/lib/billing/suggestOffsetPayment";
 
 type Tab =
   | "new_recoupments"
@@ -806,8 +810,39 @@ function OffsetPickerModal({
   const [selectedId, setSelectedId] = useState<string | null>(
     row.offset_era_claim_payment_id ?? null,
   );
+  const [autoPreselected, setAutoPreselected] = useState(false);
   const [showAllPayers, setShowAllPayers] = useState(false);
   const [search, setSearch] = useState("");
+
+  const suggestion = useMemo(
+    () =>
+      suggestOffsetPayment(
+        {
+          recoupment_amount: row.recoupment_amount,
+          reason: row.reason,
+          reason_code: row.reason_code,
+          payer_profile_id: row.payer_profile_id,
+          payer_name: row.payer_name,
+          notice_date: row.notice_date,
+          offset_era_claim_payment_id: row.offset_era_claim_payment_id,
+        },
+        items,
+      ),
+    [items, row.recoupment_amount, row.reason, row.reason_code, row.payer_profile_id, row.payer_name, row.notice_date, row.offset_era_claim_payment_id],
+  );
+
+  // Pre-select the suggested row when no manual selection has been made yet.
+  // We only auto-pick once per modal open so we never clobber the user's
+  // choice if they click around.
+  useEffect(() => {
+    if (autoPreselected || loading) return;
+    if (!suggestion.bestId) return;
+    if (selectedId && selectedId !== row.offset_era_claim_payment_id) return;
+    if (suggestion.shouldPreselect || !selectedId) {
+      setSelectedId(suggestion.bestId);
+      setAutoPreselected(true);
+    }
+  }, [autoPreselected, loading, suggestion, selectedId, row.offset_era_claim_payment_id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -873,11 +908,15 @@ function OffsetPickerModal({
         return hay.includes(needle);
       })
       .sort((a, b) => {
+        // Suggested rows float to the top, ordered by score; then date desc.
+        const sa = suggestion.byId.get(a.id)?.score ?? 0;
+        const sb = suggestion.byId.get(b.id)?.score ?? 0;
+        if (sa !== sb) return sb - sa;
         const da = new Date(a.importedAt ?? a.createdAt).getTime();
         const db = new Date(b.importedAt ?? b.createdAt).getTime();
         return db - da;
       });
-  }, [items, showAllPayers, row.payer_profile_id, row.payer_name, search]);
+  }, [items, showAllPayers, row.payer_profile_id, row.payer_name, search, suggestion]);
 
   return (
     <div
@@ -923,6 +962,23 @@ function OffsetPickerModal({
             {row.client_name ? ` for ${row.client_name}` : ""}. Pick the ERA
             payment where this take-back was netted out.
           </div>
+          {suggestion.bestId ? (
+            <div
+              style={{
+                marginTop: 8,
+                padding: "8px 10px",
+                background: "#f0fdf4",
+                border: "1px solid #bbf7d0",
+                borderRadius: 6,
+                fontSize: 12,
+                color: "#166534",
+              }}
+            >
+              <strong>Suggested match{suggestion.shouldPreselect ? " (pre-selected)" : ""}:</strong>{" "}
+              {suggestion.byId.get(suggestion.bestId)?.reason}. You can pick a
+              different ERA payment below.
+            </div>
+          ) : null}
         </div>
         <div
           style={{
@@ -1010,6 +1066,9 @@ function OffsetPickerModal({
               <tbody>
                 {filtered.map((p) => {
                   const isSel = selectedId === p.id;
+                  const sugg: PaymentSuggestion | undefined =
+                    suggestion.byId.get(p.id);
+                  const isSuggested = suggestion.bestId === p.id;
                   return (
                     <tr
                       key={p.id}
@@ -1018,7 +1077,11 @@ function OffsetPickerModal({
                       style={{
                         borderTop: "1px solid #e2e8f0",
                         cursor: "pointer",
-                        background: isSel ? "#eef2ff" : "transparent",
+                        background: isSel
+                          ? "#eef2ff"
+                          : isSuggested
+                            ? "#f0fdf4"
+                            : "transparent",
                       }}
                     >
                       <td style={{ padding: "8px 12px" }}>
@@ -1031,6 +1094,20 @@ function OffsetPickerModal({
                       </td>
                       <td style={{ padding: "8px 12px" }}>
                         {formatDate(p.importedAt ?? p.createdAt)}
+                        {isSuggested ? (
+                          <div style={{ marginTop: 4 }}>
+                            {pill("Suggested match", "#dcfce7", "#166534")}
+                            <div
+                              style={{
+                                fontSize: 11,
+                                color: "#166534",
+                                marginTop: 2,
+                              }}
+                            >
+                              {sugg?.reason}
+                            </div>
+                          </div>
+                        ) : null}
                       </td>
                       <td style={{ padding: "8px 12px", fontFamily: "monospace" }}>
                         {p.checkNumber ?? "—"}
