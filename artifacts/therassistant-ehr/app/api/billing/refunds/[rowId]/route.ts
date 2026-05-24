@@ -24,6 +24,12 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireBillingAccess } from "@/lib/billing/requireBillingAccess";
+import {
+  createConnectRefund,
+  getStripeSecretKey,
+  StripeRequestError,
+} from "@/lib/stripe/connect";
+import { confirmInsuranceRefund } from "@/lib/payments/postingEngine";
 
 type Action =
   | "approve_refund"
@@ -688,6 +694,208 @@ export async function GET(
   }
 }
 
+/**
+ * Issue a pending refund row for real:
+ *   - patient + Stripe-origin client_payment → call Stripe /v1/refunds
+ *     (with the Stripe-Account header for Connect charges). On success
+ *     stamps stripe_refund_id + refund_status='issued'. On failure
+ *     stamps refund_status='failed' and appends the Stripe error to note.
+ *   - insurance → mints a synthetic check number, appends a printable
+ *     check-stub block to note, then defers to confirmInsuranceRefund
+ *     so the compensating ledger entry / claim status flip / audit row
+ *     happen exactly as they do for the posted-detail flow.
+ */
+async function issueRefund(
+  supabase: any,
+  args: {
+    organizationId: string;
+    refundId: string;
+    refund: Record<string, any>;
+    actor: { staffId: string | null; userId: string | null };
+    reason: string | null;
+  },
+): Promise<{
+  kind: "patient_stripe" | "patient_manual" | "insurance_check";
+  refundStatus: "issued" | "failed" | "pending";
+  stripeRefundId?: string | null;
+  checkNumber?: string | null;
+  error?: string | null;
+}> {
+  const { organizationId, refundId, refund, actor, reason } = args;
+  const refundType = String(refund.refund_type ?? "");
+  const amount = Number(refund.amount ?? 0);
+  const now = new Date().toISOString();
+
+  if (refundType === "patient") {
+    // Look up the originating client_payment for Stripe linkage.
+    const { data: cpRow } = await supabase
+      .from("client_payments")
+      .select(
+        "id, stripe_charge_id, stripe_payment_intent_id, stripe_connected_account_id",
+      )
+      .eq("id", refund.source_client_payment_id ?? "")
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+    const cp = (cpRow ?? null) as {
+      stripe_charge_id?: string | null;
+      stripe_payment_intent_id?: string | null;
+      stripe_connected_account_id?: string | null;
+    } | null;
+    const chargeId = cp?.stripe_charge_id ?? null;
+    const piId = cp?.stripe_payment_intent_id ?? null;
+    const connectedAccountId = cp?.stripe_connected_account_id ?? null;
+
+    // No Stripe key OR no Stripe-origin payment → fall back to manual
+    // issuance: stamp issued so AR can record the check separately, but
+    // do NOT pretend a Stripe refund happened.
+    if (!getStripeSecretKey() || (!chargeId && !piId)) {
+      const failReason = !getStripeSecretKey()
+        ? "STRIPE_SECRET_KEY not configured"
+        : "Original payment has no stripe_charge_id / stripe_payment_intent_id";
+      await supabase
+        .from("payment_refunds")
+        .update({
+          refund_status: "issued",
+          issued_at: now,
+          issued_by_actor_id: actor.staffId,
+          note: appendNoteLine(
+            String(refund.note ?? ""),
+            `[MANUAL_REFUND ${now.slice(0, 10)}] ${failReason}${reason ? ` — ${reason}` : ""}`,
+          ),
+          updated_at: now,
+        })
+        .eq("id", refundId)
+        .eq("organization_id", organizationId);
+      return {
+        kind: "patient_manual",
+        refundStatus: "issued",
+        stripeRefundId: null,
+      };
+    }
+
+    try {
+      const refundResp = await createConnectRefund({
+        chargeId,
+        paymentIntentId: piId,
+        amountCents: Math.round(amount * 100),
+        connectedAccountId,
+        metadata: {
+          payment_refund_id: refundId,
+          organization_id: organizationId,
+        },
+        idempotencyKey: `wq-refund-${refundId}`,
+      });
+      await supabase
+        .from("payment_refunds")
+        .update({
+          stripe_refund_id: refundResp.id,
+          stripe_charge_id: chargeId,
+          refund_status: "issued",
+          issued_at: now,
+          issued_by_actor_id: actor.staffId,
+          note: appendNoteLine(
+            String(refund.note ?? ""),
+            `[STRIPE_REFUND ${now.slice(0, 10)}] ${refundResp.id} status=${refundResp.status}`,
+          ),
+          updated_at: now,
+        })
+        .eq("id", refundId)
+        .eq("organization_id", organizationId);
+      return {
+        kind: "patient_stripe",
+        refundStatus: "issued",
+        stripeRefundId: refundResp.id,
+      };
+    } catch (e) {
+      const message =
+        e instanceof StripeRequestError
+          ? `Stripe ${e.status}${e.stripeCode ? ` ${e.stripeCode}` : ""}: ${e.message}`
+          : e instanceof Error
+            ? e.message
+            : "Stripe refund failed";
+      await supabase
+        .from("payment_refunds")
+        .update({
+          refund_status: "failed",
+          note: appendNoteLine(
+            String(refund.note ?? ""),
+            `[STRIPE_REFUND_FAILED ${now.slice(0, 10)}] ${message}`,
+          ),
+          updated_at: now,
+        })
+        .eq("id", refundId)
+        .eq("organization_id", organizationId);
+      return {
+        kind: "patient_stripe",
+        refundStatus: "failed",
+        stripeRefundId: null,
+        error: message,
+      };
+    }
+  }
+
+  // ── Insurance refund: generate a check stub + confirm via engine ──────
+  const checkNumber = `RFD-${now.slice(0, 10).replace(/-/g, "")}-${refundId.slice(0, 6).toUpperCase()}`;
+  // Stamp the check stub into the note up front so it survives even if
+  // confirmInsuranceRefund fails (we need a paper trail of what was
+  // printed/promised).
+  const stubLine = `[CHECK_STUB ${now.slice(0, 10)}] number=${checkNumber} amount=${amount.toFixed(2)} payer_profile_id=${refund.payer_profile_id ?? "—"} era=${refund.source_era_claim_payment_id ?? "—"}${reason ? ` reason=${reason}` : ""}`;
+  await supabase
+    .from("payment_refunds")
+    .update({
+      note: appendNoteLine(String(refund.note ?? ""), stubLine),
+      updated_at: now,
+    })
+    .eq("id", refundId)
+    .eq("organization_id", organizationId);
+
+  const engineResult = await confirmInsuranceRefund({
+    organizationId,
+    refundId,
+    reason: reason ?? null,
+    externalReferenceNumber: checkNumber,
+    actor: {
+      staffId: actor.staffId,
+      userId: actor.userId,
+      role: "biller",
+      source: "api:authenticated_staff",
+    } as any,
+  });
+
+  if (!engineResult.ok) {
+    const message =
+      engineResult.errors[0]?.message ?? "Insurance refund confirmation failed";
+    await supabase
+      .from("payment_refunds")
+      .update({
+        refund_status: "failed",
+        note: appendNoteLine(
+          String(refund.note ?? ""),
+          `[CHECK_STUB ${now.slice(0, 10)}] number=${checkNumber}\n[INSURANCE_REFUND_FAILED ${now.slice(0, 10)}] ${message}`,
+        ),
+        updated_at: now,
+      })
+      .eq("id", refundId)
+      .eq("organization_id", organizationId);
+    return {
+      kind: "insurance_check",
+      refundStatus: "failed",
+      checkNumber,
+      error: message,
+    };
+  }
+
+  return {
+    kind: "insurance_check",
+    refundStatus: "issued",
+    checkNumber,
+  };
+}
+
+function appendNoteLine(existing: string, line: string): string {
+  return [existing.trim(), line].filter(Boolean).join("\n");
+}
+
 export async function POST(
   request: Request,
   ctx: { params: Promise<{ rowId: string }> },
@@ -854,13 +1062,67 @@ export async function POST(
           { status: 422 },
         );
       }
-      update = {
-        refund_status: "issued",
-        issued_at: new Date().toISOString(),
-        issued_by_actor_id: actorId,
-        updated_at: new Date().toISOString(),
-      };
-      summary = "Issued refund";
+      const issuance = await issueRefund(supabase, {
+        organizationId,
+        refundId,
+        refund,
+        actor: { staffId: guard.staffId ?? null, userId: guard.userId ?? null },
+        reason,
+      });
+      // Re-fetch the row so the audit log captures the engine's writes
+      // (stripe_refund_id, refund_status, note appended on failure, etc).
+      const { data: refreshed } = await (supabase as any)
+        .from("payment_refunds")
+        .select(
+          "id, refund_type, client_id, professional_claim_id, payer_profile_id, amount, refund_status, reason, note, requested_at, issued_at, stripe_refund_id",
+        )
+        .eq("id", refundId)
+        .eq("organization_id", organizationId)
+        .maybeSingle();
+      update = refreshed
+        ? (refreshed as Record<string, unknown>)
+        : { refund_status: issuance.refundStatus };
+      summary =
+        issuance.refundStatus === "issued"
+          ? issuance.kind === "patient_stripe"
+            ? `Issued patient refund via Stripe (${issuance.stripeRefundId ?? "—"})`
+            : `Issued insurance refund (check ${issuance.checkNumber ?? "—"})`
+          : `Refund issuance failed: ${issuance.error ?? "unknown"}`;
+      // Bail out of the generic UPDATE block — issuance already wrote the
+      // row. Carry through to the audit write.
+      await writeAudit(supabase, {
+        organizationId,
+        claimId: refundClaimId,
+        patientId: refundClientId,
+        objectType: "payment_refund",
+        objectId: refundId,
+        action,
+        summary,
+        metadata: {
+          rowId,
+          reason,
+          issuanceKind: issuance.kind,
+          stripeRefundId: issuance.stripeRefundId ?? null,
+          checkNumber: issuance.checkNumber ?? null,
+          mintedFromEra,
+          reusedExistingRefund: reusedExisting,
+          failed: issuance.refundStatus === "failed",
+          error: issuance.error ?? null,
+        },
+        userId: guard.userId ?? null,
+        userRole: guard.roles?.[0] ?? null,
+        before,
+        after: update,
+      });
+      return NextResponse.json({
+        success: issuance.refundStatus === "issued",
+        action,
+        refundId,
+        refundStatus: issuance.refundStatus,
+        stripeRefundId: issuance.stripeRefundId ?? null,
+        checkNumber: issuance.checkNumber ?? null,
+        error: issuance.error ?? null,
+      });
     } else if (action === "apply_to_balance") {
       const noteLine = `[APPLIED_TO_BALANCE ${new Date()
         .toISOString()

@@ -297,6 +297,16 @@ export interface StripeSetupIntent {
   metadata?: Record<string, string>;
 }
 
+export interface StripeRefund {
+  id: string;
+  amount: number;
+  currency: string;
+  status: string;
+  charge?: string | null;
+  payment_intent?: string | null;
+  metadata?: Record<string, string>;
+}
+
 /**
  * Create a SetupIntent on a connected account to collect & save a
  * patient card without charging (Task #487). Frontend uses
@@ -410,6 +420,43 @@ export async function createConnectOffSessionCharge(input: {
   if (input.statementDescriptor) params.statement_descriptor_suffix = input.statementDescriptor;
   return stripeRequest<StripePaymentIntent>("/payment_intents", {
     stripeAccount: input.connectedAccountId,
+    idempotencyKey: input.idempotencyKey,
+    params,
+  });
+}
+
+/**
+ * Issue a refund against a Connect charge (Task #500).
+ *
+ * Mirrors the inline refund logic already in
+ * lib/payments/postingEngine/reversal.ts so the workqueue's "Issue refund"
+ * action can call one shared helper.
+ *
+ * The Stripe-Account header is REQUIRED for charges that landed on a
+ * connected account (Express copay flow) — without it the charge id
+ * appears not to exist on the platform account and the refund 404s.
+ * See .agents/memory/stripe-connect-refund-header.md.
+ */
+export async function createConnectRefund(input: {
+  chargeId?: string | null;
+  paymentIntentId?: string | null;
+  amountCents: number;
+  connectedAccountId?: string | null;
+  metadata?: Record<string, string>;
+  idempotencyKey?: string;
+  reason?: "duplicate" | "fraudulent" | "requested_by_customer";
+}): Promise<StripeRefund> {
+  const params: Record<string, unknown> = {
+    amount: input.amountCents,
+    reason: input.reason ?? "requested_by_customer",
+  };
+  if (input.chargeId) params.charge = input.chargeId;
+  else if (input.paymentIntentId) params.payment_intent = input.paymentIntentId;
+  else throw new StripeRequestError("createConnectRefund requires chargeId or paymentIntentId", 400);
+  if (input.metadata) params.metadata = input.metadata;
+
+  return stripeRequest<StripeRefund>("/refunds", {
+    stripeAccount: input.connectedAccountId ?? null,
     idempotencyKey: input.idempotencyKey,
     params,
   });
