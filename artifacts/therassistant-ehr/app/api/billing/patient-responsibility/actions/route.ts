@@ -3,6 +3,7 @@ import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireBillingAccess } from "@/lib/billing/requireBillingAccess";
 import { markPatientInvoiceSent } from "@/lib/payments/patientInvoicePaymentService";
 import { chargeSavedCardForInvoice } from "@/lib/payments/savedCardService";
+import { attemptAutopayForInvoice } from "@/lib/payments/autopayService";
 
 type ActionName =
   | "create_invoice"
@@ -229,7 +230,22 @@ export async function POST(request: Request) {
           summary: note || `Statement sent for invoice ${invoiceId}`,
           metadata: { eraClaimPaymentId: eraId, invoiceId },
         });
-        return NextResponse.json({ success: true, invoiceId, statementDate: new Date().toISOString() });
+        // Task #602: auto-charge enrolled patients on statement send.
+        const autopayResult = await attemptAutopayForInvoice({
+          organizationId,
+          patientInvoiceId: invoiceId,
+        }).catch((err) => ({
+          attempted: false,
+          ok: false,
+          code: "failed" as const,
+          message: err instanceof Error ? err.message : "Autopay attempt threw",
+        }));
+        return NextResponse.json({
+          success: true,
+          invoiceId,
+          statementDate: new Date().toISOString(),
+          autopayResult,
+        });
       }
 
       case "charge_card": {

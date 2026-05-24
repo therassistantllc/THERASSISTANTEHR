@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { markPatientInvoiceSent } from "@/lib/payments/patientInvoicePaymentService";
+import { attemptAutopayForInvoice } from "@/lib/payments/autopayService";
 
 export async function POST(request: Request) {
   try {
@@ -11,13 +12,30 @@ export async function POST(request: Request) {
       );
     }
 
+    const organizationId = String(body.organizationId);
+    const patientInvoiceId = String(body.patientInvoiceId);
     const result = await markPatientInvoiceSent({
-      organizationId: String(body.organizationId),
-      patientInvoiceId: String(body.patientInvoiceId),
+      organizationId,
+      patientInvoiceId,
       memo: body.memo ?? null,
     });
 
-    return NextResponse.json({ success: result.ok, result }, { status: result.ok ? 200 : 422 });
+    // Task #602: auto-charge enrolled patients on statement send.
+    const autopayResult = result.ok
+      ? await attemptAutopayForInvoice({ organizationId, patientInvoiceId }).catch(
+          (err) => ({
+            attempted: false,
+            ok: false,
+            code: "failed" as const,
+            message: err instanceof Error ? err.message : "Autopay attempt threw",
+          }),
+        )
+      : null;
+
+    return NextResponse.json(
+      { success: result.ok, result, autopayResult },
+      { status: result.ok ? 200 : 422 },
+    );
   } catch (error) {
     console.error("Patient invoice mark sent API error:", error);
     return NextResponse.json(
