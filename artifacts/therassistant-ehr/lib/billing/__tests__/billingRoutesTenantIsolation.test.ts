@@ -271,16 +271,10 @@ const ROUTES: RouteSpec[] = [
     extraBody: { chargeCaptureIds: ["00000000-0000-0000-0000-0000000000cd"] },
   },
   {
-    name: "GET /api/billing/claim-readiness",
-    importPath: "../../../app/api/billing/claim-readiness/route",
+    name: "GET /api/billing/no-response",
+    importPath: "../../../app/api/billing/no-response/route",
     method: "GET",
     orgIdLocation: "query",
-  },
-  {
-    name: "POST /api/billing/claim-readiness/create-837p-batch",
-    importPath: "../../../app/api/billing/claim-readiness/create-837p-batch/route",
-    method: "POST",
-    orgIdLocation: "body",
   },
   {
     name: "GET /api/billing/codes/diagnoses",
@@ -482,8 +476,7 @@ describe("billing API tenant isolation (Task #167 e2e)", () => {
       "app/api/billing/charge-capture/[id]/route.ts",
       "app/api/billing/charge-capture/release/route.ts",
       "app/api/billing/charge-capture/route.ts",
-      "app/api/billing/claim-readiness/create-837p-batch/route.ts",
-      "app/api/billing/claim-readiness/route.ts",
+      "app/api/billing/no-response/route.ts",
       "app/api/billing/codes/diagnoses/route.ts",
       "app/api/billing/codes/procedures/route.ts",
       "app/api/billing/copay-transactions/route.ts",

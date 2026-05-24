@@ -643,7 +643,7 @@ export default function NoResponseClient() {
         if (v && v.length > 0) params.set(k, v);
       }
       const res = await fetch(
-        `/api/billing/claim-readiness?${params.toString()}`,
+        `/api/billing/no-response?${params.toString()}`,
         { cache: "no-store" },
       );
       const json = await res.json();

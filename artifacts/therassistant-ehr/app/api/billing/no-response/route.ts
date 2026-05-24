@@ -1,11 +1,13 @@
 /**
- * GET /api/billing/claim-readiness
+ * GET /api/billing/no-response
  *
  * "No Response" workqueue: claims that have been submitted but for which
  * the expected acknowledgement / status has not come back.
  *
- * Powers the page at /billing/no-response (old route /billing/claim-readiness
- * redirects here).
+ * Powers the page at /billing/no-response. Previously lived at
+ * /api/billing/claim-readiness; that path was retired in Task #424 because
+ * Charge Capture moved off it and the name implied a broader role than the
+ * route actually had.
  *
  * Tabs (server-classified via missingArtifact):
  *   - no_999            : no 999 ack from clearinghouse
