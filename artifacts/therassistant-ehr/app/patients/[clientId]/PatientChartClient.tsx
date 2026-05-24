@@ -413,6 +413,7 @@ export default function PatientChartClient({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [cases, setCases] = useState<CaseRowSummary[]>([]);
+  const [casesModalOpen, setCasesModalOpen] = useState(false);
   const [intakeLinks, setIntakeLinks] = useState<IntakeLink[]>([]);
   const [intakeSubmissions, setIntakeSubmissions] = useState<IntakeSubmission[]>([]);
   const [intakeBusy, setIntakeBusy] = useState(false);
@@ -1644,7 +1645,16 @@ export default function PatientChartClient({
           </section>
 
           <section className="summary-block" aria-label="Insurance information">
-            <h3>Insurance information</h3>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <h3 style={{ margin: 0 }}>Insurance information</h3>
+              <button
+                type="button"
+                className="button button-secondary"
+                onClick={() => setCasesModalOpen(true)}
+              >
+                Open cases
+              </button>
+            </div>
             {policyEditError ? <div className="alert-panel">{policyEditError}</div> : null}
             {cases.length === 0 ? (
               <p className="muted" style={{ margin: 0 }}>
@@ -2441,23 +2451,68 @@ export default function PatientChartClient({
         })()}
       </section>
 
-      <section id="cases-editor" className="panel" style={{ marginBottom: "16px" }}>
-        <CasesPanel
-          clientId={patient.id}
-          organizationId={organizationId}
-          availablePolicies={policies.map((p) => ({
-            id: p.id,
-            plan_name: p.plan_name ?? null,
-            policy_number: p.policy_number ?? null,
-            priority: p.priority ?? null,
-            payer_name: p.payer_name ?? null,
-          }))}
-          onMutate={() => {
-            void reloadSummaryAndCases();
-            void reloadDemoAudit();
+      {casesModalOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Cases"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setCasesModalOpen(false);
           }}
-        />
-      </section>
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.45)",
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "flex-start",
+            padding: "48px 16px",
+            zIndex: 1000,
+            overflowY: "auto",
+          }}
+        >
+          <div
+            className="panel"
+            style={{
+              background: "var(--surface-color, #fff)",
+              borderRadius: 8,
+              width: "min(1100px, 100%)",
+              maxHeight: "calc(100vh - 96px)",
+              overflowY: "auto",
+              padding: 20,
+              boxShadow: "0 20px 50px rgba(15, 23, 42, 0.25)",
+              position: "relative",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <h2 style={{ margin: 0 }}>Cases</h2>
+              <button
+                type="button"
+                className="button button-secondary"
+                onClick={() => setCasesModalOpen(false)}
+                aria-label="Close cases"
+              >
+                Close
+              </button>
+            </div>
+            <CasesPanel
+              clientId={patient.id}
+              organizationId={organizationId}
+              availablePolicies={policies.map((p) => ({
+                id: p.id,
+                plan_name: p.plan_name ?? null,
+                policy_number: p.policy_number ?? null,
+                priority: p.priority ?? null,
+                payer_name: p.payer_name ?? null,
+              }))}
+              onMutate={() => {
+                void reloadSummaryAndCases();
+                void reloadDemoAudit();
+              }}
+            />
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }
