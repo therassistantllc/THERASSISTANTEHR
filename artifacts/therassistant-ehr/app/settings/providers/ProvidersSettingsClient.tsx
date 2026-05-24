@@ -15,6 +15,9 @@ type CredentialingRecord = {
   individual_medicaid_id: string | null;
   group_npi: string | null;
   practice_tax_id: string | null;
+  practice_name: string | null;
+  email: string | null;
+  phone: string | null;
   primary_license_number: string | null;
   payer_revalidation_date: string | null;
   telehealth_url: string | null;
@@ -91,11 +94,11 @@ export default function ProvidersSettingsClient() {
   const [providers, setProviders] = useState<CredentialingRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showAdd, setShowAdd] = useState(false);
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (!organizationId) { setLoading(false); return; }
-    fetch(`/api/providers/credentialing?organizationId=${encodeURIComponent(organizationId)}`)
+  const reload = () => {
+    if (!organizationId) return;
+    fetch(`/api/providers/credentialing?organizationId=${encodeURIComponent(organizationId)}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((json: { success?: boolean; providers?: CredentialingRecord[]; error?: string }) => {
         if (!json.success) throw new Error(json.error ?? "Failed to load providers");
@@ -103,6 +106,13 @@ export default function ProvidersSettingsClient() {
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : "Failed to load"))
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (!organizationId) { setLoading(false); return; }
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [organizationId]);
 
   const warnings = useMemo(() => {
@@ -124,8 +134,11 @@ export default function ProvidersSettingsClient() {
           <p className="hero-copy">Credentialing profiles, NPI, taxonomy, payer enrollment status, and claim readiness.</p>
         </div>
         <div className="hero-actions">
-          <Link className="button button-primary" href={`/admin/provider-credentialing${organizationId ? `?organizationId=${organizationId}` : ""}`}>
-            Manage Credentialing
+          <button type="button" className="button button-primary" onClick={() => setShowAdd(true)}>
+            + Add Provider
+          </button>
+          <Link className="button button-secondary" href={`/admin/provider-credentialing${organizationId ? `?organizationId=${organizationId}` : ""}`}>
+            Credentialing Details
           </Link>
           <Link className="button button-secondary" href="/settings">← Settings</Link>
         </div>
@@ -173,12 +186,9 @@ export default function ProvidersSettingsClient() {
       <section className="panel">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-4)" }}>
           <h2>Credentialing Profiles</h2>
-          <Link
-            className="button button-primary"
-            href={`/admin/provider-credentialing${organizationId ? `?organizationId=${organizationId}` : ""}`}
-          >
-            Add / Edit Profiles
-          </Link>
+          <button type="button" className="button button-primary" onClick={() => setShowAdd(true)}>
+            + Add Provider
+          </button>
         </div>
 
         {loading && <div className="empty-state">Loading…</div>}
@@ -196,10 +206,212 @@ export default function ProvidersSettingsClient() {
             onSaved={(updated) =>
               setProviders((prev) => prev.map((existing) => (existing.id === updated.id ? { ...existing, ...updated } : existing)))
             }
+            onReload={reload}
           />
         ))}
       </section>
+
+      {showAdd && (
+        <ProviderProfileModal
+          mode="create"
+          organizationId={organizationId}
+          onClose={() => setShowAdd(false)}
+          onSaved={() => { setShowAdd(false); reload(); }}
+        />
+      )}
     </main>
+  );
+}
+
+type ProfileFormState = {
+  provider_name: string;
+  credential_display: string;
+  individual_npi: string;
+  taxonomy_code: string;
+  email: string;
+  phone: string;
+  practice_name: string;
+  practice_tax_id: string;
+  group_npi: string;
+  individual_medicaid_id: string;
+  primary_license_number: string;
+  telehealth_url: string;
+  stripe_payment_link_url: string;
+  is_active: boolean;
+};
+
+function emptyForm(): ProfileFormState {
+  return {
+    provider_name: "", credential_display: "", individual_npi: "", taxonomy_code: "",
+    email: "", phone: "", practice_name: "", practice_tax_id: "", group_npi: "",
+    individual_medicaid_id: "", primary_license_number: "", telehealth_url: "",
+    stripe_payment_link_url: "", is_active: true,
+  };
+}
+
+function fromRecord(p: CredentialingRecord): ProfileFormState {
+  return {
+    provider_name: p.provider_name ?? "",
+    credential_display: p.credential_display ?? "",
+    individual_npi: p.individual_npi ?? "",
+    taxonomy_code: p.taxonomy_code ?? "",
+    email: p.email ?? "",
+    phone: p.phone ?? "",
+    practice_name: p.practice_name ?? "",
+    practice_tax_id: p.practice_tax_id ?? "",
+    group_npi: p.group_npi ?? "",
+    individual_medicaid_id: p.individual_medicaid_id ?? "",
+    primary_license_number: p.primary_license_number ?? "",
+    telehealth_url: p.telehealth_url ?? "",
+    stripe_payment_link_url: p.stripe_payment_link_url ?? "",
+    is_active: p.is_active !== false,
+  };
+}
+
+function ProviderProfileModal({
+  mode,
+  organizationId,
+  existing,
+  onClose,
+  onSaved,
+}: {
+  mode: "create" | "edit";
+  organizationId: string;
+  existing?: CredentialingRecord;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [form, setForm] = useState<ProfileFormState>(() =>
+    mode === "edit" && existing ? fromRecord(existing) : emptyForm(),
+  );
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const update = <K extends keyof ProfileFormState>(key: K, value: ProfileFormState[K]) =>
+    setForm((prev) => ({ ...prev, [key]: value }));
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErr(null);
+    if (!form.provider_name.trim()) { setErr("Provider name is required."); return; }
+    setSaving(true);
+    try {
+      const payload: Record<string, unknown> = {
+        provider_name: form.provider_name.trim(),
+        credential_display: form.credential_display.trim() || null,
+        individual_npi: form.individual_npi.trim() || null,
+        taxonomy_code: form.taxonomy_code.trim() || null,
+        email: form.email.trim() || null,
+        phone: form.phone.trim() || null,
+        practice_name: form.practice_name.trim() || null,
+        practice_tax_id: form.practice_tax_id.trim() || null,
+        group_npi: form.group_npi.trim() || null,
+        individual_medicaid_id: form.individual_medicaid_id.trim() || null,
+        primary_license_number: form.primary_license_number.trim() || null,
+        telehealth_url: form.telehealth_url.trim() || null,
+        stripe_payment_link_url: form.stripe_payment_link_url.trim() || null,
+        is_active: form.is_active,
+      };
+      const url = mode === "create"
+        ? `/api/providers/credentialing?organizationId=${encodeURIComponent(organizationId)}`
+        : `/api/providers/credentialing?organizationId=${encodeURIComponent(organizationId)}&id=${encodeURIComponent(existing!.id)}`;
+      const res = await fetch(url, {
+        method: mode === "create" ? "POST" : "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const json = (await res.json()) as { success?: boolean; error?: string };
+      if (!res.ok || !json.success) throw new Error(json.error ?? "Save failed");
+      onSaved();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const field = (label: string, key: keyof ProfileFormState, opts?: { type?: string; placeholder?: string; required?: boolean }) => (
+    <label style={{ display: "block", fontSize: 12 }}>
+      <span style={{ display: "block", fontWeight: 600, marginBottom: 4 }}>
+        {label}{opts?.required ? " *" : ""}
+      </span>
+      <input
+        type={opts?.type ?? "text"}
+        value={String(form[key] ?? "")}
+        onChange={(e) => update(key, e.target.value as never)}
+        placeholder={opts?.placeholder}
+        required={opts?.required}
+        style={{ width: "100%", padding: "6px 10px", border: "1px solid var(--border-default, #d8e1e9)", borderRadius: 4, fontSize: 13 }}
+      />
+    </label>
+  );
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: "fixed", inset: 0, background: "rgba(15,23,42,0.5)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        zIndex: 1000, padding: 16,
+      }}
+      onClick={onClose}
+    >
+      <form
+        onSubmit={handleSubmit}
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--surface, #fff)", borderRadius: 8, maxWidth: 720, width: "100%",
+          maxHeight: "90vh", overflowY: "auto", padding: "20px 24px",
+          boxShadow: "0 20px 50px rgba(15,23,42,0.25)",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h2 style={{ margin: 0 }}>{mode === "create" ? "Add Provider" : "Edit Provider Profile"}</h2>
+          <button type="button" className="button button-secondary" onClick={onClose} style={{ padding: "4px 10px", fontSize: 12 }}>
+            ✕
+          </button>
+        </div>
+        <p style={{ color: "var(--text-secondary)", fontSize: 12, marginTop: 0, marginBottom: 16 }}>
+          Core profile, NPI, taxonomy, contact, telehealth, and Stripe payment link. Detailed credentialing dates and CAQH IDs live on the Credentialing Details screen.
+        </p>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 10 }}>
+          {field("Provider name", "provider_name", { required: true, placeholder: "Jane Doe, LCSW" })}
+          {field("Credentials display", "credential_display", { placeholder: "LCSW, PhD" })}
+          {field("Individual NPI", "individual_npi", { placeholder: "10-digit" })}
+          {field("Taxonomy code", "taxonomy_code", { placeholder: "103TC0700X" })}
+          {field("Email", "email", { type: "email" })}
+          {field("Phone", "phone", { type: "tel" })}
+          {field("Practice name", "practice_name")}
+          {field("Practice Tax ID", "practice_tax_id")}
+          {field("Group NPI", "group_npi")}
+          {field("Individual Medicaid ID", "individual_medicaid_id")}
+          {field("Primary license number", "primary_license_number")}
+          {field("Telehealth URL", "telehealth_url", { type: "url", placeholder: "https://…" })}
+          {field("Stripe payment link", "stripe_payment_link_url", { type: "url", placeholder: "https://buy.stripe.com/…" })}
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, alignSelf: "end", paddingBottom: 4 }}>
+            <input
+              type="checkbox"
+              checked={form.is_active}
+              onChange={(e) => update("is_active", e.target.checked)}
+            />
+            Active
+          </label>
+        </div>
+
+        {err ? <div className="alert-panel" style={{ marginTop: 12 }}>{err}</div> : null}
+
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+          <button type="button" className="button button-secondary" onClick={onClose} disabled={saving}>
+            Cancel
+          </button>
+          <button type="submit" className="button button-primary" disabled={saving}>
+            {saving ? "Saving…" : mode === "create" ? "Create Provider" : "Save Changes"}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
 
@@ -207,12 +419,15 @@ function ProviderCard({
   provider,
   organizationId,
   onSaved,
+  onReload,
 }: {
   provider: CredentialingRecord;
   organizationId: string;
   onSaved: (updated: Partial<CredentialingRecord> & { id: string }) => void;
+  onReload: () => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [editingProfile, setEditingProfile] = useState(false);
   const [telehealthUrl, setTelehealthUrl] = useState(provider.telehealth_url ?? "");
   const [stripeUrl, setStripeUrl] = useState(provider.stripe_payment_link_url ?? "");
   const [saving, setSaving] = useState(false);
@@ -282,10 +497,29 @@ function ProviderCard({
             </span>
           )}
         </div>
-        <span className={provider.is_active !== false ? "status status-green" : "status status-red"}>
-          {provider.is_active !== false ? "Active" : "Inactive"}
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span className={provider.is_active !== false ? "status status-green" : "status status-red"}>
+            {provider.is_active !== false ? "Active" : "Inactive"}
+          </span>
+          <button
+            type="button"
+            className="button button-secondary"
+            style={{ padding: "4px 10px", fontSize: 12 }}
+            onClick={() => setEditingProfile(true)}
+          >
+            Edit Profile
+          </button>
+        </div>
       </div>
+      {editingProfile && (
+        <ProviderProfileModal
+          mode="edit"
+          existing={provider}
+          organizationId={organizationId}
+          onClose={() => setEditingProfile(false)}
+          onSaved={() => { setEditingProfile(false); onReload(); }}
+        />
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "var(--space-2)", marginTop: "var(--space-3)", fontSize: "var(--text-sm)" }}>
         <div><strong>Individual NPI:</strong> {missing(provider.individual_npi)}</div>
         <div><strong>Taxonomy:</strong> {missing(provider.taxonomy_code)}</div>
