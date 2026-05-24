@@ -124,13 +124,15 @@ export default function CasesPanel({
   // Staged "new case" draft. The user adds one or more insurance policies
   // (primary/secondary/tertiary) and a case name, then clicks Save case to
   // commit everything together. Policies are NOT POSTed until save.
-  type StagedPolicy = { priority: Priority; fields: NewPolicyFields };
+  // The "New case" draft shows three inline insurance rows
+  // (primary/secondary/tertiary) always visible. The user fills only the
+  // rows they need — Save case commits the case plus every row that has
+  // a payer + member ID filled in.
   const [caseDraft, setCaseDraft] = useState<{
-    open: boolean;
     name: string;
     caseType: CaseType;
-    policies: StagedPolicy[];
-    addingPriority: Priority | null;
+    notes: string;
+    rows: Record<Priority, NewPolicyFields>;
   } | null>(null);
 
   const orgQ = useMemo(
@@ -204,13 +206,14 @@ export default function CasesPanel({
 
   function openCaseDraft() {
     setCaseDraft({
-      open: true,
       name: "",
       caseType: "commercial",
-      policies: [],
-      // Auto-open the primary insurance form on first click so the user
-      // doesn't need to click twice to start entering insurance.
-      addingPriority: "primary",
+      notes: "",
+      rows: {
+        primary: { ...EMPTY_NEW_POLICY },
+        secondary: { ...EMPTY_NEW_POLICY },
+        tertiary: { ...EMPTY_NEW_POLICY },
+      },
     });
   }
 
@@ -218,42 +221,40 @@ export default function CasesPanel({
     setCaseDraft(null);
   }
 
-  function stageDraftPolicy(fields: NewPolicyFields, priority: Priority) {
-    const payerName =
-      payers.find((p) => p.id === fields.payerId)?.payer_name?.trim() ?? "";
-    setCaseDraft((d) => {
-      if (!d) return d;
-      // Default the case name to the primary payer's name on first stage so
-      // the user isn't blocked by an empty name on Save case.
-      const autoName =
-        priority === "primary" && !d.name.trim() && payerName ? payerName : d.name;
-      return {
-        ...d,
-        name: autoName,
-        policies: [
-          ...d.policies.filter((p) => p.priority !== priority),
-          { priority, fields },
-        ],
-        addingPriority: null,
-      };
-    });
+  function updateRow(priority: Priority, patch: Partial<NewPolicyFields>) {
+    setCaseDraft((d) =>
+      d
+        ? {
+            ...d,
+            rows: { ...d.rows, [priority]: { ...d.rows[priority], ...patch } },
+          }
+        : d,
+    );
   }
 
-  function removeDraftPolicy(priority: Priority) {
-    setCaseDraft((d) =>
-      d ? { ...d, policies: d.policies.filter((p) => p.priority !== priority) } : d,
-    );
+  function filledRows(d: NonNullable<typeof caseDraft>) {
+    return PRIORITIES.filter(
+      (p) => d.rows[p].payerId && d.rows[p].policyNumber.trim(),
+    ).map((p) => ({ priority: p, fields: d.rows[p] }));
   }
 
   async function saveCaseDraft() {
     if (!caseDraft) return;
-    const name = caseDraft.name.trim();
+    const filled = filledRows(caseDraft);
+    // Derive case name from the primary payer if the user left it blank.
+    const primaryRow = caseDraft.rows.primary;
+    const primaryPayerName =
+      payers.find((p) => p.id === primaryRow.payerId)?.payer_name?.trim() ?? "";
+    const name =
+      caseDraft.name.trim() || (primaryPayerName ? primaryPayerName : "");
     if (!name) {
-      setError("Case name is required.");
+      setError("Enter a case name (or fill in the primary payer).");
       return;
     }
-    if (caseDraft.policies.length === 0) {
-      setError("Add at least one insurance policy before saving.");
+    if (filled.length === 0) {
+      setError(
+        "Fill in at least one insurance row (payer + member ID) before saving.",
+      );
       return;
     }
     setBusy(`save-case-draft`);
@@ -266,7 +267,7 @@ export default function CasesPanel({
           organizationId,
           name,
           caseType: caseDraft.caseType,
-          notes: null,
+          notes: caseDraft.notes.trim() || null,
         }),
       });
       const caseJson = await caseRes.json().catch(() => ({}));
@@ -310,7 +311,7 @@ export default function CasesPanel({
       };
 
       // Save policies in priority order so primary always lands first.
-      const ordered = [...caseDraft.policies].sort(
+      const ordered = filled.sort(
         (a, b) => PRIORITIES.indexOf(a.priority) - PRIORITIES.indexOf(b.priority),
       );
       for (const staged of ordered) {
@@ -456,7 +457,13 @@ export default function CasesPanel({
           onClick={() => {
             if (caseDraft) {
               const hasWork =
-                caseDraft.name.trim().length > 0 || caseDraft.policies.length > 0;
+                caseDraft.name.trim().length > 0 ||
+                caseDraft.notes.trim().length > 0 ||
+                PRIORITIES.some(
+                  (p) =>
+                    caseDraft.rows[p].payerId ||
+                    caseDraft.rows[p].policyNumber.trim(),
+                );
               if (
                 hasWork &&
                 typeof window !== "undefined" &&
@@ -477,191 +484,36 @@ export default function CasesPanel({
 
       {error ? <div className="alert-panel">{error}</div> : null}
 
-      {caseDraft ? (
-        <div
-          className="content-card-section"
-          style={{
-            display: "grid",
-            gap: "0.75rem",
-            padding: "0.75rem",
-            border: "1px solid var(--border-color, #e5e7eb)",
-            borderRadius: 8,
-            background: "var(--surface-color, #fafafa)",
-            margin: "0.5rem 0",
-          }}
-        >
-          <strong>New case</strong>
-
-          {caseDraft.policies.length > 0 ? (
-            <div style={{ display: "grid", gap: "0.4rem" }}>
-              {[...caseDraft.policies]
-                .sort((a, b) => PRIORITIES.indexOf(a.priority) - PRIORITIES.indexOf(b.priority))
-                .map((p) => (
-                  <div
-                    key={p.priority}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      padding: "0.4rem 0.6rem",
-                      border: "1px solid var(--border-color, #e5e7eb)",
-                      borderRadius: 6,
-                      background: "white",
-                    }}
-                  >
-                    <span>
-                      <strong style={{ textTransform: "capitalize" }}>{p.priority}:</strong>{" "}
-                      {payers.find((pp) => pp.id === p.fields.payerId)?.payer_name ?? "Insurance"}
-                      {p.fields.policyNumber ? ` — ${p.fields.policyNumber}` : ""}
-                    </span>
-                    <button
-                      type="button"
-                      className="button button-secondary"
-                      onClick={() => removeDraftPolicy(p.priority)}
-                      disabled={Boolean(busy)}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                ))}
-            </div>
-          ) : null}
-
-          {caseDraft.addingPriority ? (
-            <CreatePolicyForm
-              payers={payers}
-              availablePriorities={[caseDraft.addingPriority]}
-              disabled={Boolean(busy)}
-              onCancel={() =>
-                setCaseDraft((d) => (d ? { ...d, addingPriority: null } : d))
-              }
-              onSubmit={(fields, priority) => stageDraftPolicy(fields, priority)}
-              submitLabel={`Save ${caseDraft.addingPriority}`}
-              heading={`${caseDraft.addingPriority[0].toUpperCase()}${caseDraft.addingPriority.slice(1)} insurance information`}
-            />
-          ) : (
-            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-              {PRIORITIES.filter(
-                (p) => !caseDraft.policies.some((sp) => sp.priority === p),
-              ).map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  className="button button-secondary"
-                  onClick={() =>
-                    setCaseDraft((d) => (d ? { ...d, addingPriority: p } : d))
-                  }
-                  disabled={Boolean(busy)}
-                >
-                  + Add {p} insurance
-                </button>
-              ))}
-            </div>
-          )}
-
-          <div
-            style={{
-              display: "grid",
-              gap: "0.5rem",
-              paddingTop: "0.5rem",
-              borderTop: "1px solid var(--border-color, #e5e7eb)",
-            }}
-          >
-            <label style={{ display: "grid", gap: 4 }}>
-              <span
-                style={{
-                  fontSize: "0.7rem",
-                  textTransform: "uppercase",
-                  letterSpacing: "0.02em",
-                  color: "var(--muted-color, #6b7280)",
-                  fontWeight: 500,
-                }}
-              >
-                Save case under *
-              </span>
-              <input
-                type="text"
-                value={caseDraft.name}
-                onChange={(e) =>
-                  setCaseDraft((d) => (d ? { ...d, name: e.target.value } : d))
-                }
-                placeholder="e.g. Aetna PPO, Workers Comp – ACME, etc."
-                disabled={Boolean(busy)}
-              />
-            </label>
-            <label style={{ display: "grid", gap: 4 }}>
-              <span
-                style={{
-                  fontSize: "0.7rem",
-                  textTransform: "uppercase",
-                  letterSpacing: "0.02em",
-                  color: "var(--muted-color, #6b7280)",
-                  fontWeight: 500,
-                }}
-              >
-                Case type
-              </span>
-              <select
-                value={caseDraft.caseType}
-                onChange={(e) =>
-                  setCaseDraft((d) =>
-                    d ? { ...d, caseType: e.target.value as CaseType } : d,
-                  )
-                }
-                disabled={Boolean(busy)}
-              >
-                {(Object.keys(CASE_TYPE_LABELS) as CaseType[]).map((t) => (
-                  <option key={t} value={t}>
-                    {CASE_TYPE_LABELS[t]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {(() => {
-              const missing: string[] = [];
-              if (caseDraft.policies.length === 0)
-                missing.push(
-                  caseDraft.addingPriority
-                    ? `save the ${caseDraft.addingPriority} insurance above`
-                    : "add at least one insurance",
-                );
-              if (!caseDraft.name.trim()) missing.push("enter a case name");
-              return missing.length > 0 ? (
-                <div
-                  style={{
-                    fontSize: "0.8rem",
-                    color: "var(--muted-color, #6b7280)",
-                  }}
-                >
-                  To save: {missing.join(" and ")}.
-                </div>
-              ) : null;
-            })()}
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-              <button
-                type="button"
-                className="button"
-                onClick={saveCaseDraft}
-                disabled={
-                  Boolean(busy) ||
-                  !caseDraft.name.trim() ||
-                  caseDraft.policies.length === 0
-                }
-              >
-                Save case
-              </button>
-              <button
-                type="button"
-                className="button button-secondary"
-                onClick={cancelCaseDraft}
-                disabled={Boolean(busy)}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {caseDraft ? <CaseDraftPanel
+        draft={caseDraft}
+        payers={payers}
+        busy={Boolean(busy)}
+        onChangeName={(name) => setCaseDraft((d) => (d ? { ...d, name } : d))}
+        onChangeType={(caseType) =>
+          setCaseDraft((d) => (d ? { ...d, caseType } : d))
+        }
+        onChangeNotes={(notes) => setCaseDraft((d) => (d ? { ...d, notes } : d))}
+        onUpdateRow={updateRow}
+        onSave={saveCaseDraft}
+        onCancel={() => {
+          const hasWork =
+            caseDraft.name.trim().length > 0 ||
+            caseDraft.notes.trim().length > 0 ||
+            PRIORITIES.some(
+              (p) =>
+                caseDraft.rows[p].payerId ||
+                caseDraft.rows[p].policyNumber.trim(),
+            );
+          if (
+            hasWork &&
+            typeof window !== "undefined" &&
+            !window.confirm("Discard this new case and the insurance you've entered?")
+          ) {
+            return;
+          }
+          cancelCaseDraft();
+        }}
+      /> : null}
 
       {cases.length === 0 ? (
         <div className="empty-state">No cases yet. Add one to start tracking coverage by visit.</div>
@@ -1318,6 +1170,192 @@ function CreatePolicyForm({
         </button>
         <button type="button" className="button button-secondary" onClick={onCancel} disabled={disabled}>
           Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CaseDraftPanel({
+  draft,
+  payers,
+  busy,
+  onChangeName,
+  onChangeType,
+  onChangeNotes,
+  onUpdateRow,
+  onSave,
+  onCancel,
+}: {
+  draft: {
+    name: string;
+    caseType: CaseType;
+    notes: string;
+    rows: Record<Priority, NewPolicyFields>;
+  };
+  payers: Array<{ id: string; payer_name: string; payer_id: string | null }>;
+  busy: boolean;
+  onChangeName: (v: string) => void;
+  onChangeType: (v: CaseType) => void;
+  onChangeNotes: (v: string) => void;
+  onUpdateRow: (priority: Priority, patch: Partial<NewPolicyFields>) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const labelStyle: React.CSSProperties = {
+    fontSize: "0.7rem",
+    textTransform: "uppercase",
+    letterSpacing: "0.02em",
+    color: "var(--muted-color, #6b7280)",
+    fontWeight: 500,
+  };
+  return (
+    <div
+      className="content-card-section"
+      style={{
+        display: "grid",
+        gap: "0.75rem",
+        padding: "0.75rem",
+        border: "1px solid var(--border-color, #e5e7eb)",
+        borderRadius: 8,
+        background: "var(--surface-color, #fafafa)",
+        margin: "0.5rem 0",
+      }}
+    >
+      <strong>New case</strong>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "2fr 1fr",
+          gap: "0.5rem",
+        }}
+      >
+        <label style={{ display: "grid", gap: 4 }}>
+          <span style={labelStyle}>Case name *</span>
+          <input
+            type="text"
+            value={draft.name}
+            onChange={(e) => onChangeName(e.target.value)}
+            placeholder="e.g. Aetna PPO, Workers Comp – ACME, etc."
+            disabled={busy}
+          />
+        </label>
+        <label style={{ display: "grid", gap: 4 }}>
+          <span style={labelStyle}>Case type</span>
+          <select
+            value={draft.caseType}
+            onChange={(e) => onChangeType(e.target.value as CaseType)}
+            disabled={busy}
+          >
+            {(Object.keys(CASE_TYPE_LABELS) as CaseType[]).map((t) => (
+              <option key={t} value={t}>
+                {CASE_TYPE_LABELS[t]}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gap: "0.4rem",
+          paddingTop: "0.5rem",
+          borderTop: "1px solid var(--border-color, #e5e7eb)",
+        }}
+      >
+        <span style={labelStyle}>Insurance — fill only the rows you need</span>
+        {PRIORITIES.map((priority) => {
+          const row = draft.rows[priority];
+          return (
+            <div
+              key={priority}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "90px 2fr 1fr 1fr 1fr",
+                gap: "0.4rem",
+                alignItems: "center",
+              }}
+            >
+              <span style={{ textTransform: "capitalize", fontWeight: 500 }}>
+                {priority}
+              </span>
+              <select
+                value={row.payerId}
+                onChange={(e) =>
+                  onUpdateRow(priority, { payerId: e.target.value })
+                }
+                disabled={busy}
+              >
+                <option value="">— Select payer —</option>
+                {payers.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.payer_name}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="text"
+                value={row.policyNumber}
+                onChange={(e) =>
+                  onUpdateRow(priority, { policyNumber: e.target.value })
+                }
+                placeholder="Member ID *"
+                disabled={busy}
+              />
+              <input
+                type="text"
+                value={row.planName ?? ""}
+                onChange={(e) =>
+                  onUpdateRow(priority, { planName: e.target.value || null })
+                }
+                placeholder="Plan"
+                disabled={busy}
+              />
+              <input
+                type="text"
+                value={row.groupNumber ?? ""}
+                onChange={(e) =>
+                  onUpdateRow(priority, { groupNumber: e.target.value || null })
+                }
+                placeholder="Group #"
+                disabled={busy}
+              />
+            </div>
+          );
+        })}
+      </div>
+
+      <label style={{ display: "grid", gap: 4 }}>
+        <span style={labelStyle}>Comments</span>
+        <textarea
+          rows={2}
+          value={draft.notes}
+          onChange={(e) => onChangeNotes(e.target.value)}
+          disabled={busy}
+        />
+      </label>
+
+      <div
+        style={{
+          display: "flex",
+          gap: "0.5rem",
+          justifyContent: "flex-end",
+          paddingTop: "0.5rem",
+          borderTop: "1px solid var(--border-color, #e5e7eb)",
+        }}
+      >
+        <button
+          type="button"
+          className="button button-secondary"
+          onClick={onCancel}
+          disabled={busy}
+        >
+          Close
+        </button>
+        <button type="button" className="button" onClick={onSave} disabled={busy}>
+          Save
         </button>
       </div>
     </div>
