@@ -168,7 +168,7 @@ export const WORKQUEUES: WorkqueueDef[] = [
     id: "no_response_aging",
     title: "No Response (Aging)",
     description: "Submitted claims with no payer response past the aging threshold.",
-    href: "/billing/claim-readiness",
+    href: "/billing/no-response",
     stage: "adjudication_denials",
     status: "live",
   },

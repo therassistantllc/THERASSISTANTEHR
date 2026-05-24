@@ -268,7 +268,7 @@ export default function AppSidebarNav() {
         <div className={styles.subnav}>
           <SubNavLinkIcon href="/billing/charge-capture" icon={<ClipboardIcon />} label="Charges" prefixes={["/billing/charge-capture"]} pathname={pathname} />
           <SubNavLinkIcon href="/billing/documentation-pending" icon={<EditIcon />} label="Documentation Pending" prefixes={["/billing/documentation-pending"]} pathname={pathname} />
-          <SubNavLinkIcon href="/billing/claim-readiness" icon={<CheckCircleIcon />} label="No Response" prefixes={["/billing/claim-readiness"]} pathname={pathname} />
+          <SubNavLinkIcon href="/billing/no-response" icon={<CheckCircleIcon />} label="No Response" prefixes={["/billing/no-response", "/billing/claim-readiness"]} pathname={pathname} />
           <SubNavLinkIcon href="/billing/claim-submission" icon={<SendIcon />} label="Denials" prefixes={["/billing/claim-submission"]} pathname={pathname} />
           <SubNavLinkIcon href="/billing/837p-batches" icon={<LayersIcon />} label="837P Batches" prefixes={["/billing/837p-batches", "/billing/batches"]} pathname={pathname} />
           <SubNavLinkIcon href="/billing/claim-edit-dashboard" icon={<EditIcon />} label="Rejections" prefixes={["/billing/claim-edit-dashboard"]} pathname={pathname} />
