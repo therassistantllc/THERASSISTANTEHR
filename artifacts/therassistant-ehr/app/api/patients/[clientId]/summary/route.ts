@@ -45,17 +45,43 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
     if (guard instanceof NextResponse) return guard;
     const organizationId = guard.organizationId;
 
-    const { data: client, error: clientError } = await supabase
+    const FULL_CLIENT_COLS =
+      "id, first_name, middle_name, last_name, date_of_birth, email, phone, preferred_name, pronouns, mrn, external_client_ref, sex_at_birth, gender_identity, address_line_1, address_line_2, city, state, postal_code, preferred_language, emergency_contact_name, emergency_contact_phone";
+    const BASE_CLIENT_COLS =
+      "id, first_name, middle_name, last_name, date_of_birth, email, phone, preferred_name, pronouns, mrn, external_client_ref, sex_at_birth, gender_identity, address_line_1, address_line_2, city, state, postal_code, preferred_language";
+
+    let { data: client, error: clientError } = await supabase
       .from("clients")
-      .select(
-        "id, first_name, middle_name, last_name, date_of_birth, email, phone, preferred_name, pronouns, mrn, external_client_ref, sex_at_birth, gender_identity, address_line_1, address_line_2, city, state, postal_code, preferred_language, emergency_contact_name, emergency_contact_phone",
-      )
+      .select(FULL_CLIENT_COLS)
       .eq("organization_id", organizationId)
       .eq("id", clientId)
       .is("archived_at", null)
       .maybeSingle();
 
+    if (clientError) {
+      const errCode = (clientError as { code?: string }).code ?? "";
+      const errMessage = String((clientError as { message?: string }).message ?? "");
+      const missingEmergency =
+        (errCode === "42703" || errCode === "PGRST204" || errCode === "PGRST200") &&
+        /emergency_contact_(name|phone)/i.test(errMessage);
+      if (missingEmergency) {
+        console.warn(
+          "[patient summary] emergency_contact_* columns missing; loading without them.",
+        );
+        const retry = await supabase
+          .from("clients")
+          .select(BASE_CLIENT_COLS)
+          .eq("organization_id", organizationId)
+          .eq("id", clientId)
+          .is("archived_at", null)
+          .maybeSingle();
+        client = retry.data as typeof client;
+        clientError = retry.error;
+      }
+    }
+
     if (clientError || !client) {
+      if (clientError) console.error("[patient summary] client lookup failed:", clientError);
       return NextResponse.json({ success: false, error: "Patient not found" }, { status: 404 });
     }
 
