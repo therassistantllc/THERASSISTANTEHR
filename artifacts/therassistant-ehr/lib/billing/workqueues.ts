@@ -112,6 +112,14 @@ export const WORKQUEUES: WorkqueueDef[] = [
     stage: "pre_submission",
     status: "live",
   },
+  {
+    id: "provider_enrollment_issues",
+    title: "Provider Enrollment Issues",
+    description: "Claims impacted by credentialing, enrollment, or payer setup problems for the rendering or billing provider.",
+    href: "/billing/provider-enrollment-issues",
+    stage: "pre_submission",
+    status: "live",
+  },
 
   // ── Submission & Rejections ─────────────────────────────────────────────
   {
