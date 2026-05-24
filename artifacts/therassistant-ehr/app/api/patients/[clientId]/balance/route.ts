@@ -142,6 +142,26 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
         date: c.service_date_from ?? null,
       }));
 
+    const { data: statementLogs } = await (supabase as any)
+      .from("audit_logs")
+      .select("id, created_at, event_summary, event_metadata")
+      .eq("organization_id", organizationId)
+      .eq("patient_id", clientId)
+      .eq("object_type", "patient_statement")
+      .order("created_at", { ascending: false })
+      .limit(100);
+
+    const statements = ((statementLogs ?? []) as DbRow[]).map((row) => {
+      const meta = (row.event_metadata as Record<string, unknown> | null) ?? {};
+      return {
+        id: String(row.id),
+        generatedAt: row.created_at ?? null,
+        openBalance: money(meta.open_balance),
+        memo: typeof meta.memo === "string" ? meta.memo : null,
+        summary: typeof row.event_summary === "string" ? row.event_summary : null,
+      };
+    });
+
     const openClaims = claimRows
       .filter((c) => {
         const totalCharge = Number(c.total_charge ?? 0);
@@ -180,6 +200,7 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
       invoices: normalizedInvoices,
       insurancePayments,
       writeOffs,
+      statements,
       claims: openClaims,
     });
   } catch (error) {

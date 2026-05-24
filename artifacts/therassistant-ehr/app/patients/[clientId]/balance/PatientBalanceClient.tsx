@@ -44,6 +44,14 @@ type WriteOff = {
   date: string | null;
 };
 
+type StatementEntry = {
+  id: string;
+  generatedAt: string | null;
+  openBalance: number;
+  memo: string | null;
+  summary: string | null;
+};
+
 type ClaimLite = {
   id: string;
   claimNumber: string;
@@ -70,13 +78,14 @@ type PatientBalancePayload = {
   invoices?: Invoice[];
   insurancePayments?: InsurancePayment[];
   writeOffs?: WriteOff[];
+  statements?: StatementEntry[];
   claims?: ClaimLite[];
 };
 
 type LedgerEntry = {
   key: string;
   date: string | null;
-  kind: "invoice" | "payment" | "insurance_payment" | "adjustment" | "write_off";
+  kind: "invoice" | "payment" | "insurance_payment" | "adjustment" | "write_off" | "statement";
   description: string;
   reference: string;
   charge: number;
@@ -84,6 +93,7 @@ type LedgerEntry = {
   status?: string;
   invoiceId?: string;
   claimId?: string;
+  statementId?: string;
 };
 
 function getOrganizationId() {
@@ -116,6 +126,7 @@ function buildLedger(
   invoices: Invoice[],
   insurancePayments: InsurancePayment[],
   writeOffs: WriteOff[],
+  statements: StatementEntry[] = [],
 ): LedgerEntry[] {
   const entries: LedgerEntry[] = [];
   for (const inv of invoices) {
@@ -189,11 +200,24 @@ function buildLedger(
       claimId: wo.claimId,
     });
   }
+  for (const st of statements) {
+    entries.push({
+      key: `stmt:${st.id}`,
+      date: st.generatedAt,
+      kind: "statement",
+      description: `Statement generated · open balance ${formatMoney(st.openBalance)}${st.memo ? ` — ${st.memo}` : ""}`,
+      reference: st.id.slice(0, 8),
+      charge: 0,
+      credit: 0,
+      status: "generated",
+      statementId: st.id,
+    });
+  }
   entries.sort((a, b) => {
     const ta = a.date ? new Date(a.date).getTime() : 0;
     const tb = b.date ? new Date(b.date).getTime() : 0;
     if (ta !== tb) return ta - tb;
-    const order = { invoice: 0, payment: 1, insurance_payment: 1, adjustment: 1, write_off: 1 } as const;
+    const order = { invoice: 0, payment: 1, insurance_payment: 1, adjustment: 1, write_off: 1, statement: 2 } as const;
     return order[a.kind] - order[b.kind];
   });
   return entries;
@@ -206,6 +230,7 @@ function ledgerKindLabel(kind: LedgerEntry["kind"]): string {
     case "insurance_payment": return "Insurance payment";
     case "adjustment": return "Adjustment";
     case "write_off": return "Write-off";
+    case "statement": return "Statement";
   }
 }
 
@@ -310,12 +335,14 @@ export default function PatientBalanceClient({ clientId }: { clientId: string })
   const invoices = payload?.invoices ?? [];
   const insurancePayments = payload?.insurancePayments ?? [];
   const writeOffs = payload?.writeOffs ?? [];
+  const statements = payload?.statements ?? [];
   const openClaims = payload?.claims ?? [];
   const ledger = useMemo(
-    () => buildLedger(invoices, insurancePayments, writeOffs),
-    [invoices, insurancePayments, writeOffs],
+    () => buildLedger(invoices, insurancePayments, writeOffs, statements),
+    [invoices, insurancePayments, writeOffs, statements],
   );
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
+  const [statementModalOpen, setStatementModalOpen] = useState(false);
 
   let running = 0;
   const ledgerWithBalance = ledger.map((entry) => {
@@ -328,7 +355,6 @@ export default function PatientBalanceClient({ clientId }: { clientId: string })
   if (!patient) return <div className="alert-panel">Patient balance not found.</div>;
 
   const orgQ = `?organizationId=${encodeURIComponent(organizationId)}`;
-  const statementHref = `/clients/${patient.id}/balance/statement/print${orgQ}`;
 
   return (
     <>
@@ -348,14 +374,13 @@ export default function PatientBalanceClient({ clientId }: { clientId: string })
           >
             Generate invoice
           </button>
-          <a
+          <button
+            type="button"
             className="button button-secondary"
-            href={statementHref}
-            target="_blank"
-            rel="noreferrer"
+            onClick={() => setStatementModalOpen(true)}
           >
             Generate statement
-          </a>
+          </button>
           <Link className="button button-secondary" href={`/billing/payments${orgQ}`}>
             Enter payment
           </Link>
@@ -484,6 +509,20 @@ export default function PatientBalanceClient({ clientId }: { clientId: string })
         </div>
       </section>
 
+      {statementModalOpen ? (
+        <GenerateStatementModal
+          organizationId={organizationId}
+          clientId={patient.id}
+          openBalance={totals?.openBalance ?? 0}
+          onClose={() => setStatementModalOpen(false)}
+          onCreated={async (message) => {
+            setStatementModalOpen(false);
+            setActionMessage(message);
+            await loadBalance();
+          }}
+        />
+      ) : null}
+
       {invoiceModalOpen ? (
         <GenerateInvoiceModal
           organizationId={organizationId}
@@ -606,6 +645,101 @@ function GenerateInvoiceModal({
             disabled={busy || !claimId || !amount}
           >
             {busy ? "Generating…" : "Generate invoice"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GenerateStatementModal({
+  organizationId,
+  clientId,
+  openBalance,
+  onClose,
+  onCreated,
+}: {
+  organizationId: string;
+  clientId: string;
+  openBalance: number;
+  onClose: () => void;
+  onCreated: (message: string) => void | Promise<void>;
+}) {
+  const [memo, setMemo] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/patient-statements", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ organizationId, clientId, memo: memo || null, openBalance }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(json.error ?? "Could not generate statement");
+      }
+      const statementId = String(json.statementId ?? "");
+      const url = `/clients/${clientId}/balance/statement/print?organizationId=${encodeURIComponent(organizationId)}${statementId ? `&statementId=${encodeURIComponent(statementId)}` : ""}`;
+      if (typeof window !== "undefined") window.open(url, "_blank", "noreferrer");
+      await onCreated("Statement generated and posted to ledger.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)",
+        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#fff", borderRadius: 10, padding: 20, minWidth: 480, maxWidth: 560,
+          boxShadow: "0 20px 40px rgba(15,23,42,0.2)",
+        }}
+      >
+        <h3 style={{ marginTop: 0 }}>Generate account statement</h3>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Creates a statement record (posted to the ledger) and opens the printable statement.
+        </p>
+        {error ? <div className="alert-panel" style={{ marginBottom: 10 }}>{error}</div> : null}
+
+        <div style={{ display: "grid", gap: 10 }}>
+          <div style={{ fontSize: 13 }}>
+            <span className="muted">Open balance to bill: </span>
+            <strong>{openBalance.toLocaleString(undefined, { style: "currency", currency: "USD" })}</strong>
+          </div>
+          <label style={{ display: "grid", gap: 4, fontSize: 13 }}>
+            <span>Memo (optional)</span>
+            <textarea
+              rows={3}
+              value={memo}
+              onChange={(e) => setMemo(e.target.value)}
+              placeholder="Please remit balance within 30 days."
+              style={{ padding: "8px 10px", border: "1px solid #cbd5e1", borderRadius: 6, fontFamily: "inherit" }}
+            />
+          </label>
+        </div>
+
+        <div style={{ marginTop: 16, display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button type="button" className="button button-secondary" onClick={onClose} disabled={busy}>Cancel</button>
+          <button
+            type="button"
+            className="button button-primary"
+            onClick={() => void submit()}
+            disabled={busy}
+          >
+            {busy ? "Generating…" : "Generate statement"}
           </button>
         </div>
       </div>

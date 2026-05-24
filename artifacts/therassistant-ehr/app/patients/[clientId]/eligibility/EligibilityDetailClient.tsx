@@ -433,9 +433,13 @@ export default function EligibilityDetailClient({ clientId }: { clientId: string
           <button
             type="button"
             className="button button-secondary"
-            onClick={() => { if (typeof window !== "undefined") window.print(); }}
+            onClick={() => {
+              if (typeof window === "undefined" || !selectedCheck) return;
+              const url = `/patients/${clientId}/eligibility/print?checkId=${encodeURIComponent(selectedCheck.id)}&organizationId=${encodeURIComponent(organizationId)}`;
+              window.open(url, "_blank", "noreferrer");
+            }}
             disabled={!selectedCheck}
-            title={selectedCheck ? "Print this eligibility check to PDF" : "No eligibility check to print"}
+            title={selectedCheck ? "Print this eligibility check as an appeal-ready report" : "No eligibility check to print"}
           >
             Print to PDF
           </button>

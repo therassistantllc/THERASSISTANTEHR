@@ -145,29 +145,36 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
       .eq("organization_id", organizationId)
       .eq("client_id", clientId)
       .is("archived_at", null)
-      .order("checked_at", { ascending: false })
-      .limit(25);
+      .order("checked_at", { ascending: false });
 
     if (checksError) {
       return NextResponse.json({ success: false, error: checksError.message }, { status: 422 });
     }
 
     const checkRows = (checks ?? []) as DbRow[];
-    const latestCheckId = checkRows[0]?.id ? String(checkRows[0].id) : null;
+    const checkIds = checkRows.map((row) => String(row.id)).filter(Boolean);
 
-    let latestSegments: DbRow[] = [];
-    if (latestCheckId) {
+    const segmentsByCheck = new Map<string, DbRow[]>();
+    if (checkIds.length > 0) {
       const { data: segs } = await supabase
         .from("eligibility_benefit_segments")
         .select(
-          "id, segment_index, category, benefit_information_code, benefit_description, coverage_level_code, service_type_code, plan_coverage_description, time_period_qualifier, monetary_amount, percent_amount, quantity_qualifier, quantity, authorization_or_certification_required, in_plan_network_indicator, is_in_network, is_remaining, benefit_tier, telemedicine_flag, message_text",
+          "eligibility_check_id, id, segment_index, category, benefit_information_code, benefit_description, coverage_level_code, service_type_code, plan_coverage_description, time_period_qualifier, monetary_amount, percent_amount, quantity_qualifier, quantity, authorization_or_certification_required, in_plan_network_indicator, is_in_network, is_remaining, benefit_tier, telemedicine_flag, message_text",
         )
-        .eq("eligibility_check_id", latestCheckId)
+        .in("eligibility_check_id", checkIds)
         .order("segment_index", { ascending: true });
-      latestSegments = (segs ?? []) as DbRow[];
+      for (const seg of (segs ?? []) as DbRow[]) {
+        const key = String(seg.eligibility_check_id ?? "");
+        if (!key) continue;
+        const arr = segmentsByCheck.get(key) ?? [];
+        arr.push(seg);
+        segmentsByCheck.set(key, arr);
+      }
     }
 
-    const checkDtos = checkRows.map((row, i) => eligibilityDto(row, i === 0 ? latestSegments : []));
+    const checkDtos = checkRows.map((row) =>
+      eligibilityDto(row, segmentsByCheck.get(String(row.id)) ?? []),
+    );
 
     return NextResponse.json({
       success: true,
