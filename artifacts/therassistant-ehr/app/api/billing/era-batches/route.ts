@@ -104,6 +104,106 @@ export async function GET(request: Request) {
     const includeArchivedParam = searchParams.get("includeArchived");
     const includeArchived = includeArchivedParam === "1" || includeArchivedParam === "true";
 
+    // Universal filter rail values that require joining era_claim_payments →
+    // professional_claims → claim_parties_snapshot → clients to be evaluated.
+    // We resolve them to a concrete set of batch ids first, then restrict the
+    // batches query, so paging/limit honors the filter rather than truncating
+    // pre-filter.
+    const patientFilter = searchParams.get("patient")?.trim() || null;
+    const clinicianFilter = searchParams.get("clinician")?.trim() || null;
+    const practiceFilter = searchParams.get("practice")?.trim() || null;
+    const dosFromFilter = searchParams.get("dosFrom") || null;
+    const dosToFilter = searchParams.get("dosTo") || null;
+    const hasJoinFilter = !!(
+      patientFilter ||
+      clinicianFilter ||
+      practiceFilter ||
+      dosFromFilter ||
+      dosToFilter
+    );
+
+    let restrictBatchIds: string[] | null = null;
+    if (hasJoinFilter) {
+      // Narrow professional_claims by DOS range / practice. The DOS filter is
+      // an overlap test against the claim's [from..to] service-date range so a
+      // multi-day claim straddling the window still matches.
+      let claimIdSet: Set<string> | null = null;
+      if (dosFromFilter || dosToFilter || practiceFilter) {
+        let q = supabase
+          .from("professional_claims")
+          .select("id")
+          .eq("organization_id", organizationId);
+        if (dosFromFilter) q = q.gte("date_of_service_to", dosFromFilter);
+        if (dosToFilter) q = q.lte("date_of_service_from", dosToFilter);
+        if (practiceFilter) q = q.ilike("place_of_service", `%${practiceFilter}%`);
+        const { data, error: claimErr } = await q.limit(10000);
+        if (claimErr) {
+          return NextResponse.json({ success: false, error: claimErr.message }, { status: 500 });
+        }
+        claimIdSet = new Set(((data ?? []) as Array<{ id: string }>).map((r) => r.id));
+      }
+
+      if (clinicianFilter) {
+        const needle = clinicianFilter.replace(/[%_]/g, "");
+        const { data, error: partyErr } = await supabase
+          .from("claim_parties_snapshot")
+          .select("claim_id")
+          .or(
+            `rendering_provider_first_name.ilike.%${needle}%,rendering_provider_last_name_or_org.ilike.%${needle}%`,
+          )
+          .limit(10000);
+        if (partyErr) {
+          return NextResponse.json({ success: false, error: partyErr.message }, { status: 500 });
+        }
+        const ids = new Set(((data ?? []) as Array<{ claim_id: string }>).map((r) => r.claim_id));
+        claimIdSet = claimIdSet
+          ? new Set([...claimIdSet].filter((id) => ids.has(id)))
+          : ids;
+      }
+
+      let clientIdSet: Set<string> | null = null;
+      if (patientFilter) {
+        const needle = patientFilter.replace(/[%_]/g, "");
+        const { data, error: clientErr } = await supabase
+          .from("clients")
+          .select("id")
+          .eq("organization_id", organizationId)
+          .or(`first_name.ilike.%${needle}%,last_name.ilike.%${needle}%`)
+          .limit(10000);
+        if (clientErr) {
+          return NextResponse.json({ success: false, error: clientErr.message }, { status: 500 });
+        }
+        clientIdSet = new Set(((data ?? []) as Array<{ id: string }>).map((r) => r.id));
+      }
+
+      if ((claimIdSet && claimIdSet.size === 0) || (clientIdSet && clientIdSet.size === 0)) {
+        restrictBatchIds = [];
+      } else {
+        let ecpQuery = supabase
+          .from("era_claim_payments")
+          .select("era_import_batch_id")
+          .eq("organization_id", organizationId)
+          .is("archived_at", null);
+        if (claimIdSet) ecpQuery = ecpQuery.in("professional_claim_id", Array.from(claimIdSet));
+        if (clientIdSet) ecpQuery = ecpQuery.in("client_id", Array.from(clientIdSet));
+        const { data: ecpRows, error: ecpErr } = await ecpQuery.limit(10000);
+        if (ecpErr) {
+          return NextResponse.json({ success: false, error: ecpErr.message }, { status: 500 });
+        }
+        restrictBatchIds = Array.from(
+          new Set(
+            ((ecpRows ?? []) as Array<{ era_import_batch_id: string }>).map(
+              (r) => r.era_import_batch_id,
+            ),
+          ),
+        );
+      }
+    }
+
+    if (restrictBatchIds !== null && restrictBatchIds.length === 0) {
+      return NextResponse.json({ success: true, organizationId, items: [] });
+    }
+
     let batchQuery = supabase
       .from("era_import_batches")
       .select(
@@ -114,6 +214,9 @@ export async function GET(request: Request) {
       .limit(200);
     if (!includeArchived) {
       batchQuery = batchQuery.is("archived_at", null);
+    }
+    if (restrictBatchIds !== null) {
+      batchQuery = batchQuery.in("id", restrictBatchIds);
     }
     const { data: batches, error } = await batchQuery;
 

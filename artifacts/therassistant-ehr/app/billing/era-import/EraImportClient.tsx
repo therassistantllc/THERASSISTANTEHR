@@ -247,10 +247,26 @@ export default function EraImportClient() {
   const [detailLoading, setDetailLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // The patient/clinician/practice/DOS filters require joining through
+  // era_claim_payments to professional_claims/clients, so we let the API do
+  // the join and refetch whenever any of them change. The remaining filters
+  // (payer, status, $ range, aging, …) stay client-side because they're
+  // already on the batch row.
+  const patientFilter = filterValues.client ?? "";
+  const clinicianFilter = filterValues.clinician ?? "";
+  const practiceFilter = filterValues.practice ?? "";
+  const dosFromFilter = filterValues.dosFrom ?? "";
+  const dosToFilter = filterValues.dosTo ?? "";
+
   // ── Load list (always include archived so the Duplicate tab is populated)
   useEffect(() => {
     setLoading(true);
     const qs = new URLSearchParams({ organizationId, includeArchived: "1" });
+    if (patientFilter.trim()) qs.set("patient", patientFilter.trim());
+    if (clinicianFilter.trim()) qs.set("clinician", clinicianFilter.trim());
+    if (practiceFilter.trim()) qs.set("practice", practiceFilter.trim());
+    if (dosFromFilter) qs.set("dosFrom", dosFromFilter);
+    if (dosToFilter) qs.set("dosTo", dosToFilter);
     fetch(`/api/billing/era-batches?${qs.toString()}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((json) => {
@@ -265,7 +281,15 @@ export default function EraImportClient() {
         setMessage({ tone: "error", text: e instanceof Error ? e.message : "Failed to load" }),
       )
       .finally(() => setLoading(false));
-  }, [organizationId, reloadKey]);
+  }, [
+    organizationId,
+    reloadKey,
+    patientFilter,
+    clinicianFilter,
+    practiceFilter,
+    dosFromFilter,
+    dosToFilter,
+  ]);
 
   // ── Load detail on selection
   useEffect(() => {
