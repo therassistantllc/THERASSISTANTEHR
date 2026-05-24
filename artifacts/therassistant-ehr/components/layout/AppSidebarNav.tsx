@@ -168,6 +168,15 @@ function EditIcon() {
   );
 }
 
+function DuplicateIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
 function CreditCardIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -262,6 +271,7 @@ export default function AppSidebarNav() {
           <SubNavLinkIcon href="/billing/claim-submission" icon={<SendIcon />} label="Denials" prefixes={["/billing/claim-submission"]} pathname={pathname} />
           <SubNavLinkIcon href="/billing/837p-batches" icon={<LayersIcon />} label="837P Batches" prefixes={["/billing/837p-batches", "/billing/batches"]} pathname={pathname} />
           <SubNavLinkIcon href="/billing/claim-edit-dashboard" icon={<EditIcon />} label="Rejections" prefixes={["/billing/claim-edit-dashboard"]} pathname={pathname} />
+          <SubNavLinkIcon href="/billing/duplicate-claim-review" icon={<DuplicateIcon />} label="Duplicate Review" prefixes={["/billing/duplicate-claim-review"]} pathname={pathname} />
           <SubNavLinkIcon href="/billing/payments" icon={<CreditCardIcon />} label="Payments" prefixes={["/billing/payments"]} pathname={pathname} />
         </div>
       ) : null}

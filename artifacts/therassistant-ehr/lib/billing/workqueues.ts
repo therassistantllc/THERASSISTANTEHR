@@ -108,9 +108,9 @@ export const WORKQUEUES: WorkqueueDef[] = [
     id: "duplicate_claim_review",
     title: "Duplicate Claim Review",
     description: "Potential duplicates blocked before submission so billers can confirm or merge.",
-    href: "/billing/duplicate-claims",
+    href: "/billing/duplicate-claim-review",
     stage: "pre_submission",
-    status: "coming_soon",
+    status: "live",
   },
 
   // ── Submission & Rejections ─────────────────────────────────────────────
