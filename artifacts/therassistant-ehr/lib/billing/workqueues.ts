@@ -9,6 +9,7 @@
  */
 
 export type WorkqueueStage =
+  | "executive"
   | "pre_submission"
   | "submission_rejections"
   | "adjudication_denials"
@@ -27,6 +28,7 @@ export interface WorkqueueDef {
 }
 
 export const WORKQUEUE_STAGES: Array<{ id: WorkqueueStage; label: string }> = [
+  { id: "executive", label: "Executive" },
   { id: "pre_submission", label: "Pre-submission" },
   { id: "submission_rejections", label: "Submission & Rejections" },
   { id: "adjudication_denials", label: "Adjudication & Denials" },
@@ -35,6 +37,16 @@ export const WORKQUEUE_STAGES: Array<{ id: WorkqueueStage; label: string }> = [
 ];
 
 export const WORKQUEUES: WorkqueueDef[] = [
+  // ── Executive ───────────────────────────────────────────────────────────
+  {
+    id: "executive_priority",
+    title: "Executive / Priority",
+    description: "High-level action list for owners and admins — the highest-impact claims across every stage.",
+    href: "/billing/executive-priority",
+    stage: "executive",
+    status: "live",
+  },
+
   // ── Pre-submission ──────────────────────────────────────────────────────
   {
     id: "charge_capture",
