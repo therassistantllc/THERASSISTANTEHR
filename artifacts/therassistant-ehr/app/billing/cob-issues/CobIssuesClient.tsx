@@ -568,6 +568,16 @@ export default function CobIssuesClient() {
         ),
       },
       {
+        id: "cob_evidence",
+        label: "Coordination of Benefits",
+        render: () => (
+          <CobEvidencePanel
+            claimId={row.id}
+            organizationId={organizationId}
+          />
+        ),
+      },
+      {
         id: "eligibility_cob",
         label: "Eligibility COB data",
         render: () => (
@@ -926,5 +936,241 @@ function ClientInsuranceHistory({
         ))}
       </tbody>
     </table>
+  );
+}
+
+type CobSignalRow = {
+  id: string;
+  signal_type: string;
+  other_payer_name: string | null;
+  other_payer_id: string | null;
+  other_payer_paid_amount: number | null;
+  source_segment: string | null;
+  era_claim_payment_id: string | null;
+  created_at: string | null;
+};
+
+type CobEligibilityOtherPayer = {
+  name: string | null;
+  payer_id: string | null;
+  effective_date: string | null;
+  termination_date: string | null;
+};
+
+type CobEvidencePayload = {
+  success?: boolean;
+  error?: string;
+  signals?: CobSignalRow[];
+  eligibility?: {
+    check_id: string | null;
+    checked_at: string | null;
+    payer_name: string | null;
+    other_payers: CobEligibilityOtherPayer[];
+  } | null;
+};
+
+function signalLabel(t: string): string {
+  switch (t) {
+    case "co_22":
+      return "CO-22 (covered by another payer)";
+    case "other_payer_paid":
+      return "Other payer paid (MOA)";
+    case "other_payer_eligibility":
+      return "271 other-payer eligibility";
+    default:
+      return t || "Unknown";
+  }
+}
+
+function CobEvidencePanel({
+  claimId,
+  organizationId,
+}: {
+  claimId: string;
+  organizationId: string;
+}) {
+  const [data, setData] = useState<CobEvidencePayload | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function go() {
+      setLoading(true);
+      setErr(null);
+      try {
+        const params = new URLSearchParams({ organizationId });
+        const res = await fetch(
+          `/api/billing/cob-issues/${encodeURIComponent(claimId)}/signals?${params.toString()}`,
+          { cache: "no-store" },
+        );
+        const json = (await res.json().catch(() => ({}))) as CobEvidencePayload;
+        if (!res.ok || !json.success)
+          throw new Error(json.error ?? "Failed to load");
+        if (!cancelled) setData(json);
+      } catch (e) {
+        if (!cancelled)
+          setErr(e instanceof Error ? e.message : "Failed to load");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    void go();
+    return () => {
+      cancelled = true;
+    };
+  }, [claimId, organizationId]);
+
+  if (loading) return <p style={{ fontSize: 13 }}>Loading…</p>;
+  if (err) return <p style={{ fontSize: 13, color: "#991b1b" }}>{err}</p>;
+
+  const signals = data?.signals ?? [];
+  const eligibility = data?.eligibility ?? null;
+  const elig = eligibility?.other_payers ?? [];
+
+  if (signals.length === 0 && elig.length === 0) {
+    return (
+      <p style={{ fontSize: 13, color: "#64748b" }}>
+        No coordination-of-benefits evidence has been received on this claim
+        yet — no CO-22 / MOA signals from 835s, and no other-payer entries on
+        the client&apos;s most-recent 271 response.
+      </p>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <section>
+        <h4 style={{ margin: "0 0 6px", fontSize: 13 }}>
+          835 remittance signals
+        </h4>
+        {signals.length === 0 ? (
+          <p style={{ fontSize: 12, color: "#64748b", margin: 0 }}>
+            No 835 CO-22 or MOA other-payer-paid signals recorded for this
+            claim.
+          </p>
+        ) : (
+          <table
+            style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}
+          >
+            <thead>
+              <tr style={{ textAlign: "left", color: "#475569" }}>
+                <th style={{ padding: "4px 6px" }}>Signal</th>
+                <th style={{ padding: "4px 6px" }}>Other payer</th>
+                <th style={{ padding: "4px 6px" }}>Paid</th>
+                <th style={{ padding: "4px 6px" }}>Source segment</th>
+                <th style={{ padding: "4px 6px" }}>Received</th>
+              </tr>
+            </thead>
+            <tbody>
+              {signals.map((s) => (
+                <tr key={s.id} style={{ borderTop: "1px solid #e2e8f0" }}>
+                  <td style={{ padding: "4px 6px", whiteSpace: "nowrap" }}>
+                    {signalLabel(s.signal_type)}
+                  </td>
+                  <td style={{ padding: "4px 6px" }}>
+                    {s.other_payer_name ?? "—"}
+                    {s.other_payer_id ? (
+                      <span style={{ color: "#64748b" }}>
+                        {" "}
+                        · ID {s.other_payer_id}
+                      </span>
+                    ) : null}
+                  </td>
+                  <td style={{ padding: "4px 6px" }}>
+                    {s.other_payer_paid_amount == null
+                      ? "—"
+                      : formatMoney(s.other_payer_paid_amount)}
+                  </td>
+                  <td
+                    style={{
+                      padding: "4px 6px",
+                      fontFamily: "monospace",
+                      color: "#475569",
+                    }}
+                  >
+                    {s.source_segment ?? "—"}
+                  </td>
+                  <td style={{ padding: "4px 6px" }}>
+                    {s.created_at ? formatDate(s.created_at) : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      <section>
+        <h4 style={{ margin: "0 0 6px", fontSize: 13 }}>
+          271 other-payer evidence
+        </h4>
+        {!eligibility || elig.length === 0 ? (
+          <p style={{ fontSize: 12, color: "#64748b", margin: 0 }}>
+            No additional payers were reported on the most-recent 271 response
+            for this client.
+          </p>
+        ) : (
+          <div>
+            <p
+              style={{
+                fontSize: 12,
+                color: "#475569",
+                margin: "0 0 6px",
+              }}
+            >
+              From 271 sent to{" "}
+              <strong>{eligibility.payer_name ?? "Unknown payer"}</strong>
+              {eligibility.checked_at
+                ? ` on ${formatDate(eligibility.checked_at)}`
+                : ""}
+              :
+            </p>
+            <table
+              style={{
+                width: "100%",
+                fontSize: 12,
+                borderCollapse: "collapse",
+              }}
+            >
+              <thead>
+                <tr style={{ textAlign: "left", color: "#475569" }}>
+                  <th style={{ padding: "4px 6px" }}>Other payer</th>
+                  <th style={{ padding: "4px 6px" }}>Payer ID</th>
+                  <th style={{ padding: "4px 6px" }}>Effective</th>
+                  <th style={{ padding: "4px 6px" }}>Termed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {elig.map((p, i) => (
+                  <tr
+                    key={`${p.payer_id ?? ""}-${p.name ?? ""}-${i}`}
+                    style={{ borderTop: "1px solid #e2e8f0" }}
+                  >
+                    <td style={{ padding: "4px 6px" }}>{p.name ?? "—"}</td>
+                    <td
+                      style={{
+                        padding: "4px 6px",
+                        fontFamily: "monospace",
+                      }}
+                    >
+                      {p.payer_id ?? "—"}
+                    </td>
+                    <td style={{ padding: "4px 6px" }}>
+                      {p.effective_date ? formatDate(p.effective_date) : "—"}
+                    </td>
+                    <td style={{ padding: "4px 6px" }}>
+                      {p.termination_date
+                        ? formatDate(p.termination_date)
+                        : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
