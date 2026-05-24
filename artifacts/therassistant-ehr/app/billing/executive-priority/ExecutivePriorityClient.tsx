@@ -338,14 +338,17 @@ export default function ExecutivePriorityClient() {
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(
-    async (nextTab: ExecutiveTab) => {
+    async (nextTab: ExecutiveTab, nextFilters: Record<string, string>) => {
       setLoading(true);
       try {
-        const res = await fetch(
-          `/api/billing/executive-priority?organizationId=${encodeURIComponent(
-            organizationId,
-          )}&tab=${nextTab}`,
-        );
+        const params = new URLSearchParams();
+        params.set("organizationId", organizationId);
+        params.set("tab", nextTab);
+        for (const [k, v] of Object.entries(nextFilters)) {
+          const t = String(v ?? "").trim();
+          if (t) params.set(k, t);
+        }
+        const res = await fetch(`/api/billing/executive-priority?${params.toString()}`);
         const json: ApiResponse = await res.json();
         if (!res.ok || json.success === false) {
           throw new Error(json.error || "Failed to load");
@@ -367,56 +370,16 @@ export default function ExecutivePriorityClient() {
     [organizationId],
   );
 
+  // Re-fetch on tab OR filter change so the universal filter rail is
+  // honored server-side (no client-side filtering of a truncated window).
   useEffect(() => {
-    void load(tab);
-  }, [tab, load]);
+    void load(tab, filterValues);
+  }, [tab, filterValues, load]);
 
-  // ─── Client-side filtering on top of server tab ──────────────────────────
-  const filteredRows = useMemo(() => {
-    const f = filterValues;
-    const minAmount = f.minAmount ? Number(f.minAmount) : null;
-    const maxAmount = f.maxAmount ? Number(f.maxAmount) : null;
-    const dosFrom = f.dosFrom || null;
-    const dosTo = f.dosTo || null;
-    return rows.filter((r) => {
-      if (f.practice && !r.practiceName.toLowerCase().includes(f.practice.toLowerCase())) return false;
-      if (f.clinician && r.assignedToName && !r.assignedToName.toLowerCase().includes(f.clinician.toLowerCase())) return false;
-      if (f.payer && r.payerName !== f.payer) return false;
-      if (f.client && r.clientName !== f.client) return false;
-      if (dosFrom && (!r.serviceDateFrom || r.serviceDateFrom < dosFrom)) return false;
-      if (dosTo && (!r.serviceDateFrom || r.serviceDateFrom > dosTo)) return false;
-      if (f.status && r.claimStatus !== f.status) return false;
-      if (f.assignedBiller) {
-        if (f.assignedBiller === "__unassigned__") {
-          if (r.assignedToId) return false;
-        } else if (r.assignedToId !== f.assignedBiller) return false;
-      }
-      if (minAmount !== null && r.balance < minAmount) return false;
-      if (maxAmount !== null && r.balance > maxAmount) return false;
-      if (f.agingBucket) {
-        const a = r.ageDays ?? 0;
-        const ok =
-          (f.agingBucket === "0_30" && a <= 30) ||
-          (f.agingBucket === "31_60" && a > 30 && a <= 60) ||
-          (f.agingBucket === "61_90" && a > 60 && a <= 90) ||
-          (f.agingBucket === "91_120" && a > 90 && a <= 120) ||
-          (f.agingBucket === "120_plus" && a > 120);
-        if (!ok) return false;
-      }
-      if (f.carcRarc) {
-        const needle = f.carcRarc.toUpperCase();
-        const hay = `${r.carcCode ?? ""} ${r.rarcCode ?? ""}`.toUpperCase();
-        if (!hay.includes(needle)) return false;
-      }
-      if (f.priority && r.priority !== f.priority) return false;
-      if (f.followUpDue) {
-        if (!r.dueDate || r.dueDate > f.followUpDue) return false;
-      }
-      return true;
-    });
-  }, [rows, filterValues]);
+  // The server already filters + sorts + tab-cuts; show its rows directly.
+  const filteredRows = rows;
 
-  // Derive header metrics from the *filtered* view so the strip stays honest.
+  // Derive header metrics from the visible rows so the strip stays honest.
   const summary: SummaryMetric[] = useMemo(() => {
     const totalDollars = filteredRows.reduce((s, r) => s + r.balance, 0);
     const oldest = filteredRows.reduce<number>(
@@ -616,7 +579,7 @@ export default function ExecutivePriorityClient() {
   // Header-level export so it's reachable even with no row selected.
   const headerActions: PrimaryAction[] = useMemo(
     () => [
-      { id: "refresh", label: "Refresh", onClick: () => void load(tab) },
+      { id: "refresh", label: "Refresh", onClick: () => void load(tab, filterValues) },
       {
         id: "export",
         label: "Export list",
@@ -624,7 +587,7 @@ export default function ExecutivePriorityClient() {
         disabled: filteredRows.length === 0,
       },
     ],
-    [load, tab, filteredRows, exportList],
+    [load, tab, filterValues, filteredRows, exportList],
   );
 
   // ─── Detail panel sections (exact spec labels) ───────────────────────────

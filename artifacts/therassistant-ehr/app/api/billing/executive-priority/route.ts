@@ -167,6 +167,102 @@ function deriveRecommendedAction(claim: DbRow, wq: DbRow | undefined): string {
   return "Assign to a biller and add an executive note with the next concrete step.";
 }
 
+interface ServerFilters {
+  practice?: string;
+  clinician?: string;
+  payer?: string;
+  client?: string;
+  dosFrom?: string;
+  dosTo?: string;
+  status?: string;
+  assignedBiller?: string; // staff_profiles.id OR "__unassigned__"
+  minAmount?: number;
+  maxAmount?: number;
+  agingBucket?: "0_30" | "31_60" | "61_90" | "91_120" | "120_plus";
+  carcRarc?: string;
+  priority?: Priority;
+  followUpDue?: string; // ISO date — keep rows with due_date <= followUpDue
+}
+
+type Priority = "low" | "normal" | "high" | "urgent";
+
+function applyFilters(rows: ExecutiveRow[], f: ServerFilters): ExecutiveRow[] {
+  return rows.filter((r) => {
+    if (f.practice && !r.practiceName.toLowerCase().includes(f.practice.toLowerCase())) return false;
+    if (f.clinician) {
+      const name = (r.assignedToName ?? "").toLowerCase();
+      if (!name || !name.includes(f.clinician.toLowerCase())) return false;
+    }
+    if (f.payer && r.payerName !== f.payer) return false;
+    if (f.client && r.clientName !== f.client) return false;
+    if (f.dosFrom && (!r.serviceDateFrom || r.serviceDateFrom < f.dosFrom)) return false;
+    if (f.dosTo && (!r.serviceDateFrom || r.serviceDateFrom > f.dosTo)) return false;
+    if (f.status && r.claimStatus !== f.status) return false;
+    if (f.assignedBiller) {
+      if (f.assignedBiller === "__unassigned__") {
+        if (r.assignedToId) return false;
+      } else if (r.assignedToId !== f.assignedBiller) return false;
+    }
+    if (typeof f.minAmount === "number" && r.balance < f.minAmount) return false;
+    if (typeof f.maxAmount === "number" && r.balance > f.maxAmount) return false;
+    if (f.agingBucket) {
+      const a = r.ageDays ?? 0;
+      const ok =
+        (f.agingBucket === "0_30" && a <= 30) ||
+        (f.agingBucket === "31_60" && a > 30 && a <= 60) ||
+        (f.agingBucket === "61_90" && a > 60 && a <= 90) ||
+        (f.agingBucket === "91_120" && a > 90 && a <= 120) ||
+        (f.agingBucket === "120_plus" && a > 120);
+      if (!ok) return false;
+    }
+    if (f.carcRarc) {
+      const needle = f.carcRarc.toUpperCase();
+      const hay = `${r.carcCode ?? ""} ${r.rarcCode ?? ""}`.toUpperCase();
+      if (!hay.includes(needle)) return false;
+    }
+    if (f.priority && r.priority !== f.priority) return false;
+    if (f.followUpDue) {
+      if (!r.dueDate || r.dueDate > f.followUpDue) return false;
+    }
+    return true;
+  });
+}
+
+function parseServerFilters(sp: URLSearchParams): ServerFilters {
+  const out: ServerFilters = {};
+  const s = (k: string) => {
+    const v = sp.get(k);
+    return v ? text(v) : undefined;
+  };
+  const n = (k: string) => {
+    const v = sp.get(k);
+    if (!v) return undefined;
+    const num = Number(v);
+    return Number.isFinite(num) ? num : undefined;
+  };
+  out.practice = s("practice");
+  out.clinician = s("clinician");
+  out.payer = s("payer");
+  out.client = s("client");
+  out.dosFrom = s("dosFrom");
+  out.dosTo = s("dosTo");
+  out.status = s("status");
+  out.assignedBiller = s("assignedBiller");
+  out.minAmount = n("minAmount");
+  out.maxAmount = n("maxAmount");
+  const ab = s("agingBucket");
+  if (ab && ["0_30", "31_60", "61_90", "91_120", "120_plus"].includes(ab)) {
+    out.agingBucket = ab as ServerFilters["agingBucket"];
+  }
+  out.carcRarc = s("carcRarc");
+  const pr = s("priority");
+  if (pr && ["low", "normal", "high", "urgent"].includes(pr)) {
+    out.priority = pr as Priority;
+  }
+  out.followUpDue = s("followUpDue");
+  return out;
+}
+
 function applyTab(rows: ExecutiveRow[], tab: ExecutiveTab): ExecutiveRow[] {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -228,6 +324,7 @@ export async function GET(request: Request) {
     const tab: ExecutiveTab = (VALID_TABS as string[]).includes(rawTab)
       ? (rawTab as ExecutiveTab)
       : "high_dollar";
+    const serverFilters = parseServerFilters(searchParams);
 
     // Pull every claim that could plausibly need executive attention. We
     // exclude already-closed claims (paid, voided) and drafts, plus
@@ -243,7 +340,7 @@ export async function GET(request: Request) {
       .not("claim_status", "in", "(paid,voided,draft)")
       .or(`defer_until.is.null,defer_until.lte.${today}`)
       .order("updated_at", { ascending: false })
-      .limit(500);
+      .limit(5000);
 
     if (claimsErr) throw claimsErr;
 
@@ -460,7 +557,11 @@ export async function GET(request: Request) {
       };
     });
 
-    const tabRows = applyTab(allRows, tab);
+    // Apply the universal filter rail server-side BEFORE the tab cut so
+    // the user sees a complete, trustworthy result set (no client-side
+    // filtering of a truncated window).
+    const filteredRows = applyFilters(allRows, serverFilters);
+    const tabRows = applyTab(filteredRows, tab);
 
     // Header metrics — over the active tab so the strip reflects what
     // the user is looking at.
