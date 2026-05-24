@@ -305,6 +305,20 @@ export default function CasesPanel({
       const newCaseId: string | undefined = caseJson.case?.id;
       if (!newCaseId) throw new Error("Case created but id missing");
 
+      // Rollback helper: if the policy create or attach fails, archive the
+      // case we just made so the user doesn't end up with an empty
+      // "Insurance" case sitting on their chart.
+      const rollbackCase = async () => {
+        try {
+          await fetch(
+            `/api/clients/${clientId}/cases/${newCaseId}${orgQ}`,
+            { method: "DELETE" },
+          );
+        } catch {
+          /* best-effort */
+        }
+      };
+
       const createRes = await fetch(`/api/clients/${clientId}/policies`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -312,6 +326,7 @@ export default function CasesPanel({
       });
       const createJson = await createRes.json().catch(() => ({}));
       if (!createRes.ok || !createJson.success) {
+        await rollbackCase();
         throw new Error(createJson.error ?? "Failed to create insurance policy");
       }
       const attachRes = await fetch(`/api/clients/${clientId}/cases/${newCaseId}/policies`, {
@@ -321,6 +336,7 @@ export default function CasesPanel({
       });
       const attachJson = await attachRes.json().catch(() => ({}));
       if (!attachRes.ok || !attachJson.success) {
+        await rollbackCase();
         await load();
         onMutate?.();
         throw new Error(
