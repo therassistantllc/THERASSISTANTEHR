@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
-import { enforceOrganizationInRoute, requireAuthentication } from "@/lib/rbac/middleware";
 
 import { requireOrgAccess } from "@/lib/auth/requireOrgAccess";
 type Row = Record<string, unknown>;
@@ -69,20 +68,17 @@ function deriveEligibilityState(latest: Row | null | undefined): {
 
 export async function POST(request: Request) {
   try {
-    const authOrError = await requireAuthentication();
-    if (authOrError instanceof NextResponse) return authOrError;
-    const { organizationId: userOrganizationId, staffId } = authOrError;
-
-    const supabase = createServerSupabaseAdminClient();
-    if (!supabase) return NextResponse.json({ success: false, error: "Database connection not available" }, { status: 500 });
-
     const payload = (await request.json().catch(() => null)) as Row | null;
     if (!payload) return NextResponse.json({ success: false, error: "Invalid JSON body" }, { status: 400 });
 
-    const requestedOrganizationId = value(payload.organizationId) || userOrganizationId;
-    const orgMismatch = enforceOrganizationInRoute(requestedOrganizationId, userOrganizationId);
-    if (orgMismatch) return orgMismatch;
-    const organizationId = userOrganizationId;
+    const guard = await requireOrgAccess({
+      requestedOrganizationId: value(payload.organizationId) || null,
+    });
+    if (guard instanceof NextResponse) return guard;
+    const { organizationId, staffId } = guard;
+
+    const supabase = createServerSupabaseAdminClient();
+    if (!supabase) return NextResponse.json({ success: false, error: "Database connection not available" }, { status: 500 });
 
     const firstName = value(payload.firstName);
     const lastName = value(payload.lastName);
@@ -143,8 +139,8 @@ export async function POST(request: Request) {
       postal_code: postalCode || null,
       emergency_contact_name: emergencyContactName || null,
       emergency_contact_phone: emergencyContactPhone || null,
-      created_by_user_id: staffId,
-      updated_by_user_id: staffId,
+      created_by_user_id: staffId ?? null,
+      updated_by_user_id: staffId ?? null,
     };
 
     let { data: inserted, error } = await supabase
