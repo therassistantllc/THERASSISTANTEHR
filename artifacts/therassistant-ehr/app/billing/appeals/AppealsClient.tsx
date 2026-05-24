@@ -49,6 +49,7 @@ interface Row {
   letterBody: string;
   templateId: string | null;
   attachmentsCount: number;
+  submissionChannel: string | null;
   noteCount: number;
   claimStatus: string;
   claimUpdatedAt: string | null;
@@ -367,6 +368,160 @@ function ResolveModal({
   );
 }
 
+function SubmitAppealModal({
+  row, organizationId, onClose, onDone,
+}: {
+  row: Row; organizationId: string;
+  onClose: () => void; onDone: (patch: Partial<Row>, msg: string) => void;
+}) {
+  const hasFax = Boolean(row.payerFaxNumber);
+  const [channel, setChannel] = useState<"fax" | "portal" | "mail">(
+    hasFax ? "fax" : "portal",
+  );
+  const [faxNumber, setFaxNumber] = useState<string>(row.payerFaxNumber ?? "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [portalAck, setPortalAck] = useState(false);
+  const [mailAck, setMailAck] = useState(false);
+
+  const canSubmit =
+    !busy &&
+    (channel === "fax"
+      ? faxNumber.trim().length > 0
+      : channel === "portal"
+        ? portalAck
+        : mailAck);
+
+  return (
+    <ModalShell title={`Submit appeal — ${row.claimNumber}`} onClose={onClose} width={520}>
+      <p style={{ color: "#64748B", fontSize: 13, margin: "0 0 12px" }}>
+        {row.payerName} · denied {formatCurrency(row.deniedAmount)} · L{row.appealLevel}
+      </p>
+
+      <label style={fieldLabel}>How are you sending this appeal?</label>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+          <input
+            type="radio"
+            name="appeal-channel"
+            checked={channel === "fax"}
+            onChange={() => setChannel("fax")}
+          />
+          <span>
+            Fax to payer
+            {hasFax ? (
+              <span style={{ color: "#64748B" }}> — on file: {row.payerFaxNumber}</span>
+            ) : (
+              <span style={{ color: "#B45309" }}> — no fax on payer profile</span>
+            )}
+          </span>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+          <input
+            type="radio"
+            name="appeal-channel"
+            checked={channel === "portal"}
+            onChange={() => setChannel("portal")}
+          />
+          <span>Submitted via payer portal (already filed outside the system)</span>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+          <input
+            type="radio"
+            name="appeal-channel"
+            checked={channel === "mail"}
+            onChange={() => setChannel("mail")}
+          />
+          <span>Mailed paper appeal</span>
+        </label>
+      </div>
+
+      {channel === "fax" ? (
+        <>
+          <label style={fieldLabel}>Fax number</label>
+          <input
+            type="text"
+            style={fieldInput}
+            value={faxNumber}
+            onChange={(e) => setFaxNumber(e.target.value)}
+            placeholder="e.g. 1-800-555-1212"
+          />
+          <p style={{ color: "#64748B", fontSize: 12, marginTop: 6 }}>
+            Queues the letter to the outbound fax pipeline and marks the appeal sent.
+          </p>
+        </>
+      ) : null}
+
+      {channel === "portal" ? (
+        <label style={{ display: "flex", gap: 8, fontSize: 13, alignItems: "flex-start", marginTop: 4 }}>
+          <input
+            type="checkbox"
+            checked={portalAck}
+            onChange={(e) => setPortalAck(e.target.checked)}
+            style={{ marginTop: 3 }}
+          />
+          <span>
+            I confirm this appeal has been filed via the {row.payerName} payer portal.
+            Logging it here marks status <strong>Sent</strong> and stamps the channel.
+          </span>
+        </label>
+      ) : null}
+
+      {channel === "mail" ? (
+        <label style={{ display: "flex", gap: 8, fontSize: 13, alignItems: "flex-start", marginTop: 4 }}>
+          <input
+            type="checkbox"
+            checked={mailAck}
+            onChange={(e) => setMailAck(e.target.checked)}
+            style={{ marginTop: 3 }}
+          />
+          <span>
+            I confirm the printed appeal packet has been put in the mail to {row.payerName}.
+          </span>
+        </label>
+      ) : null}
+
+      {err ? <div style={{ color: "#B91C1C", fontSize: 12, marginTop: 8 }}>{err}</div> : null}
+      <div style={btnRow}>
+        <button type="button" style={secondaryBtn} onClick={onClose} disabled={busy}>Cancel</button>
+        <button
+          type="button"
+          style={primaryBtn}
+          disabled={!canSubmit}
+          onClick={async () => {
+            setBusy(true); setErr(null);
+            const r = await callAction({
+              action: "submit",
+              organizationId,
+              claimId: row.claimId,
+              channel,
+              faxNumber: channel === "fax" ? faxNumber.trim() : undefined,
+            });
+            setBusy(false);
+            if (!r.success) { setErr(r.error ?? "Submit failed"); return; }
+            const msg =
+              channel === "fax"
+                ? `Appeal queued to fax ${faxNumber.trim()}`
+                : channel === "portal"
+                  ? "Appeal marked submitted via portal"
+                  : "Appeal marked submitted via mail";
+            onDone(r.patch ?? {}, msg);
+            onClose();
+          }}
+        >
+          {busy
+            ? "Submitting…"
+            : channel === "fax"
+              ? "Queue fax & mark sent"
+              : channel === "portal"
+                ? "Mark submitted via portal"
+                : "Mark submitted via mail"}
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
+
 function AttachModal({
   row, organizationId, onClose, onDone,
 }: {
@@ -443,6 +598,7 @@ export default function AppealsClient() {
   const [assignRow, setAssignRow] = useState<Row | null>(null);
   const [resolveRow, setResolveRow] = useState<Row | null>(null);
   const [attachRow, setAttachRow] = useState<Row | null>(null);
+  const [submitRow, setSubmitRow] = useState<Row | null>(null);
 
   const load = useCallback(async () => {
     if (!organizationId) return;
@@ -479,11 +635,8 @@ export default function AppealsClient() {
     setRows((prev) => prev.map((r) => (r.claimId === claimId ? { ...r, ...patch } : r)));
   }
 
-  async function runSubmit(row: Row) {
-    const r = await callAction({ action: "submit", organizationId, claimId: row.claimId });
-    if (!r.success) { setToast(r.error ?? "Submit failed"); return; }
-    patchByClaim(row.claimId, r.patch ?? {});
-    setToast("Appeal submitted");
+  function runSubmit(row: Row) {
+    setSubmitRow(row);
   }
   async function runTrack(row: Row) {
     const r = await callAction({ action: "track", organizationId, claimId: row.claimId });
@@ -707,6 +860,15 @@ export default function AppealsClient() {
             <DetailKV label="Appeal status" value={selectedRow.appealStatusLabel} />
             <DetailKV label="Appeal deadline" value={formatDate(selectedRow.appealDeadline)} />
             <DetailKV label="Submitted" value={formatDate(selectedRow.appealSubmittedAt)} />
+            <DetailKV
+              label="Submitted via"
+              value={
+                selectedRow.submissionChannel === "fax" ? "Fax"
+                : selectedRow.submissionChannel === "portal" ? "Payer portal"
+                : selectedRow.submissionChannel === "mail" ? "Mail"
+                : "—"
+              }
+            />
             <DetailKV label="Decision" value={selectedRow.appealDecision || "—"} />
           </div>
         );
@@ -961,6 +1123,14 @@ export default function AppealsClient() {
           organizationId={organizationId}
           onClose={() => setAttachRow(null)}
           onDone={(patch, msg) => { patchByClaim(attachRow.claimId, patch); setToast(msg); }}
+        />
+      ) : null}
+      {submitRow ? (
+        <SubmitAppealModal
+          row={submitRow}
+          organizationId={organizationId}
+          onClose={() => setSubmitRow(null)}
+          onDone={(patch, msg) => { patchByClaim(submitRow.claimId, patch); setToast(msg); }}
         />
       ) : null}
       {toast ? <Toast message={toast} onClose={() => setToast(null)} /> : null}

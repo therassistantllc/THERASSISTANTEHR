@@ -337,6 +337,7 @@ export async function GET(request: Request) {
       letterBody: string;
       templateId: string | null;
       attachmentsCount: number;
+      submissionChannel: string | null;
       noteCount: number;
       claimStatus: string;
       claimUpdatedAt: string | null;
@@ -457,6 +458,7 @@ export async function GET(request: Request) {
         letterBody: appeal ? (text(appeal.letter_body) || "") : "",
         templateId: appeal ? (text(appeal.template_id) || null) : null,
         attachmentsCount: appeal ? Number(appeal.attachments_count ?? 0) : 0,
+        submissionChannel: appeal ? (text(appeal.submission_channel) || null) : null,
         noteCount: (notesByClaim.get(claimId) ?? []).length,
         claimStatus: text(claim.claim_status),
         claimUpdatedAt: claimUpdated,

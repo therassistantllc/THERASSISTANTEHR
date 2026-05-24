@@ -137,9 +137,17 @@ function buildRowPatch(appeal: DbRow, extras: Partial<DbRow> = {}) {
     letterBody: text(appeal.letter_body) || "",
     templateId: text(appeal.template_id) || null,
     attachmentsCount: Number(appeal.attachments_count ?? 0),
+    submissionChannel: text(appeal.submission_channel) || null,
     ...extras,
   };
 }
+
+const SUBMISSION_CHANNELS = new Set(["fax", "portal", "mail"]);
+const CHANNEL_LABEL: Record<string, string> = {
+  fax: "fax",
+  portal: "payer portal",
+  mail: "mail",
+};
 
 export async function POST(request: Request) {
   try {
@@ -250,6 +258,15 @@ export async function POST(request: Request) {
 
     // ── submit ─────────────────────────────────────────────────────────────
     if (action === "submit") {
+      const channelRaw = text(body.channel).toLowerCase();
+      if (!SUBMISSION_CHANNELS.has(channelRaw)) {
+        return NextResponse.json(
+          { success: false, error: "channel must be one of: fax, portal, mail" },
+          { status: 400 },
+        );
+      }
+      const channel = channelRaw as "fax" | "portal" | "mail";
+
       const existing = await loadOrCreateAppeal(supabase as any, {
         organizationId,
         claimId,
@@ -261,11 +278,54 @@ export async function POST(request: Request) {
           { status: 400 },
         );
       }
+
+      // For fax submissions we actually queue the fax via the same
+      // public.fax_queue table the denials workqueue uses. Other
+      // channels (portal/mail) only record the intent — the human
+      // performed the action outside the system.
+      let faxQueueId: string | null = null;
+      if (channel === "fax") {
+        const toFaxNumber = text(body.faxNumber);
+        if (!toFaxNumber) {
+          return NextResponse.json(
+            { success: false, error: "faxNumber is required when channel='fax'" },
+            { status: 400 },
+          );
+        }
+        // Pull payer id for the fax_queue row so the fax pipeline can
+        // group / report by payer.
+        const { data: claimRow } = await (supabase as any)
+          .from("professional_claims")
+          .select("payer_profile_id, claim_number")
+          .eq("organization_id", organizationId)
+          .eq("id", claimId)
+          .maybeSingle();
+        const subject = text(body.subject)
+          || `Appeal — claim ${text((claimRow as DbRow)?.claim_number) || claimId.slice(0, 8)} (L${Number(existing.level ?? 1)})`;
+        const { data: faxRow, error: faxErr } = await (supabase as any)
+          .from("fax_queue")
+          .insert({
+            organization_id: organizationId,
+            claim_id: claimId,
+            payer_id: text((claimRow as DbRow)?.payer_profile_id) || null,
+            to_fax_number: toFaxNumber,
+            subject,
+            body: text(existing.letter_body),
+            status: "pending",
+            created_by_user_id: userId,
+          })
+          .select("id")
+          .single();
+        if (faxErr) throw faxErr;
+        faxQueueId = text((faxRow as DbRow)?.id) || null;
+      }
+
       const { data: updated, error } = await (supabase as any)
         .from("claim_appeals")
         .update({
           status: "sent",
           submitted_at: now,
+          submission_channel: channel,
           updated_at: now,
         })
         .eq("organization_id", organizationId)
@@ -273,16 +333,26 @@ export async function POST(request: Request) {
         .select("*")
         .single();
       if (error) throw error;
+
+      const channelLabel = CHANNEL_LABEL[channel];
+      const noteSuffix =
+        channel === "fax"
+          ? ` Queued fax to ${text(body.faxNumber)}${faxQueueId ? ` (fax_queue ${faxQueueId.slice(0, 8)})` : ""}.`
+          : channel === "portal"
+            ? " Marked submitted via payer portal."
+            : " Marked submitted via mail.";
       await addClaimNote(supabase as any, {
         organizationId,
         claimId,
-        body: `Appeal submitted to payer (level ${Number(existing.level ?? 1)}).`,
+        body: `Appeal submitted to payer via ${channelLabel} (level ${Number(existing.level ?? 1)}).${noteSuffix}`,
         userId,
         authorDisplayName: authorDisplay,
       });
       return NextResponse.json({
         success: true,
         patch: buildRowPatch(updated as DbRow),
+        faxQueueId,
+        channel,
       });
     }
 
