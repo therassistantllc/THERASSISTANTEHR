@@ -326,6 +326,7 @@ function PayerRuleModal({
           rarcCode: group.rarcCode,
           carcCode: group.relatedCarc,
           rule: ruleNote.trim(),
+          recommendedAction: group.recommendedAction || null,
           claimIds: group.claims.map((c) => c.claimId),
         }),
       });
