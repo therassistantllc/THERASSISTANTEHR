@@ -1,13 +1,22 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireBillingAccess } from "@/lib/billing/requireBillingAccess";
+import { rebuild837PBatchFile } from "@/lib/claims/rebuild837PBatchFile";
 
 const REBUILDABLE = new Set(["draft", "ready_to_generate", "generated", "rejected", "failed"]);
 
 /**
- * Resets a batch back to "ready_to_generate" so the spec-compliant 837P
- * generator can rebuild its content. Clears any stale generated file,
- * submission error, and submission attempt counters. Does NOT detach claims.
+ * Rebuilds a batch's 837P file end-to-end:
+ *   1. Verify the batch is in a rebuildable status.
+ *   2. Reset submission-side metadata (attempt counters, idempotency key,
+ *      timestamps) so the next submit is treated as a fresh attempt.
+ *   3. Re-run the spec-compliant Availity 837P generator over the batch's
+ *      currently-linked professional claims and persist the new file
+ *      content/name with batch_status='generated'.
+ *
+ * Generator validation errors surface as 422 with a user-readable message;
+ * the batch is left in 'ready_to_generate' so the operator can fix the
+ * underlying claim(s) and try again.
  */
 export async function POST(request: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
@@ -39,7 +48,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     }
 
     const now = new Date().toISOString();
-    const { error: updateErr } = await supabase
+    const { error: resetErr } = await supabase
       .from("claim_837p_batches")
       .update({
         batch_status: "ready_to_generate",
@@ -56,9 +65,28 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       })
       .eq("id", id)
       .eq("organization_id", organizationId);
+    if (resetErr) return NextResponse.json({ success: false, error: resetErr.message }, { status: 422 });
 
-    if (updateErr) return NextResponse.json({ success: false, error: updateErr.message }, { status: 422 });
-    return NextResponse.json({ success: true, batchId: id, status: "ready_to_generate" });
+    const result = await rebuild837PBatchFile({ batchId: id, organizationId });
+    if (!result.ok) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: result.error ?? "Failed to rebuild 837P file",
+          batchId: id,
+          status: "ready_to_generate",
+        },
+        { status: 422 },
+      );
+    }
+
+    return NextResponse.json({
+      success: true,
+      batchId: id,
+      status: "generated",
+      fileName: result.fileName,
+      claimCount: result.claimCount,
+    });
   } catch (error) {
     return NextResponse.json(
       { success: false, error: error instanceof Error ? error.message : "Rebuild batch failed" },
