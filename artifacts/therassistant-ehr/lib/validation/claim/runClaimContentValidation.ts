@@ -12,6 +12,7 @@ import {
 } from "../types";
 import claimRules from "./rules.json";
 import { buildClaimContentLoaders, loadCanonicalClaimFacts, type CanonicalClaimFacts } from "./facts";
+import { loadActivePayerRules, payerRuleToFinding } from "./payerRules";
 
 function emptyByCategory(): FindingsByCategory {
   const out = {} as FindingsByCategory;
@@ -71,6 +72,17 @@ export async function runClaimContentValidation(
   const ctx: FactContext = { supabase, organizationId, claimId };
 
   const findings = await runEngine(ctx, loaders, claimRules as RuleSpec[]);
+
+  // Append findings for active payer_rules (catalog of "lessons learned"
+  // rules created from past CARC denials via the Denied Claims by CARC
+  // workqueue). Each active rule for this claim's payer becomes one
+  // finding; severity is governed by the rule's action ('warn' or 'block').
+  if (facts.payerProfile?.id) {
+    const activeRules = await loadActivePayerRules(supabase, organizationId, facts.payerProfile.id);
+    for (const rule of activeRules) {
+      findings.push(payerRuleToFinding(rule, facts.payerProfile.payer_name));
+    }
+  }
 
   // Sort and bucket.
   const sevOrder: Record<string, number> = { blocking: 0, warning: 1, info: 2 };
