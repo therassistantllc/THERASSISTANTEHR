@@ -1,6 +1,7 @@
 import type React from "react";
 import PatientContextBanner from "@/components/layout/PatientContextBanner";
 import PatientTabNav from "./PatientTabNav";
+import styles from "@/components/layout/AppShell.module.css";
 
 export default async function PatientChartLayout({
   children,
@@ -13,8 +14,10 @@ export default async function PatientChartLayout({
 
   return (
     <>
-      <PatientContextBanner clientId={clientId} />
-      <PatientTabNav clientId={clientId} />
+      <div className={styles.patientStickyGroup}>
+        <PatientContextBanner clientId={clientId} />
+        <PatientTabNav clientId={clientId} />
+      </div>
       {children}
     </>
   );
