@@ -1,5 +1,6 @@
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { routeRejectedClaimsToWorkqueue } from "@/lib/workqueue/claimRejectionWorkqueueService";
+import { classify999Errors } from "@/lib/claims/edi999Classification";
 
 type Edi999Outcome = "accepted" | "rejected" | "partial" | "unknown";
 
@@ -60,12 +61,23 @@ function parse999(rawContent: string) {
     else if (hasAccepted) outcome = "accepted";
   }
 
+  const errorSegments = errors.map((elements) => elements.join("*"));
+  const classification = classify999Errors({ errorSegments, ak9Code });
+
   return {
     outcome,
     ak9Code: ak9Code || null,
     ik5Statuses: ik5Segments.map((elements) => elements[1] ?? null),
-    errorSegments: errors.map((elements) => elements.join("*")),
+    errorSegments,
     segmentCount: segments.length,
+    // Typed classification persisted at intake. The 999 Rejections
+    // workqueue prefers these fields when present; legacy rows that
+    // don't carry them are re-classified on read via the same helper.
+    errorCategory: classification.errorCategory,
+    errorDetails: classification.errorDetails,
+    primaryReasonCode: classification.primaryReasonCode,
+    primaryMessage: classification.primaryMessage,
+    primaryLocation: classification.primaryLocation,
   };
 }
 

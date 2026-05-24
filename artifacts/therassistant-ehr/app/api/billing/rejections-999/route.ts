@@ -13,6 +13,10 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireBillingAccess } from "@/lib/billing/requireBillingAccess";
+import {
+  classify999Errors,
+  type Edi999ErrorCategory,
+} from "@/lib/claims/edi999Classification";
 
 type DbRow = Record<string, any>;
 
@@ -38,87 +42,38 @@ function isoPlusDays(days: number): string {
 }
 
 /**
- * Map a 999 ack's parsed_content + error segments to one of the 4 tabs.
- * Heuristic — purpose-built so a row never falls off the strip:
- *   - AK3/AK4 segments → "edi_format" (envelope/structural problem)
- *   - errorSegment mentions 1000A / NM1*41 / submitter → "invalid_submitter"
- *   - IK3/IK4 segments → "claim_syntax"
- *   - otherwise → "file_rejected"
+ * Resolve the typed classification for a row's `context_payload`.
+ *
+ * New rows carry `parsed_content.errorCategory` written at intake by
+ * `lib/claims/edi999Classification`. Legacy rows (pre-classifier) only
+ * have raw `errorSegments` — we re-run the same classifier on read so
+ * the strip is honest until the backfill catches up.
  */
-function categoriseRow(contextPayload: unknown): TabId {
+function resolveClassification(contextPayload: unknown) {
   const cp = (contextPayload ?? {}) as DbRow;
   const parsed = (cp.parsed_content ?? {}) as DbRow;
-  const segs = Array.isArray(parsed.errorSegments)
-    ? (parsed.errorSegments as unknown[]).map((s) => String(s ?? ""))
-    : [];
-  const joined = segs.join(" | ").toUpperCase();
-
-  if (joined.includes("AK3") || joined.includes("AK4")) return "edi_format";
+  const persisted = text(parsed.errorCategory).toLowerCase();
+  const isValid = (TAB_IDS as readonly string[]).includes(persisted);
   if (
-    joined.includes("1000A") ||
-    joined.includes("NM1*41") ||
-    joined.includes("SUBMITTER")
-  )
-    return "invalid_submitter";
-  if (joined.includes("IK3") || joined.includes("IK4")) return "claim_syntax";
-  if (!segs.length && text(parsed.ak9Code).toUpperCase() === "R") return "file_rejected";
-  return "file_rejected";
-}
-
-function rejectionCode(contextPayload: unknown): string {
-  const cp = (contextPayload ?? {}) as DbRow;
-  const parsed = (cp.parsed_content ?? {}) as DbRow;
-  // Prefer the first IK3 / IK4 / AK3 / AK4 reason code if present
-  const segs = Array.isArray(parsed.errorSegments)
-    ? (parsed.errorSegments as unknown[]).map((s) => String(s ?? ""))
-    : [];
-  for (const s of segs) {
-    const parts = s.split("*");
-    const head = (parts[0] ?? "").toUpperCase();
-    if (["IK3", "IK4", "AK3", "AK4"].includes(head)) {
-      // IK3*ELEMENT_REF*LOOP_ID*POSITION*REASON_CODE …
-      // Reason code lives in position 4 (IK3/AK3) or 3 (IK4/AK4).
-      const code = head.startsWith("AK4") || head.startsWith("IK4") ? parts[3] : parts[4];
-      const c = text(code);
-      if (c) return c;
-    }
+    isValid &&
+    text(parsed.primaryReasonCode) &&
+    text(parsed.primaryMessage) &&
+    text(parsed.primaryLocation)
+  ) {
+    return {
+      errorCategory: persisted as Edi999ErrorCategory,
+      primaryReasonCode: text(parsed.primaryReasonCode),
+      primaryMessage: text(parsed.primaryMessage),
+      primaryLocation: text(parsed.primaryLocation),
+    };
   }
-  return text(parsed.ak9Code).toUpperCase() || "999";
-}
-
-function rejectionMessage(contextPayload: unknown, description: string): string {
-  const cp = (contextPayload ?? {}) as DbRow;
-  const parsed = (cp.parsed_content ?? {}) as DbRow;
-  const segs = Array.isArray(parsed.errorSegments)
-    ? (parsed.errorSegments as unknown[]).map((s) => String(s ?? ""))
-    : [];
-  if (segs.length > 0) return segs[0];
-  return description || "Rejected by the clearinghouse 999 acknowledgement";
-}
-
-function errorLocation(contextPayload: unknown): string {
-  const cp = (contextPayload ?? {}) as DbRow;
-  const parsed = (cp.parsed_content ?? {}) as DbRow;
-  const segs = Array.isArray(parsed.errorSegments)
-    ? (parsed.errorSegments as unknown[]).map((s) => String(s ?? ""))
-    : [];
-  for (const s of segs) {
-    const parts = s.split("*");
-    const head = (parts[0] ?? "").toUpperCase();
-    if (head === "IK3" || head === "AK3") {
-      const segId = parts[1] || "";
-      const segPos = parts[2] || "";
-      const loop = parts[3] || "";
-      return [segId && `Segment ${segId}`, segPos && `pos ${segPos}`, loop && `loop ${loop}`]
-        .filter(Boolean)
-        .join(" · ");
-    }
-    if (head === "IK4" || head === "AK4") {
-      const elem = parts[1] || "";
-      return elem ? `Element ${elem}` : head;
-    }
-  }
-  return "File envelope";
+  const c = classify999Errors(parsed);
+  return {
+    errorCategory: c.errorCategory,
+    primaryReasonCode: c.primaryReasonCode,
+    primaryMessage: c.primaryMessage,
+    primaryLocation: c.primaryLocation,
+  };
 }
 
 export async function GET(request: Request) {
@@ -412,6 +367,12 @@ export async function GET(request: Request) {
           ? [client.first_name, client.last_name].map(text).filter(Boolean).join(" ")
           : text(ctx.patient_account_number)) || "Unknown patient";
 
+      const classification = resolveClassification(ctx);
+      const fallbackMessage =
+        classification.primaryMessage ||
+        text(item.description) ||
+        "Rejected by the clearinghouse 999 acknowledgement";
+
       return {
         id: itemId,
         claimId,
@@ -425,9 +386,9 @@ export async function GET(request: Request) {
         payerProfileId: claim ? text(claim.payer_profile_id) || null : null,
         batchId,
         batchNumber: text(batch?.batch_number) || (batchId ? batchId.slice(0, 8) : "—"),
-        rejectionCode: rejectionCode(ctx),
-        rejectionMessage: rejectionMessage(ctx, text(item.description)),
-        errorLocation: errorLocation(ctx),
+        rejectionCode: classification.primaryReasonCode || "999",
+        rejectionMessage: fallbackMessage,
+        errorLocation: classification.primaryLocation || "File envelope",
         submittedDate: text(batch?.generated_at) || created,
         serviceDateFrom: dosFrom,
         serviceDateTo: dosTo,
@@ -439,7 +400,7 @@ export async function GET(request: Request) {
         deferredUntil: text(item.deferred_until) || null,
         createdAt: created,
         updatedAt: text(item.updated_at) || null,
-        category: categoriseRow(ctx),
+        category: classification.errorCategory,
         contextPayload: ctx,
         claimStatus: claim ? text(claim.claim_status) : null,
         description: text(item.description),
