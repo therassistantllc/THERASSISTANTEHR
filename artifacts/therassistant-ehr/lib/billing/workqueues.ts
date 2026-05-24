@@ -92,7 +92,7 @@ export const WORKQUEUES: WorkqueueDef[] = [
     id: "ready_to_generate",
     title: "Ready to Generate",
     description: "Charges that have passed all gates and are ready to be turned into 837P claims.",
-    href: "/billing/claim-readiness",
+    href: "/billing/ready-to-generate",
     stage: "pre_submission",
     status: "live",
   },
