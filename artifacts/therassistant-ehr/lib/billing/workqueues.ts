@@ -433,6 +433,14 @@ export const WORKQUEUES: WorkqueueDef[] = [
     status: "coming_soon",
   },
   {
+    id: "compliance_audit",
+    title: "Compliance & Audit",
+    description: "Pre- and post-submission billing risk — missing signatures, modifier audits, diagnosis audits, late docs, overlaps, and high-risk patterns.",
+    href: "/billing/compliance-audit",
+    stage: "patient_oversight",
+    status: "live",
+  },
+  {
     id: "compliance_holds",
     title: "Compliance Holds",
     description: "Claims paused by compliance — false-claims risk, sanctioned provider, etc.",
