@@ -368,7 +368,7 @@ export async function loadProviderEnrollmentIssues({
     sb
       .from("provider_profiles")
       .select(
-        "id, organization_id, staff_id, provider_npi, provider_type, specialty, credentials, is_billing_provider, is_rendering_provider",
+        "id, organization_id, staff_id, provider_npi, provider_type, specialty, taxonomy_code, credentials, is_billing_provider, is_rendering_provider",
       )
       .eq("organization_id", organizationId)
       .is("archived_at", null),
@@ -480,8 +480,13 @@ export async function loadProviderEnrollmentIssues({
     const placeOfService = text(c.place_of_service) || null;
 
     const providerProfileNpi = provider ? text(provider.provider_npi) || null : null;
-    const taxonomyCode =
-      provider ? (text(provider.specialty) || text(provider.provider_type) || null) : null;
+    // Read the real NUCC taxonomy column (added 20260610). We no longer
+    // fall back to specialty/provider_type — payers reject claims when
+    // the taxonomy is not a valid 10-char NUCC code, so a missing
+    // taxonomy_code must surface as a real taxonomy_issue instead of
+    // being papered over with a free-text specialty label.
+    const rawTaxonomy = provider ? text(provider.taxonomy_code) : "";
+    const taxonomyCode = /^[A-Z0-9]{9}X$/i.test(rawTaxonomy) ? rawTaxonomy.toUpperCase() : null;
 
     const billingNotes = text(c.billing_notes) || null;
     const enrollmentStatus = enrollment ? text(enrollment.status) : "not_enrolled";

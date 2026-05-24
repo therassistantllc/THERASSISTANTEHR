@@ -10420,6 +10420,7 @@ export type Database = {
           provider_type: string | null
           specialty: string | null
           staff_id: string | null
+          taxonomy_code: string | null
           updated_at: string
         }
         Insert: {
@@ -10441,6 +10442,7 @@ export type Database = {
           provider_type?: string | null
           specialty?: string | null
           staff_id?: string | null
+          taxonomy_code?: string | null
           updated_at?: string
         }
         Update: {
@@ -10462,6 +10464,7 @@ export type Database = {
           provider_type?: string | null
           specialty?: string | null
           staff_id?: string | null
+          taxonomy_code?: string | null
           updated_at?: string
         }
         Relationships: [

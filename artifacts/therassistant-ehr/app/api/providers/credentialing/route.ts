@@ -19,6 +19,44 @@ function isMissingTelehealthColumns(error: unknown): boolean {
   return /telehealth_url|stripe_payment_link_url|default_telehealth_platform|stripe_connect_account_id|stripe_charges_enabled|stripe_payouts_enabled|stripe_details_submitted|stripe_requirements|stripe_account_status_updated_at/i.test(message);
 }
 
+const NUCC_TAXONOMY_RE = /^[A-Z0-9]{9}X$/;
+
+function normalizeTaxonomyCode(value: unknown): { ok: true; value: string | null } | { ok: false; error: string } {
+  if (value === null || value === undefined || value === "") return { ok: true, value: null };
+  const raw = String(value).trim().toUpperCase();
+  if (raw === "") return { ok: true, value: null };
+  if (!NUCC_TAXONOMY_RE.test(raw)) {
+    return {
+      ok: false,
+      error: "taxonomy_code must be a 10-character NUCC code (9 alphanumerics + trailing 'X'), e.g. 103TC0700X",
+    };
+  }
+  return { ok: true, value: raw };
+}
+
+// Mirror a freshly-saved taxonomy code into the matching provider_profiles
+// row (matched by NPI within the same organization). The Provider
+// Enrollment Issues workqueue and the 837P writer read from
+// provider_profiles.taxonomy_code, so the credentialing UI must propagate
+// it whenever a biller enters/edits a value.
+async function syncTaxonomyToProviderProfiles(
+  supabase: ReturnType<typeof createServerSupabaseAdminClient>,
+  organizationId: string,
+  individualNpi: string | null,
+  taxonomyCode: string | null,
+): Promise<void> {
+  if (!supabase || !individualNpi) return;
+  const npi = individualNpi.replace(/\D/g, "");
+  if (npi.length !== 10) return;
+  const { error } = await supabase
+    .from("provider_profiles")
+    .update({ taxonomy_code: taxonomyCode, updated_at: new Date().toISOString() })
+    .eq("organization_id", organizationId)
+    .eq("provider_npi", npi)
+    .is("archived_at", null);
+  if (error) console.warn("[provider_profiles taxonomy] dual-write failed:", error.message);
+}
+
 function splitName(fullName: string): { first_name: string; last_name: string } {
   const trimmed = fullName.trim();
   if (!trimmed) return { first_name: "Unknown", last_name: "Provider" };
@@ -190,6 +228,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: "provider_name is required" }, { status: 400 });
     }
 
+    const taxonomyParsed = normalizeTaxonomyCode(body.taxonomy_code);
+    if (!taxonomyParsed.ok) {
+      return NextResponse.json({ success: false, error: taxonomyParsed.error }, { status: 400 });
+    }
+
     const now = new Date().toISOString();
     const baseInsert: Record<string, unknown> = {
       organization_id: organizationId,
@@ -205,7 +248,7 @@ export async function POST(request: NextRequest) {
       group_medicaid_id: body.group_medicaid_id ? String(body.group_medicaid_id) : null,
       individual_medicaid_id: body.individual_medicaid_id ? String(body.individual_medicaid_id) : null,
       phone: body.phone ? String(body.phone) : null,
-      taxonomy_code: body.taxonomy_code ? String(body.taxonomy_code) : null,
+      taxonomy_code: taxonomyParsed.value,
       caqh_id: body.caqh_id ? String(body.caqh_id) : null,
       other_payer_id: body.other_payer_id ? String(body.other_payer_id) : null,
       primary_license_number: body.primary_license_number ? String(body.primary_license_number) : null,
@@ -258,6 +301,16 @@ export async function POST(request: NextRequest) {
     } catch (rosterError) {
       console.warn("[providers roster] dual-write skipped:", rosterError);
     }
+    try {
+      await syncTaxonomyToProviderProfiles(
+        supabase,
+        organizationId,
+        (row.individual_npi as string | null) ?? null,
+        (row.taxonomy_code as string | null) ?? null,
+      );
+    } catch (err) {
+      console.warn("[provider_profiles taxonomy] dual-write skipped:", err);
+    }
 
     return NextResponse.json({ success: true, provider: withNullExtras(row) }, { status: 201 });
   } catch (error) {
@@ -306,6 +359,13 @@ export async function PATCH(request: NextRequest) {
     for (const field of allowedFields) {
       if (field in body) updates[field] = body[field];
     }
+    if ("taxonomy_code" in updates) {
+      const taxonomyParsed = normalizeTaxonomyCode(updates.taxonomy_code);
+      if (!taxonomyParsed.ok) {
+        return NextResponse.json({ success: false, error: taxonomyParsed.error }, { status: 400 });
+      }
+      updates.taxonomy_code = taxonomyParsed.value;
+    }
     updates.updated_at = new Date().toISOString();
 
     const attempt = await supabase
@@ -349,6 +409,16 @@ export async function PATCH(request: NextRequest) {
       });
     } catch (rosterError) {
       console.warn("[providers roster] dual-write skipped:", rosterError);
+    }
+    try {
+      await syncTaxonomyToProviderProfiles(
+        supabase,
+        organizationId,
+        (row.individual_npi as string | null) ?? null,
+        (row.taxonomy_code as string | null) ?? null,
+      );
+    } catch (err) {
+      console.warn("[provider_profiles taxonomy] dual-write skipped:", err);
     }
 
     return NextResponse.json({ success: true, provider: withNullExtras(row) });
