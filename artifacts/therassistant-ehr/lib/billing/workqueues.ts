@@ -368,11 +368,11 @@ export const WORKQUEUES: WorkqueueDef[] = [
   },
   {
     id: "recoupments",
-    title: "Recoupments",
-    description: "Payer take-backs applied against future remittances.",
+    title: "Recoupments / Takebacks",
+    description: "Payer take-backs and overpayment recovery — disputes, accepted adjustments, and offsets against future remittances.",
     href: "/billing/recoupments",
     stage: "payments_era",
-    status: "coming_soon",
+    status: "live",
   },
   {
     id: "credit_balances",
