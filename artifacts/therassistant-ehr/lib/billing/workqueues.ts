@@ -131,6 +131,14 @@ export const WORKQUEUES: WorkqueueDef[] = [
     status: "live",
   },
   {
+    id: "payer_received",
+    title: "Payer Received",
+    description: "Claims accepted by the payer but not yet adjudicated — track 276/277 status and follow up.",
+    href: "/billing/payer-received",
+    stage: "submission_rejections",
+    status: "live",
+  },
+  {
     id: "clearinghouse_rejections",
     title: "Clearinghouse Rejections",
     description: "Claims rejected by the clearinghouse (999/277CA) before reaching the payer.",
