@@ -71,7 +71,19 @@ for (const [name, extras] of Object.entries(EXTRA_ENUM_VALUES)) {
  * The preferred fix is always to regenerate `database.types.ts` rather
  * than add an overlay entry.
  */
-const EXTRA_COLUMNS: Record<string, string[]> = {};
+const EXTRA_COLUMNS: Record<string, string[]> = {
+  // Added by supabase/migrations/20260610000000_cob_signals.sql (Task #457).
+  // Generated database.types.ts is regenerated less often than migrations
+  // ship; the overlay keeps the schema guard accepting the COB columns
+  // until the next types regen.
+  eligibility_checks: [
+    "other_payers",
+    "other_payer_name",
+    "other_payer_id",
+    "other_payer_effective_date",
+    "other_payer_termination_date",
+  ],
+};
 
 const ENUM_COLUMNS: Record<string, Record<string, string>> = {
   workqueue_items: {

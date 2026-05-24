@@ -212,6 +212,8 @@ export async function GET(request: Request) {
       { data: appts },
       { data: payerProfiles },
       { data: audit },
+      { data: cobSignals },
+      { data: eligibilityOtherPayers },
     ] = await Promise.all([
       clientIds.length
         ? (supabase as any)
@@ -246,6 +248,24 @@ export async function GET(request: Request) {
         .in("claim_id", claimIds)
         .ilike("event_type", `${ACTION_EVENT_PREFIX}%`)
         .order("created_at", { ascending: true }),
+      // Task #457 — real COB evidence from the 835 (CO-22, MOA other-
+      // payer paid). When present, these win over the policy-count
+      // heuristic when classifying tabs and naming the other payer.
+      (supabase as any)
+        .from("claim_cob_signals")
+        .select("professional_claim_id, signal_type, other_payer_name, other_payer_id, other_payer_paid_amount, created_at")
+        .eq("organization_id", organizationId)
+        .in("professional_claim_id", claimIds),
+      // Task #457 — 271 other-payer evidence keyed by client.
+      clientIds.length
+        ? (supabase as any)
+            .from("eligibility_checks")
+            .select("client_id, other_payers, other_payer_name, other_payer_id, checked_at")
+            .eq("organization_id", organizationId)
+            .in("client_id", clientIds)
+            .not("other_payers", "is", null)
+            .order("checked_at", { ascending: false })
+        : Promise.resolve({ data: [] as DbRow[] }),
     ]);
 
     const providerIds = [
@@ -279,6 +299,62 @@ export async function GET(request: Request) {
     const payerById = new Map<string, DbRow>(
       ((payerProfiles ?? []) as DbRow[]).map((p) => [text(p.id), p]),
     );
+
+    // ── COB signal lookup tables (Task #457) ─────────────────────────
+    type CobSignalAgg = {
+      hasCo22: boolean;
+      hasOtherPayerPaid: boolean;
+      otherPayerName: string | null;
+      otherPayerId: string | null;
+      otherPayerPaidAmount: number | null;
+    };
+    const cobSignalsByClaim = new Map<string, CobSignalAgg>();
+    for (const s of ((cobSignals ?? []) as DbRow[])) {
+      const k = text(s.professional_claim_id);
+      if (!k) continue;
+      const cur = cobSignalsByClaim.get(k) ?? {
+        hasCo22: false,
+        hasOtherPayerPaid: false,
+        otherPayerName: null,
+        otherPayerId: null,
+        otherPayerPaidAmount: null,
+      };
+      const signalType = text(s.signal_type);
+      if (signalType === "co_22") cur.hasCo22 = true;
+      if (signalType === "other_payer_paid") {
+        cur.hasOtherPayerPaid = true;
+        const amt = Number(s.other_payer_paid_amount ?? 0);
+        if (Number.isFinite(amt) && (cur.otherPayerPaidAmount == null || amt > cur.otherPayerPaidAmount)) {
+          cur.otherPayerPaidAmount = amt;
+        }
+      }
+      if (!cur.otherPayerName) cur.otherPayerName = text(s.other_payer_name) || null;
+      if (!cur.otherPayerId) cur.otherPayerId = text(s.other_payer_id) || null;
+      cobSignalsByClaim.set(k, cur);
+    }
+
+    type EligibilityOtherPayer = {
+      name: string | null;
+      payerId: string | null;
+    };
+    const eligibilityOtherPayersByClient = new Map<string, EligibilityOtherPayer[]>();
+    for (const row of ((eligibilityOtherPayers ?? []) as DbRow[])) {
+      const k = text(row.client_id);
+      if (!k || eligibilityOtherPayersByClient.has(k)) continue; // most recent first
+      const list: EligibilityOtherPayer[] = [];
+      const headlineName = text(row.other_payer_name) || null;
+      const headlineId = text(row.other_payer_id) || null;
+      if (headlineName || headlineId) list.push({ name: headlineName, payerId: headlineId });
+      const arr = Array.isArray(row.other_payers) ? (row.other_payers as Array<Record<string, unknown>>) : [];
+      for (const entry of arr) {
+        const name = text(entry.name) || null;
+        const payerId = text(entry.payerId) || null;
+        if (!name && !payerId) continue;
+        if (list.some((e) => (e.name && e.name === name) || (e.payerId && e.payerId === payerId))) continue;
+        list.push({ name, payerId });
+      }
+      if (list.length > 0) eligibilityOtherPayersByClient.set(k, list);
+    }
 
     type AuditAgg = {
       state: CobState;
@@ -364,10 +440,15 @@ export async function GET(request: Request) {
       );
 
       // Only consider claims where COB *might* matter:
-      //   - 2+ active policies on the client (real COB territory), OR
+      //   - real COB signals from 835 (CO-22 / other-payer paid) — Task #457,
+      //   - 271 other-payer evidence on file for this client — Task #457,
+      //   - 2+ active policies on the client (legacy heuristic), OR
       //   - the biller has already flagged this claim via an action.
       const audit = auditByClaim.get(claimId);
-      if (activePolicies.length < 2 && !audit?.cob_flagged) continue;
+      const realSignal = cobSignalsByClaim.get(claimId);
+      const eligibilityOthers = eligibilityOtherPayersByClient.get(clientId) ?? [];
+      const hasRealCobEvidence = !!realSignal || eligibilityOthers.length > 0;
+      if (activePolicies.length < 2 && !audit?.cob_flagged && !hasRealCobEvidence) continue;
 
       const policySummaries: CobPolicySummary[] = activePolicies.map((p) => {
         const payer = payerById.get(text(p.payer_id));
@@ -398,7 +479,13 @@ export async function GET(request: Request) {
       const otherPayerCandidate = policySummaries.find(
         (p) => p.payer_id && p.payer_id !== billedPayerId,
       );
-      const otherPayerName = otherPayerCandidate?.payer_name ?? null;
+      // Prefer the real other-payer name from the 835 signal, then the
+      // most-recent 271 other-payer entry, then the policy-list fallback.
+      const otherPayerName =
+        realSignal?.otherPayerName ??
+        eligibilityOthers[0]?.name ??
+        otherPayerCandidate?.payer_name ??
+        null;
 
       // ── Tab classification ──────────────────────────────────────
       const tabs: CobTab[] = [];
@@ -412,6 +499,16 @@ export async function GET(request: Request) {
             `Client has ${activePolicies.length} active policies — only ${billedPayerName ?? "one"} was billed.`,
           );
         }
+      } else if (realSignal?.hasCo22 || eligibilityOthers.length > 0) {
+        // Task #457 — single-policy client but the payer told us via
+        // 835 CO-22 ("covered by another payer") or 271 EB*R that
+        // another carrier is on file. This is real COB evidence the
+        // policy-count heuristic would otherwise miss.
+        tabs.push("other_insurance_found");
+        const reason = realSignal?.hasCo22
+          ? `Payer returned CO-22 (covered by another payer${realSignal.otherPayerName ? `: ${realSignal.otherPayerName}` : ""}).`
+          : `271 reported additional payer${eligibilityOthers[0]?.name ? ` ${eligibilityOthers[0].name}` : ""} on file for this client.`;
+        issueParts.push(reason);
       }
 
       if (
@@ -439,7 +536,15 @@ export async function GET(request: Request) {
         secondaryPolicy &&
         secondaryPolicy.payer_id === billedPayerId
       );
-      if (isSecondaryBill && !(audit?.has_eob)) {
+      // Task #457 — a real 835 "other_payer_paid" signal proves the
+      // claim was adjudicated as secondary; we need the prior-payer
+      // EOB on file. This wins over the policy-priority heuristic.
+      if (realSignal?.hasOtherPayerPaid && !(audit?.has_eob)) {
+        tabs.push("eob_needed");
+        issueParts.push(
+          `Payer reported a prior-payer paid amount${realSignal.otherPayerPaidAmount != null ? ` of $${realSignal.otherPayerPaidAmount.toFixed(2)}` : ""} — EOB required.`,
+        );
+      } else if (isSecondaryBill && !(audit?.has_eob)) {
         tabs.push("eob_needed");
         issueParts.push("Secondary billing requires prior-payer EOB.");
       }

@@ -1,6 +1,7 @@
 import { annotateBenefits } from "./categorizeBenefits";
 import type {
   Parsed271Dependent,
+  Parsed271OtherPayer,
   Parsed271Response,
   Parsed271Subscriber,
   ParsedAAAError,
@@ -175,6 +176,7 @@ export function parseAvaility271(raw: string): Parsed271Response {
     aaaErrors: [],
     benefits: [],
     messages: [],
+    otherPayers: [],
     isaControlNumber: null,
     gsControlNumber: null,
     stControlNumber: null,
@@ -207,6 +209,19 @@ export function parseAvaility271(raw: string): Parsed271Response {
   };
   let dependent: Parsed271Dependent | null = null;
 
+  // Task #457 — track an in-flight "other payer" entry whenever we see an
+  // EB*R (Other or Additional Payor) segment. Following NM1*PR + DTP
+  // (356 / 357) segments populate the other-payer name, id, and
+  // eligibility dates per X12 271 Loop 2120C/2120D.
+  let currentOtherPayer: Parsed271OtherPayer | null = null;
+  const flushOtherPayer = () => {
+    if (currentOtherPayer && (currentOtherPayer.name || currentOtherPayer.payerId)) {
+      result.otherPayers = result.otherPayers ?? [];
+      result.otherPayers.push(currentOtherPayer);
+    }
+    currentOtherPayer = null;
+  };
+
   const flushBenefit = () => {
     if (currentEB) {
       result.benefits.push(currentEB);
@@ -228,6 +243,7 @@ export function parseAvaility271(raw: string): Parsed271Response {
         break;
       case "HL": {
         flushBenefit();
+        flushOtherPayer();
         const levelCode = seg[3];
         if (levelCode === "20") {
           lastLoopKind = "source";
@@ -249,8 +265,15 @@ export function parseAvaility271(raw: string): Parsed271Response {
         flushBenefit();
         const entityIdCode = seg[1];
         if (entityIdCode === "PR") {
-          result.payerName = seg[3] ?? null;
-          result.payerId = seg[9] ?? null;
+          // If we're inside an EB*R subloop, this NM1*PR identifies the
+          // *other* payer (Loop 2120C/D), not the responding payer.
+          if (currentOtherPayer) {
+            currentOtherPayer.name = seg[3] ?? null;
+            currentOtherPayer.payerId = seg[9] ?? null;
+          } else {
+            result.payerName = seg[3] ?? null;
+            result.payerId = seg[9] ?? null;
+          }
         } else if (entityIdCode === "IL") {
           // Subscriber (Loop 2100C). Always populates subscriber identity.
           subscriber.lastName = seg[3] ?? null;
@@ -296,6 +319,15 @@ export function parseAvaility271(raw: string): Parsed271Response {
           currentEB.followingSegments = currentEB.followingSegments ?? [];
           currentEB.followingSegments.push(seg);
         }
+        // Other-payer eligibility dates (Loop 2120C/D DTP 356/357).
+        if (currentOtherPayer) {
+          const formatted = formatDateFromX12(dateRaw);
+          if (qual === "356" || qual === "346" || qual === "291") {
+            currentOtherPayer.effectiveDate = formatted;
+          } else if (qual === "357" || qual === "347") {
+            currentOtherPayer.terminationDate = formatted;
+          }
+        }
         // Plan-level dates surface to the response root
         if (qual === "346" || qual === "356" || qual === "291" || qual === "348") {
           // 346=plan begin, 356=eligibility begin, 291=eligibility, 348=plan begin
@@ -308,7 +340,19 @@ export function parseAvaility271(raw: string): Parsed271Response {
       }
       case "EB": {
         flushBenefit();
+        // A new EB closes any in-flight other-payer entry (one entry per
+        // EB*R subloop; subsequent EB segments belong to other benefits).
+        flushOtherPayer();
         const ebCode = (seg[1] ?? "").toUpperCase();
+        // EB*R (Other or Additional Payor) opens a new other-payer loop.
+        if (ebCode === "R") {
+          currentOtherPayer = {
+            name: null,
+            payerId: null,
+            effectiveDate: null,
+            terminationDate: null,
+          };
+        }
         currentEB = {
           owner: benefitOwnerLoop,
           eligibilityCode: ebCode,
@@ -394,6 +438,7 @@ export function parseAvaility271(raw: string): Parsed271Response {
     }
   }
   flushBenefit();
+  flushOtherPayer();
 
   // Phase 5: categorize each EB segment and produce a headline
   // financial-responsibility rollup per CORE Data Content Rule

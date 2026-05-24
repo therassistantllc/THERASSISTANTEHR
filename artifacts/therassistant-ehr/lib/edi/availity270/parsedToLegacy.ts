@@ -138,6 +138,12 @@ export function parsed271ToLegacyNormalized(
     serviceTypeCode: parsed.benefits[0]?.serviceTypeCode ?? fallbackServiceTypeCode,
     message,
     benefitSegments,
+    otherPayers: (parsed.otherPayers ?? []).map((op) => ({
+      name: op.name,
+      payerId: op.payerId,
+      effectiveDate: op.effectiveDate,
+      terminationDate: op.terminationDate,
+    })),
     rawBenefits: {
       parsed271: parsed as unknown as Record<string, unknown>,
     },

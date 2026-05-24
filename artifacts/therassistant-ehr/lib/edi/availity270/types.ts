@@ -212,6 +212,19 @@ export interface Parsed271Attribution {
   dependent: Parsed271Dependent | null;
 }
 
+/**
+ * Other-payer entry parsed from a 271 EB*R subloop (Loop 2120C/D) or
+ * the Availity JSON `otherPayers` bucket. Task #457 — captured so we
+ * can surface real coordination-of-benefits evidence on
+ * `/api/billing/cob-issues` instead of the policy-count heuristic.
+ */
+export interface Parsed271OtherPayer {
+  name: string | null;
+  payerId: string | null;
+  effectiveDate: string | null;
+  terminationDate: string | null;
+}
+
 export interface Parsed271Response {
   status: "active" | "inactive" | "not_found" | "error" | "unknown";
   payerName?: string | null;
@@ -233,6 +246,8 @@ export interface Parsed271Response {
   aaaErrors: ParsedAAAError[];
   benefits: ParsedEB271[];
   messages: string[];
+  /** Additional payers identified by the 271 (EB*R subloops). */
+  otherPayers?: Parsed271OtherPayer[];
   /**
    * Headline financial-responsibility rollup. Computed from `benefits`
    * per CORE Data Content Rule vEB.2.1 §1.3.2.5–§1.3.2.13.

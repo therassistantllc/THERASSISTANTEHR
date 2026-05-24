@@ -8,7 +8,12 @@ import type {
   AvailityBenefitResponse,
   AvailityEligibilityResponse,
 } from "@/types/availityJsonApi";
-import type { Parsed271Response, ParsedAAAError, ParsedEB271 } from "./types";
+import type {
+  Parsed271OtherPayer,
+  Parsed271Response,
+  ParsedAAAError,
+  ParsedEB271,
+} from "./types";
 
 function toNumberOrNull(value: unknown): number | null {
   if (value == null || value === "") return null;
@@ -62,6 +67,7 @@ export function mapAvailityJsonTo271(response: AvailityEligibilityResponse): Par
   const details: AvailityBenefitResponse | null = subscriber?.ebResponseDetails ?? response.dependent?.ebResponseDetails ?? null;
   const benefits: ParsedEB271[] = [];
   const messages: string[] = [];
+  const otherPayers: Parsed271OtherPayer[] = [];
   if (details) {
     for (const bucket of BENEFIT_BUCKETS) {
       const items = details[bucket];
@@ -69,6 +75,25 @@ export function mapAvailityJsonTo271(response: AvailityEligibilityResponse): Par
       for (const item of items) {
         benefits.push(benefitContentToParsedEB(item));
         if (item.messages?.length) messages.push(...item.messages);
+        // Task #457 — Availity surfaces additional payers in the
+        // `otherPayers` bucket; mirror them onto the parsed shape so
+        // downstream code is transport-agnostic.
+        if (bucket === "otherPayers") {
+          const itemAny = item as Record<string, unknown>;
+          const name =
+            (itemAny.payerName as string | null | undefined) ??
+            (itemAny.name as string | null | undefined) ??
+            (itemAny.planCoverageDescription as string | null | undefined) ??
+            null;
+          const payerId =
+            (itemAny.payerId as string | null | undefined) ??
+            ((itemAny.identification as { value?: string } | null | undefined)?.value ?? null);
+          const effectiveDate = (itemAny.eligibilityStartDate as string | null | undefined) ?? null;
+          const terminationDate = (itemAny.eligibilityEndDate as string | null | undefined) ?? null;
+          if (name || payerId) {
+            otherPayers.push({ name, payerId, effectiveDate, terminationDate });
+          }
+        }
       }
     }
   }
@@ -115,6 +140,7 @@ export function mapAvailityJsonTo271(response: AvailityEligibilityResponse): Par
     aaaErrors,
     benefits,
     messages,
+    otherPayers,
     isaControlNumber: null,
     gsControlNumber: null,
     stControlNumber: null,

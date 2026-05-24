@@ -14,6 +14,33 @@ type Era835ServiceLine = {
   rawSegments: string[];
 };
 
+/**
+ * Coordination-of-benefits signals extracted from a single 835 CLP loop.
+ * Task #457 — surfaced so era835IntakeService can persist into
+ * `claim_cob_signals` for /api/billing/cob-issues.
+ *
+ * - `coveredByOtherPayer` flips true when any CAS group has reason code
+ *   22 ("This care may be covered by another payer per coordination of
+ *   benefits"). The CO-22 amounts are summed across claim-level and
+ *   service-line CAS segments.
+ * - `otherPayerPaidAmount` carries the dollar amount the prior payer
+ *   already paid, sourced from the MOA segment when present (Medicare
+ *   Outpatient Adjudication MOA*…) or from claim-level AMT*I/AMT*AAE
+ *   "other-payer paid" qualifiers.
+ * - `otherPayerName` / `otherPayerId` are populated from a CLP-loop
+ *   NM1*TT (Transfer-To) or NM1*PR-as-other when the payer identifies
+ *   the other carrier in the remittance.
+ */
+export type Era835CobSignals = {
+  coveredByOtherPayer: boolean;
+  co22Amount: number;
+  otherPayerPaidAmount: number | null;
+  otherPayerName: string | null;
+  otherPayerId: string | null;
+  /** MOA / AMT segment that produced `otherPayerPaidAmount`, for audit. */
+  sourceSegment: string | null;
+};
+
 export type Era835ClaimPayment = {
   clp01ClaimControlNumber: string;
   clp02ClaimStatusCode: string | null;
@@ -31,6 +58,7 @@ export type Era835ClaimPayment = {
    */
   remarkCodes: string[];
   serviceLines: Era835ServiceLine[];
+  cobSignals: Era835CobSignals;
   rawSegments: string[];
 };
 
@@ -163,6 +191,14 @@ export function parseEra835(rawContent: string): Era835ParsedFile {
         casAdjustments: [],
         remarkCodes: [],
         serviceLines: [],
+        cobSignals: {
+          coveredByOtherPayer: false,
+          co22Amount: 0,
+          otherPayerPaidAmount: null,
+          otherPayerName: null,
+          otherPayerId: null,
+          sourceSegment: null,
+        },
         rawSegments: [segment],
       };
       continue;
@@ -175,6 +211,71 @@ export function parseEra835(rawContent: string): Era835ParsedFile {
       const adjustments = parseCas(elements);
       if (currentServiceLine) currentServiceLine.adjustments.push(...adjustments);
       else currentClaim.casAdjustments.push(...adjustments);
+      // Task #457 — CAS group "CO" with reason code 22 means the payer
+      // is refusing this charge because it should have been routed to
+      // another payer first (or paid by them already). Track the signal
+      // on the claim regardless of whether it arrived at the claim or
+      // service-line level.
+      for (const adj of adjustments) {
+        if (adj.groupCode === "CO" && adj.reasonCode === "22") {
+          currentClaim.cobSignals.coveredByOtherPayer = true;
+          currentClaim.cobSignals.co22Amount =
+            Math.round((currentClaim.cobSignals.co22Amount + adj.amount) * 100) / 100;
+          if (!currentClaim.cobSignals.sourceSegment) {
+            currentClaim.cobSignals.sourceSegment = segment;
+          }
+        }
+      }
+      continue;
+    }
+
+    // MOA — Medicare Outpatient Adjudication. MOA03–MOA09 carry MIA/MOA
+    // remark codes; MOA02 is the reimbursement rate, but several payers
+    // also place the prior-payer paid amount here when the claim was
+    // adjudicated as secondary. We capture MOA03 = MA-series remark
+    // codes alongside the dollar value for audit context.
+    if (segmentId === "MOA") {
+      const amount = toNumber(elements[2]);
+      if (amount > 0 && currentClaim.cobSignals.otherPayerPaidAmount == null) {
+        currentClaim.cobSignals.otherPayerPaidAmount = amount;
+        currentClaim.cobSignals.sourceSegment = segment;
+      }
+      continue;
+    }
+
+    // AMT — Monetary Amount Information. Inside a CLP loop only
+    // qualifier "I" ("Interest" in some payer flavors, but used as
+    // *Other Payer Prior Payment Amount* under X12 005010X221A1 COB
+    // conventions) is a true prior-payer paid dollar value. Other
+    // qualifiers like AAE ("Coordination of Benefits Total Submitted
+    // Charges") are submitted-charge totals, NOT paid amounts —
+    // mapping them here would falsely trigger eob_needed in
+    // /api/billing/cob-issues.
+    if (segmentId === "AMT" && !currentServiceLine) {
+      const qual = clean(elements[1]);
+      const amount = toNumber(elements[2]);
+      if (qual === "I" && amount > 0 && currentClaim.cobSignals.otherPayerPaidAmount == null) {
+        currentClaim.cobSignals.otherPayerPaidAmount = amount;
+        currentClaim.cobSignals.sourceSegment = segment;
+      }
+      continue;
+    }
+
+    // NM1*TT inside a CLP loop names the other payer the claim was
+    // transferred to (X12 835 Loop 2100 Crossover Carrier). NM1*PR
+    // appearing under CLP is occasionally used by payers to identify
+    // the other carrier in a COB scenario.
+    if (segmentId === "NM1") {
+      const entityCode = clean(elements[1]);
+      if ((entityCode === "TT" || entityCode === "PR") && !currentClaim.cobSignals.otherPayerName) {
+        const name = clean(elements[3]) || null;
+        const idQual = clean(elements[8]);
+        const idValue = clean(elements[9]) || null;
+        if (name) currentClaim.cobSignals.otherPayerName = name;
+        if (idValue && (idQual === "PI" || idQual === "XV" || idQual === "FI" || idQual === "")) {
+          currentClaim.cobSignals.otherPayerId = idValue;
+        }
+      }
       continue;
     }
 

@@ -335,6 +335,16 @@ export class ClearinghouseService {
       remaining_coverage_period: result.normalized.remainingCoveragePeriod ?? null,
       coverage_level: result.normalized.coverageLevel ?? null,
       raw_benefits: result.normalized.rawBenefits ?? {},
+      // Task #457 — persist COB other-payer evidence from the 271
+      // (EB*R subloops or Availity JSON `otherPayers` bucket) so
+      // `/api/billing/cob-issues` can prefer real signals over the
+      // policy-count heuristic. Headline values mirrored into the
+      // flat columns for quick filtering.
+      other_payers: result.normalized.otherPayers ?? [],
+      other_payer_name: result.normalized.otherPayers?.[0]?.name ?? null,
+      other_payer_id: result.normalized.otherPayers?.[0]?.payerId ?? null,
+      other_payer_effective_date: result.normalized.otherPayers?.[0]?.effectiveDate ?? null,
+      other_payer_termination_date: result.normalized.otherPayers?.[0]?.terminationDate ?? null,
       // Phase 6 — AAA + Single Patient Attribution decision + routing
       // resolution (vEB.1.0 §4.2–§4.3). attributionDecision compares
       // parsed 271 identity against the requested patient; routing
@@ -359,7 +369,7 @@ export class ClearinghouseService {
 
     const eligibilityResp = await supabase
       .from("eligibility_checks")
-      .insert(eligibilityPayload)
+      .insert(eligibilityPayload as never)
       .select("*")
       .single();
 

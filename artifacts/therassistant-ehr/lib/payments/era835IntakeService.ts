@@ -222,6 +222,57 @@ export async function intakeEra835(input: IntakeEra835Input): Promise<IntakeEra8
           }
         }
       }
+
+      // Task #457 — persist COB signals (CO-22, MOA other-payer paid)
+      // onto `claim_cob_signals` whenever we can attach them to a real
+      // matched claim. Unmatched ERAs skip this — without a
+      // professional_claim_id there's nowhere to attribute the signal
+      // and `/api/billing/cob-issues` keys off claim_id.
+      if (match && (claim.cobSignals.coveredByOtherPayer || claim.cobSignals.otherPayerPaidAmount != null)) {
+        const eraClaimPaymentId = paymentRow?.id ? String(paymentRow.id) : null;
+        const signalRows: Array<Record<string, unknown>> = [];
+        if (claim.cobSignals.coveredByOtherPayer) {
+          signalRows.push({
+            organization_id: input.organizationId,
+            professional_claim_id: match.id,
+            era_claim_payment_id: eraClaimPaymentId,
+            signal_type: "co_22",
+            other_payer_name: claim.cobSignals.otherPayerName,
+            other_payer_id: claim.cobSignals.otherPayerId,
+            other_payer_paid_amount: null,
+            source_segment: claim.cobSignals.sourceSegment,
+            raw: {
+              clp: claim.clp01ClaimControlNumber,
+              co22Amount: claim.cobSignals.co22Amount,
+            },
+          });
+        }
+        if (claim.cobSignals.otherPayerPaidAmount != null) {
+          signalRows.push({
+            organization_id: input.organizationId,
+            professional_claim_id: match.id,
+            era_claim_payment_id: eraClaimPaymentId,
+            signal_type: "other_payer_paid",
+            other_payer_name: claim.cobSignals.otherPayerName,
+            other_payer_id: claim.cobSignals.otherPayerId,
+            other_payer_paid_amount: claim.cobSignals.otherPayerPaidAmount,
+            source_segment: claim.cobSignals.sourceSegment,
+            raw: { clp: claim.clp01ClaimControlNumber },
+          });
+        }
+        if (signalRows.length > 0) {
+          const { error: signalErr } = await supabase
+            .from("claim_cob_signals")
+            .insert(signalRows as never);
+          if (signalErr) {
+            // Don't fail the whole intake over a COB-signal write — the
+            // ERA itself has already been persisted. Log and continue.
+            console.warn(
+              `[era835Intake] failed to persist claim_cob_signals for ${claim.clp01ClaimControlNumber}: ${signalErr.message}`,
+            );
+          }
+        }
+      }
     } catch (error) {
       errors.push({
         field: claim.clp01ClaimControlNumber,

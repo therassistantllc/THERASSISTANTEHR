@@ -302,6 +302,18 @@ export interface EligibilityResponseNormalized {
   coverageLevel?: string | null;
   message?: string | null;
   rawBenefits?: Record<string, unknown>;
+  /**
+   * Additional payers reported by the 271 (EB*R subloops or Availity
+   * JSON `otherPayers` bucket). Task #457 — persisted onto
+   * `eligibility_checks.other_payers` so `/api/billing/cob-issues` can
+   * prefer real signals over the policy-count heuristic.
+   */
+  otherPayers?: Array<{
+    name: string | null;
+    payerId: string | null;
+    effectiveDate: string | null;
+    terminationDate: string | null;
+  }>;
 }
 
 export interface ClaimStatusRequestInput {
