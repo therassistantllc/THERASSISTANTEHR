@@ -1657,11 +1657,7 @@ export default function PatientChartClient({
                   <tr>
                     <th>Case</th>
                     <th>Primary payer</th>
-                    <th>Payer ID</th>
                     <th>Member ID</th>
-                    <th>Group #</th>
-                    <th>Effective</th>
-                    <th>Termination</th>
                     <th>Copay</th>
                     <th>Active</th>
                     <th aria-label="Row actions" />
@@ -1673,8 +1669,10 @@ export default function PatientChartClient({
                       const order = { primary: 0, secondary: 1, tertiary: 2 } as const;
                       return (order[a.priority] ?? 9) - (order[b.priority] ?? 9);
                     });
+                    // Insurance summary only surfaces the primary policy row;
+                    // secondary/tertiary are visible in the Cases editor below.
                     const visiblePolicies = sortedPolicies.filter(
-                      (p) => p.priority === "primary" || p.priority === "secondary",
+                      (p) => p.priority === "primary",
                     );
                     if (visiblePolicies.length === 0) {
                       return [
@@ -1687,10 +1685,6 @@ export default function PatientChartClient({
                               </span>
                             ) : null}
                           </td>
-                          <td>{dash}</td>
-                          <td>{dash}</td>
-                          <td>{dash}</td>
-                          <td>{dash}</td>
                           <td>{dash}</td>
                           <td>{dash}</td>
                           <td>{dash}</td>
@@ -1740,11 +1734,7 @@ export default function PatientChartClient({
                             )}
                           </td>
                           <td>{casePolicy.payerName ?? casePolicy.planName ?? dash}</td>
-                          <td>{dashIfNullish(matchingPolicy?.payer_id ?? null)}</td>
                           <td>{casePolicy.policyNumber ?? dash}</td>
-                          <td>{dashIfNullish(matchingPolicy?.group_number ?? null)}</td>
-                          <td>{matchingPolicy?.effective_date ? formatDate(matchingPolicy.effective_date) : dash}</td>
-                          <td>{matchingPolicy?.termination_date ? formatDate(matchingPolicy.termination_date) : dash}</td>
                           <td>{formatMoneyOrDash(matchingPolicy?.copay_amount ?? null)}</td>
                           <td>
                             {isFirst ? (
@@ -1785,7 +1775,7 @@ export default function PatientChartClient({
                         const saving = policySavingId === matchingPolicy.id;
                         rows.push(
                           <tr key={`${c.id}:${casePolicy.policyId}:edit`}>
-                            <td colSpan={10} style={{ background: "var(--surface-muted, #f9fafb)" }}>
+                            <td colSpan={6} style={{ background: "var(--surface-muted, #f9fafb)" }}>
                               <div
                                 style={{
                                   display: "grid",
