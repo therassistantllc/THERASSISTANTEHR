@@ -25,8 +25,13 @@ type Filter = { field: string; value: unknown };
 type Call = { table: string; op: "select"; filters: Filter[] };
 
 type SelectFn = (filters: Filter[]) => Row | null;
+type InsertCall = { table: string; payload: Row };
 
-function makeSupabase(handlers: Record<string, SelectFn>) {
+function makeSupabase(
+  handlers: Record<string, SelectFn>,
+  insertCollector?: InsertCall[],
+  insertResult?: { id: string; error: { message: string } | null },
+) {
   const calls: Call[] = [];
 
   function builder(table: string) {
@@ -43,11 +48,29 @@ function makeSupabase(handlers: Record<string, SelectFn>) {
       filters.push({ field, value });
       return chain;
     };
+    chain.neq = (..._args: unknown[]) => chain;
+    chain.is = (..._args: unknown[]) => chain;
+    chain.or = (..._args: unknown[]) => chain;
     chain.order = (..._args: unknown[]) => chain;
     chain.limit = (..._args: unknown[]) => chain;
     chain.maybeSingle = async () => settle();
     chain.single = async () => settle();
     return chain;
+  }
+
+  function insertBuilder(table: string, payload: Row) {
+    insertCollector?.push({ table, payload });
+    const result = insertResult ?? { id: "row-new", error: null };
+    return {
+      select: (..._args: unknown[]) => ({
+        single: async () => ({
+          data: result.error ? null : { id: result.id },
+          error: result.error,
+        }),
+      }),
+      then: (cb: (v: { data: null; error: { message: string } | null }) => unknown) =>
+        Promise.resolve(cb({ data: null, error: result.error })),
+    };
   }
 
   return {
@@ -56,6 +79,9 @@ function makeSupabase(handlers: Record<string, SelectFn>) {
         return {
           select(..._args: unknown[]) {
             return builder(table);
+          },
+          insert(payload: Row) {
+            return insertBuilder(table, payload);
           },
         };
       },
@@ -79,6 +105,11 @@ const scenario: Scenario = {
 };
 
 let lastCalls: Call[] = [];
+const insertCalls: InsertCall[] = [];
+const insertResult: { id: string; error: { message: string } | null } = {
+  id: "row-new",
+  error: null,
+};
 
 before(() => {
   mock.module("@/lib/auth/requireOrgAccess", {
@@ -109,7 +140,8 @@ before(() => {
   mock.module("@/lib/supabase/server", {
     namedExports: {
       createServerSupabaseAdminClient: () => {
-        const built = makeSupabase({
+        const built = makeSupabase(
+          {
           mailroom_items: (filters) => {
             if (!scenario.item) return null;
             const idF = filters.find((f) => f.field === "id");
@@ -130,7 +162,10 @@ before(() => {
           providers: () => null,
           insurance_policies: () => null,
           insurance_payers: () => null,
-        });
+          },
+          insertCalls,
+          insertResult,
+        );
         lastCalls = built.calls;
         return built.supabase;
       },
@@ -143,6 +178,9 @@ beforeEach(() => {
   scenario.item = null;
   scenario.filedDocument = null;
   lastCalls = [];
+  insertCalls.length = 0;
+  insertResult.id = "row-new";
+  insertResult.error = null;
 });
 
 async function loadGet() {
@@ -267,5 +305,75 @@ describe("regression: /api/mailroom/items/[itemId] route wiring", () => {
   it("returns 404 (not 500) when the org-scoped item lookup misses", () => {
     assert.match(src, /Mailroom item not found/);
     assert.match(src, /\b404\b/);
+  });
+});
+
+async function loadItemsPost() {
+  const mod = await import("../route");
+  return mod.POST as (r: Request) => Promise<Response>;
+}
+
+function itemsPostRequest(body: Record<string, unknown>): Request {
+  return new Request("https://app.test/api/mailroom/items", {
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: { "content-type": "application/json" },
+  });
+}
+
+describe("POST /api/mailroom/items — title backfill (Task #403)", () => {
+  it("succeeds without a caller-supplied title and populates legacy `title` from fileName", async () => {
+    const POST = await loadItemsPost();
+    const res = await POST(
+      itemsPostRequest({
+        organizationId: ORG_A,
+        fileName: "remit-april.pdf",
+      }),
+    );
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { success: boolean; mailroomItemId: string };
+    assert.equal(body.success, true);
+
+    const mailroomInsert = insertCalls.find((c) => c.table === "mailroom_items");
+    assert.ok(mailroomInsert, "expected a mailroom_items insert");
+    // Legacy NOT NULL `title` column must be populated; the caller did not
+    // supply one so it must fall back to the file name (not null / not empty).
+    assert.equal(mailroomInsert!.payload.title, "remit-april.pdf");
+    // Compat columns are still set alongside.
+    assert.equal(mailroomInsert!.payload.file_name, "remit-april.pdf");
+    assert.equal(mailroomInsert!.payload.status, "needs_review");
+  });
+
+  it("falls back to a generic title when neither title nor fileName is supplied", async () => {
+    const POST = await loadItemsPost();
+    const res = await POST(itemsPostRequest({ organizationId: ORG_A }));
+    assert.equal(res.status, 200);
+
+    const mailroomInsert = insertCalls.find((c) => c.table === "mailroom_items");
+    assert.ok(mailroomInsert);
+    const title = String(mailroomInsert!.payload.title ?? "");
+    assert.ok(title.length > 0, "title must be non-empty to satisfy NOT NULL");
+  });
+
+  it("prefers a caller-supplied title over the derived file name", async () => {
+    const POST = await loadItemsPost();
+    const res = await POST(
+      itemsPostRequest({
+        organizationId: ORG_A,
+        fileName: "scan.pdf",
+        title: "EOB from Aetna",
+      }),
+    );
+    assert.equal(res.status, 200);
+    const mailroomInsert = insertCalls.find((c) => c.table === "mailroom_items");
+    assert.equal(mailroomInsert!.payload.title, "EOB from Aetna");
+  });
+});
+
+describe("regression: /api/mailroom/items POST wiring", () => {
+  const src = readFileSync("app/api/mailroom/items/route.ts", "utf8");
+
+  it("populates the legacy NOT NULL `title` column on insert (Task #403)", () => {
+    assert.match(src, /\.insert\(\{[\s\S]*?\btitle[,:][\s\S]*?\}\)/);
   });
 });

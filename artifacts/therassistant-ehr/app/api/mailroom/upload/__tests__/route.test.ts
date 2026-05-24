@@ -169,6 +169,10 @@ describe("POST /api/mailroom/upload — smoke", () => {
     assert.equal(insert.payload.source, "manual_upload");
     assert.equal(insert.payload.document_type, "lab_result");
     assert.equal(insert.payload.file_name, "scan.pdf");
+    // Legacy NOT NULL `title` column must be populated — derive from the
+    // uploaded file name so list views that still read `title` keep showing
+    // something meaningful. Regression: Task #403 (null title NOT NULL).
+    assert.equal(insert.payload.title, "scan.pdf");
 
     // Storage path must also be namespaced by the session organization so an
     // attacker can't smuggle in a path that lands in another tenant's prefix.
@@ -240,5 +244,13 @@ describe("regression: /api/mailroom/upload route wiring", () => {
 
   it("removes the uploaded storage object when the DB insert fails", () => {
     assert.match(src, /storage\.from\(BUCKET\)\.remove\(\[storagePath\]\)/);
+  });
+
+  it("populates the legacy NOT NULL `title` column on insert (Task #403)", () => {
+    // mailroom_items.title is still NOT NULL on the live DB even though the
+    // newer compat columns (file_name/status/source/notes) exist. The insert
+    // payload must include `title:` or every upload 422s with a not-null
+    // constraint violation.
+    assert.match(src, /\.insert\(\{[\s\S]*?\btitle[,:][\s\S]*?\}\)/);
   });
 });
