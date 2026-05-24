@@ -2584,6 +2584,7 @@ export type Database = {
           address_line_1: string | null
           address_line_2: string | null
           archived_at: string | null
+          autopay_enabled: boolean
           city: string | null
           created_at: string
           created_by_user_id: string | null
@@ -2608,6 +2609,14 @@ export type Database = {
           pronouns: string | null
           sex_at_birth: string | null
           state: string | null
+          stripe_connect_account_id: string | null
+          stripe_customer_id: string | null
+          stripe_payment_method_brand: string | null
+          stripe_payment_method_exp_month: number | null
+          stripe_payment_method_exp_year: number | null
+          stripe_payment_method_id: string | null
+          stripe_payment_method_last4: string | null
+          stripe_payment_method_saved_at: string | null
           updated_at: string
           updated_by_user_id: string | null
         }
@@ -2615,6 +2624,7 @@ export type Database = {
           address_line_1?: string | null
           address_line_2?: string | null
           archived_at?: string | null
+          autopay_enabled?: boolean
           city?: string | null
           created_at?: string
           created_by_user_id?: string | null
@@ -2639,6 +2649,14 @@ export type Database = {
           pronouns?: string | null
           sex_at_birth?: string | null
           state?: string | null
+          stripe_connect_account_id?: string | null
+          stripe_customer_id?: string | null
+          stripe_payment_method_brand?: string | null
+          stripe_payment_method_exp_month?: number | null
+          stripe_payment_method_exp_year?: number | null
+          stripe_payment_method_id?: string | null
+          stripe_payment_method_last4?: string | null
+          stripe_payment_method_saved_at?: string | null
           updated_at?: string
           updated_by_user_id?: string | null
         }
@@ -2646,6 +2664,7 @@ export type Database = {
           address_line_1?: string | null
           address_line_2?: string | null
           archived_at?: string | null
+          autopay_enabled?: boolean
           city?: string | null
           created_at?: string
           created_by_user_id?: string | null
@@ -2670,6 +2689,14 @@ export type Database = {
           pronouns?: string | null
           sex_at_birth?: string | null
           state?: string | null
+          stripe_connect_account_id?: string | null
+          stripe_customer_id?: string | null
+          stripe_payment_method_brand?: string | null
+          stripe_payment_method_exp_month?: number | null
+          stripe_payment_method_exp_year?: number | null
+          stripe_payment_method_id?: string | null
+          stripe_payment_method_last4?: string | null
+          stripe_payment_method_saved_at?: string | null
           updated_at?: string
           updated_by_user_id?: string | null
         }

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireBillingAccess } from "@/lib/billing/requireBillingAccess";
 import { markPatientInvoiceSent } from "@/lib/payments/patientInvoicePaymentService";
+import { chargeSavedCardForInvoice } from "@/lib/payments/savedCardService";
 
 type ActionName =
   | "create_invoice"
@@ -232,9 +233,6 @@ export async function POST(request: Request) {
       }
 
       case "charge_card": {
-        // No saved card / autopay schema exists on `clients` — log the
-        // attempt so the action is auditable, and surface a clear message
-        // when a payment method isn't on file.
         if (!clientId) {
           return NextResponse.json(
             { success: false, error: "ERA has no responsible patient" },
@@ -242,18 +240,146 @@ export async function POST(request: Request) {
           );
         }
         const amount = Math.round(Math.max(0, Number(body.amount ?? prAmount)) * 100) / 100;
+        if (!Number.isFinite(amount) || amount <= 0) {
+          return NextResponse.json(
+            { success: false, error: "Charge amount must be greater than zero" },
+            { status: 422 },
+          );
+        }
+
+        // Locate (or auto-create) the open invoice the charge applies
+        // to. Billers expect the charge to "just work" even if they
+        // haven't pressed "Create invoice" first — and the ledger
+        // posting needs an invoice id either way.
+        let invoiceId = (body.invoiceId ?? "").trim();
+        if (!invoiceId) {
+          const filter = claimId
+            ? `professional_claim_id.eq.${claimId},era_claim_payment_id.eq.${eraId}`
+            : `era_claim_payment_id.eq.${eraId}`;
+          const { data: invRow } = await sb
+            .from("patient_invoices")
+            .select("id, balance_amount, invoice_status")
+            .eq("organization_id", organizationId)
+            .or(filter)
+            .is("archived_at", null)
+            .neq("invoice_status", "void")
+            .neq("invoice_status", "voided")
+            .neq("invoice_status", "paid")
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          invoiceId = invRow ? String(invRow.id) : "";
+        }
+        if (!invoiceId) {
+          let claimNumber = "";
+          if (claimId) {
+            const { data: c } = await sb
+              .from("professional_claims")
+              .select("claim_number")
+              .eq("id", claimId)
+              .eq("organization_id", organizationId)
+              .maybeSingle();
+            claimNumber = c ? String(c.claim_number ?? "") : "";
+          }
+          const invoiceNumber = `INV-${(claimNumber || eraId).toString().slice(0, 16)}-${Date.now()
+            .toString()
+            .slice(-6)}`;
+          const { data: newInvoice, error: newInvErr } = await sb
+            .from("patient_invoices")
+            .insert({
+              organization_id: organizationId,
+              client_id: clientId,
+              professional_claim_id: claimId,
+              era_claim_payment_id: eraId,
+              invoice_status: "open",
+              invoice_number: invoiceNumber,
+              patient_responsibility_amount: amount,
+              paid_amount: 0,
+              balance_amount: amount,
+              source: "era_remit",
+            })
+            .select("id")
+            .single();
+          if (newInvErr || !newInvoice) {
+            return NextResponse.json(
+              { success: false, error: newInvErr?.message ?? "Failed to auto-create invoice for charge" },
+              { status: 500 },
+            );
+          }
+          invoiceId = String(newInvoice.id);
+        }
+
+        const result = await chargeSavedCardForInvoice({
+          organizationId,
+          clientId,
+          patientInvoiceId: invoiceId,
+          amountDollars: amount,
+          memo: note || null,
+          metadataExtra: {
+            era_claim_payment_id: eraId,
+            ...(claimId ? { professional_claim_id: claimId } : {}),
+          },
+        });
+
+        if (!result.ok) {
+          // Audit the failed attempt so the operator can trace it.
+          await writeAudit(supabase, {
+            organizationId, userId,
+            action: "patient_resp_charge_card_failed",
+            claimId, clientId,
+            summary: note || `Card charge failed for $${amount.toFixed(2)}: ${result.message}`,
+            metadata: {
+              eraClaimPaymentId: eraId,
+              amount,
+              invoiceId,
+              errorCode: result.code,
+              errorMessage: result.message,
+            },
+          });
+          const statusByCode: Record<string, number> = {
+            no_saved_card: 422,
+            client_not_found: 404,
+            stripe_not_configured: 503,
+            db_unavailable: 503,
+            authentication_required: 402,
+            card_declined: 402,
+            no_connected_account: 422,
+          };
+          return NextResponse.json(
+            { success: false, status: result.code, error: result.message },
+            { status: statusByCode[result.code] ?? 502 },
+          );
+        }
+
         const audit = await writeAudit(supabase, {
           organizationId, userId,
-          action: "patient_resp_charge_card_requested",
+          action: "patient_resp_charge_card_succeeded",
           claimId, clientId,
-          summary: note || `Card charge requested for $${amount.toFixed(2)}`,
-          metadata: { eraClaimPaymentId: eraId, amount, status: "queued_no_card_on_file" },
+          summary: note || `Charged $${amount.toFixed(2)} to ${result.brand ?? "card"} •••• ${result.last4 ?? ""}`,
+          metadata: {
+            eraClaimPaymentId: eraId,
+            amount,
+            invoiceId,
+            paymentIntentId: result.paymentIntentId,
+            paymentId: result.paymentId,
+            brand: result.brand,
+            last4: result.last4,
+          },
         });
         if (!audit.ok) return NextResponse.json({ success: false, error: audit.error }, { status: 500 });
+
         return NextResponse.json({
           success: true,
-          status: "queued",
-          message: "No card on file — patient will be prompted to add one via the portal.",
+          status: "charged",
+          invoiceId,
+          paymentIntentId: result.paymentIntentId,
+          paymentId: result.paymentId,
+          invoiceStatus: result.invoiceStatus,
+          balanceAmount: result.balanceAmount,
+          amountCharged: amount,
+          brand: result.brand,
+          last4: result.last4,
+          message: `Charged $${amount.toFixed(2)} to ${result.brand ?? "card"} •••• ${result.last4 ?? ""}`,
         });
       }
 

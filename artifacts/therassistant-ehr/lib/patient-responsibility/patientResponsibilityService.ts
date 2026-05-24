@@ -244,7 +244,7 @@ export async function loadPatientResponsibility({
       : { data: [] as DbRow[] },
     clientIds.length
       ? sb.from("clients")
-          .select("id, first_name, last_name, email, phone, address_line_1, city, state, postal_code, portal_status")
+          .select("id, first_name, last_name, email, phone, address_line_1, city, state, postal_code, portal_status, stripe_customer_id, stripe_payment_method_id, stripe_payment_method_brand, stripe_payment_method_last4, stripe_payment_method_exp_month, stripe_payment_method_exp_year, stripe_payment_method_saved_at, autopay_enabled")
           .in("id", clientIds)
       : { data: [] as DbRow[] },
     sb.from("patient_invoices")
@@ -440,10 +440,14 @@ export async function loadPatientResponsibility({
       invoice,
       invoiceStatusLabel,
       statementDate,
-      // No autopay table exists in this schema — surface enrollment honestly.
-      autopayStatusLabel: cli && text(cli.portal_status).toLowerCase() === "active"
-        ? "Portal active"
-        : "Not enrolled",
+      // Real enrollment: prefer autopay → card-on-file → portal-active → not enrolled.
+      autopayStatusLabel: cli && cli.autopay_enabled && cli.stripe_payment_method_id
+        ? `Autopay (•••• ${text(cli.stripe_payment_method_last4) || "card"})`
+        : cli && cli.stripe_payment_method_id
+          ? `Card on file (•••• ${text(cli.stripe_payment_method_last4) || "card"})`
+          : cli && text(cli.portal_status).toLowerCase() === "active"
+            ? "Portal active"
+            : "Not enrolled",
       onHold,
 
       eraReceivedAt,
@@ -499,7 +503,7 @@ export async function loadPatientResponsibilityContext(
       .limit(5),
     text(eraRow.client_id)
       ? sb.from("clients")
-          .select("id, first_name, last_name, email, phone, address_line_1, city, state, postal_code, portal_status")
+          .select("id, first_name, last_name, email, phone, address_line_1, city, state, postal_code, portal_status, stripe_customer_id, stripe_payment_method_id, stripe_payment_method_brand, stripe_payment_method_last4, stripe_payment_method_exp_month, stripe_payment_method_exp_year, stripe_payment_method_saved_at, autopay_enabled")
           .eq("id", text(eraRow.client_id))
           .maybeSingle()
       : { data: null },
@@ -605,6 +609,17 @@ export async function loadPatientResponsibilityContext(
       hasPhone: !!(clientRow && text(clientRow.phone)),
       hasMailingAddress: !!(clientRow && text(clientRow.address_line_1)),
       portalStatus: clientRow ? text(clientRow.portal_status) || null : null,
+      hasSavedCard: !!(clientRow && clientRow.stripe_payment_method_id && clientRow.stripe_customer_id),
+      cardBrand: clientRow ? text(clientRow.stripe_payment_method_brand) || null : null,
+      cardLast4: clientRow ? text(clientRow.stripe_payment_method_last4) || null : null,
+      cardExpMonth: clientRow && clientRow.stripe_payment_method_exp_month != null
+        ? Number(clientRow.stripe_payment_method_exp_month)
+        : null,
+      cardExpYear: clientRow && clientRow.stripe_payment_method_exp_year != null
+        ? Number(clientRow.stripe_payment_method_exp_year)
+        : null,
+      cardSavedAt: clientRow ? text(clientRow.stripe_payment_method_saved_at) || null : null,
+      autopayEnabled: !!(clientRow && clientRow.autopay_enabled),
     },
     invoicePreview: {
       invoiceNumberPreview: `INV-${(claimRow ? text(claimRow.claim_number) || text(claimRow.id).slice(0, 8) : eraClaimPaymentId.slice(0, 8))}-${Date.now().toString().slice(-6)}`,

@@ -409,7 +409,15 @@ export default function PatientResponsibilityClient() {
         id: "charge_card",
         label: "Charge card",
         onClick: (r) => void performAction(r, "charge_card", { amount: r.patientAmount }),
-        disabled: (r) => actingId === r.id || !r.clientId,
+        disabled: (r) => {
+          if (actingId === r.id || !r.clientId) return true;
+          const m = ctxByEra[r.eraClaimPaymentId]?.paymentMethod;
+          // If we have context loaded and there's no saved card, disable;
+          // otherwise allow optimistic click — the server returns a
+          // helpful 422 if the patient has no card on file.
+          if (m && m.hasSavedCard === false) return true;
+          return false;
+        },
       },
       {
         id: "apply_adjustment",
@@ -439,7 +447,7 @@ export default function PatientResponsibilityClient() {
         disabled: (r) => actingId === r.id,
       },
     ],
-    [actingId, performAction],
+    [actingId, performAction, ctxByEra],
   );
 
   const ctx = selectedRow ? ctxByEra[selectedRow.eraClaimPaymentId] : undefined;
@@ -548,15 +556,32 @@ export default function PatientResponsibilityClient() {
           if (ctxIsLoading && !ctx) return <p style={{ color: "#64748B", fontSize: 13 }}>Loading…</p>;
           if (!ctx) return null;
           const m = ctx.paymentMethod;
+          const expLabel = m.cardExpMonth && m.cardExpYear
+            ? `${String(m.cardExpMonth).padStart(2, "0")}/${String(m.cardExpYear).slice(-2)}`
+            : null;
           return (
             <div>
+              <DetailKV
+                label="Saved card"
+                value={m.hasSavedCard
+                  ? <strong>{(m.cardBrand || "Card")} •••• {m.cardLast4 || "----"}{expLabel ? `  (exp ${expLabel})` : ""}</strong>
+                  : <StatusPill label="None on file" tone="amber" />}
+              />
+              <DetailKV
+                label="Autopay"
+                value={m.autopayEnabled
+                  ? <StatusPill label="Enabled" tone="green" />
+                  : <StatusPill label="Off" tone="default" />}
+              />
               <DetailKV label="Patient portal" value={m.portalStatus ?? "Not configured"} />
               <DetailKV label="Email on file" value={m.hasEmail ? <StatusPill label="Yes" tone="green" /> : <StatusPill label="No" tone="amber" />} />
               <DetailKV label="Phone on file" value={m.hasPhone ? <StatusPill label="Yes" tone="green" /> : <StatusPill label="No" tone="amber" />} />
               <DetailKV label="Mailing address" value={m.hasMailingAddress ? <StatusPill label="Yes" tone="green" /> : <StatusPill label="No" tone="amber" />} />
-              <p style={{ marginTop: 8, fontSize: 12, color: "#64748B" }}>
-                Saved card / autopay enrollment is managed in the patient portal — Charge card will prompt the patient when no card is on file.
-              </p>
+              {!m.hasSavedCard ? (
+                <p style={{ marginTop: 8, fontSize: 12, color: "#64748B" }}>
+                  No card on file — add one from the patient&apos;s billing page before charging.
+                </p>
+              ) : null}
             </div>
           );
         },
@@ -615,7 +640,8 @@ export default function PatientResponsibilityClient() {
       {
         id: "charge_card", label: "Charge card",
         onClick: () => void performAction(r, "charge_card", { amount: r.patientAmount }),
-        disabled: actingId === r.id || !r.clientId,
+        disabled: actingId === r.id || !r.clientId
+          || (ctx?.paymentMethod ? ctx.paymentMethod.hasSavedCard === false : false),
       },
       {
         id: "apply_adjustment", label: "Apply adjustment",

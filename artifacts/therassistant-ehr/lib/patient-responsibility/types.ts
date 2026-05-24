@@ -29,6 +29,13 @@ export interface PaymentMethodOnFile {
   hasPhone: boolean;
   hasMailingAddress: boolean;
   portalStatus: string | null;
+  hasSavedCard: boolean;
+  cardBrand: string | null;
+  cardLast4: string | null;
+  cardExpMonth: number | null;
+  cardExpYear: number | null;
+  cardSavedAt: string | null;
+  autopayEnabled: boolean;
 }
 
 export interface ExistingInvoice {

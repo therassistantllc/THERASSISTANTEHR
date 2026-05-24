@@ -257,6 +257,164 @@ export async function createConnectCheckoutSession(input: {
   });
 }
 
+export interface StripeCustomer {
+  id: string;
+  email?: string | null;
+  name?: string | null;
+  metadata?: Record<string, string>;
+}
+
+/**
+ * Create a Customer on a connected Express account (Task #487).
+ * Used to pin a patient's saved card to the practice's connected
+ * account, since direct charges require customer + payment method to
+ * live on that account.
+ */
+export async function createConnectCustomer(input: {
+  connectedAccountId: string;
+  email?: string | null;
+  name?: string | null;
+  metadata?: Record<string, string>;
+  idempotencyKey?: string;
+}): Promise<StripeCustomer> {
+  const params: Record<string, unknown> = {};
+  if (input.email) params.email = input.email;
+  if (input.name) params.name = input.name;
+  if (input.metadata) params.metadata = input.metadata;
+  return stripeRequest<StripeCustomer>("/customers", {
+    stripeAccount: input.connectedAccountId,
+    idempotencyKey: input.idempotencyKey,
+    params,
+  });
+}
+
+export interface StripeSetupIntent {
+  id: string;
+  client_secret: string;
+  status: string;
+  payment_method?: string | null;
+  customer?: string | null;
+  metadata?: Record<string, string>;
+}
+
+/**
+ * Create a SetupIntent on a connected account to collect & save a
+ * patient card without charging (Task #487). Frontend uses
+ * `client_secret` with Stripe.js to mount Payment Element / confirm.
+ */
+export async function createConnectSetupIntent(input: {
+  connectedAccountId: string;
+  customerId: string;
+  metadata?: Record<string, string>;
+  idempotencyKey?: string;
+}): Promise<StripeSetupIntent> {
+  const params: Record<string, unknown> = {
+    customer: input.customerId,
+    payment_method_types: ["card"],
+    usage: "off_session",
+  };
+  if (input.metadata) params.metadata = input.metadata;
+  return stripeRequest<StripeSetupIntent>("/setup_intents", {
+    stripeAccount: input.connectedAccountId,
+    idempotencyKey: input.idempotencyKey,
+    params,
+  });
+}
+
+export async function retrieveConnectSetupIntent(input: {
+  connectedAccountId: string;
+  setupIntentId: string;
+}): Promise<StripeSetupIntent> {
+  return stripeRequest<StripeSetupIntent>(
+    `/setup_intents/${encodeURIComponent(input.setupIntentId)}`,
+    { method: "GET", stripeAccount: input.connectedAccountId },
+  );
+}
+
+export interface StripePaymentMethod {
+  id: string;
+  type: string;
+  customer?: string | null;
+  card?: {
+    brand?: string;
+    last4?: string;
+    exp_month?: number;
+    exp_year?: number;
+  };
+}
+
+export async function retrieveConnectPaymentMethod(input: {
+  connectedAccountId: string;
+  paymentMethodId: string;
+}): Promise<StripePaymentMethod> {
+  return stripeRequest<StripePaymentMethod>(
+    `/payment_methods/${encodeURIComponent(input.paymentMethodId)}`,
+    { method: "GET", stripeAccount: input.connectedAccountId },
+  );
+}
+
+export async function attachConnectPaymentMethod(input: {
+  connectedAccountId: string;
+  paymentMethodId: string;
+  customerId: string;
+}): Promise<StripePaymentMethod> {
+  return stripeRequest<StripePaymentMethod>(
+    `/payment_methods/${encodeURIComponent(input.paymentMethodId)}/attach`,
+    {
+      stripeAccount: input.connectedAccountId,
+      params: { customer: input.customerId },
+    },
+  );
+}
+
+export async function detachConnectPaymentMethod(input: {
+  connectedAccountId: string;
+  paymentMethodId: string;
+}): Promise<StripePaymentMethod> {
+  return stripeRequest<StripePaymentMethod>(
+    `/payment_methods/${encodeURIComponent(input.paymentMethodId)}/detach`,
+    { stripeAccount: input.connectedAccountId },
+  );
+}
+
+/**
+ * Charge a previously-saved card off-session on a connected Express
+ * account (Task #487). Confirms inline and returns the resulting
+ * PaymentIntent. Throws StripeRequestError on failure (e.g.
+ * `authentication_required` when the bank insists on a 3DS challenge
+ * — the caller should surface that so the patient can authenticate
+ * via the portal).
+ */
+export async function createConnectOffSessionCharge(input: {
+  amountCents: number;
+  currency?: string;
+  connectedAccountId: string;
+  customerId: string;
+  paymentMethodId: string;
+  metadata: Record<string, string>;
+  description?: string;
+  idempotencyKey?: string;
+  statementDescriptor?: string;
+}): Promise<StripePaymentIntent> {
+  const params: Record<string, unknown> = {
+    amount: input.amountCents,
+    currency: (input.currency ?? "usd").toLowerCase(),
+    customer: input.customerId,
+    payment_method: input.paymentMethodId,
+    off_session: true,
+    confirm: true,
+    payment_method_types: ["card"],
+    metadata: input.metadata,
+  };
+  if (input.description) params.description = input.description;
+  if (input.statementDescriptor) params.statement_descriptor_suffix = input.statementDescriptor;
+  return stripeRequest<StripePaymentIntent>("/payment_intents", {
+    stripeAccount: input.connectedAccountId,
+    idempotencyKey: input.idempotencyKey,
+    params,
+  });
+}
+
 /**
  * Map a Stripe account into a normalized status the EHR UI consumes.
  *   not_connected  — no account on file
