@@ -253,6 +253,12 @@ export default function OrganizationsListClient() {
                       {!isActive && (
                         <button className="button button-secondary" onClick={() => switchActiveOrg(org.id)}>Make active</button>
                       )}
+                      <Link
+                        className="button button-primary"
+                        href={`/settings/organization?organizationId=${encodeURIComponent(org.id)}`}
+                      >
+                        Edit
+                      </Link>
                       <button className="button button-secondary" onClick={() => setExpanded(e => ({ ...e, [org.id]: !isExpanded }))}>
                         {isExpanded ? "Hide providers" : "Manage providers"}
                       </button>

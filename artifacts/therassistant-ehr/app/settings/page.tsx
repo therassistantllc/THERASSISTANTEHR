@@ -4,12 +4,7 @@ const SETTINGS_SECTIONS = [
   {
     label: "Organizations",
     href: "/settings/organizations",
-    description: "Create multiple organizations and assign providers to each one.",
-  },
-  {
-    label: "Organization Settings",
-    href: "/settings/organization",
-    description: "Practice name, address, NPI, tax ID, and billing configuration for the active org.",
+    description: "List, add, and edit your organizations — practice name, NPI, tax ID, billing address, and provider assignments.",
   },
   {
     label: "Staff & Users",
