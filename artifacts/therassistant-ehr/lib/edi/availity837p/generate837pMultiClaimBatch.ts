@@ -220,6 +220,10 @@ function emitClaimSegments(ctx: BuildClaimContext): string[] {
   // 2300 CLM
   const totalCharge = formatMoney(Number(claim.total_charge ?? 0));
   const claimPos = sanitizeX12(claim.place_of_service || serviceLines[0]?.place_of_service || "");
+  // CLM05-3 Claim Frequency Code: '1' original, '7' replacement, '8' void.
+  // Defaults to '1' when missing. Corrected children produced by the
+  // /api/billing/corrected-claims action persist '7' or '8' here.
+  const claimFrequency = sanitizeX12(claim.claim_frequency_code || "1") || "1";
   segments.push(
     buildSegment([
       "CLM",
@@ -227,13 +231,23 @@ function emitClaimSegments(ctx: BuildClaimContext): string[] {
       totalCharge,
       "",
       "",
-      `${claimPos}${X12.componentSeparator}B${X12.componentSeparator}1`,
+      `${claimPos}${X12.componentSeparator}B${X12.componentSeparator}${claimFrequency}`,
       claim.accept_assignment === false ? "N" : "Y",
       "A",
       claim.release_of_information === false ? "N" : "Y",
       claim.signature_on_file === false ? "N" : "Y",
     ]),
   );
+
+  // 2300 REF*F8 — Payer Claim Control Number (original claim ICN). Required
+  // on corrected/void resubmissions (frequency 7/8) so the payer can tie the
+  // replacement to the original claim instead of rejecting it as a duplicate.
+  if (claimFrequency === "7" || claimFrequency === "8") {
+    const originalIcn = sanitizeX12(claim.original_payer_claim_control_number ?? "");
+    if (originalIcn) {
+      segments.push(buildSegment(["REF", "F8", originalIcn]));
+    }
+  }
 
   if (claim.prior_authorization_number) {
     segments.push(buildSegment(["REF", "G1", sanitizeX12(claim.prior_authorization_number)]));

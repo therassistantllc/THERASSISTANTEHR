@@ -34,6 +34,9 @@ function normalizeClaim(row: Record<string, unknown>): ProfessionalClaim {
     claim_number: (row.claim_number as string | null | undefined) ?? null,
     patient_account_number: (row.patient_account_number as string | null | undefined) ?? null,
     claim_status: (row.claim_status as string | null | undefined) ?? null,
+    claim_frequency_code: (row.claim_frequency_code as string | null | undefined) ?? "1",
+    original_payer_claim_control_number:
+      (row.original_payer_claim_control_number as string | null | undefined) ?? null,
     total_charge: (row.total_charge as number | string | null | undefined) ?? 0,
     place_of_service: (row.place_of_service as string | null | undefined) ?? null,
     diagnosis_codes: Array.isArray(row.diagnosis_codes)
@@ -217,6 +220,37 @@ export async function POST(request: Request) {
     }
 
     const claim = normalizeClaim(claimRow as unknown as Record<string, unknown>);
+
+    // Corrected children (frequency 7/8) need the payer's CCN from the
+    // original claim's most recent ERA so the generator can emit REF*F8.
+    // We look it up dynamically rather than persisting on the claim so it
+    // tolerates ERA arriving after the corrected child was created.
+    const originalClaimId =
+      typeof (claimRow as Record<string, unknown>).original_claim_id === "string"
+        ? ((claimRow as Record<string, unknown>).original_claim_id as string)
+        : null;
+    if (
+      (claim.claim_frequency_code === "7" || claim.claim_frequency_code === "8") &&
+      originalClaimId &&
+      !claim.original_payer_claim_control_number
+    ) {
+      const { data: eraRow } = await supabase
+        .from("era_claim_payments")
+        .select("payer_claim_control_number, clp01_claim_control_number, created_at")
+        .eq("professional_claim_id", originalClaimId)
+        .is("archived_at", null)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const icn =
+        (eraRow as { payer_claim_control_number?: string | null; clp01_claim_control_number?: string | null } | null)
+          ?.payer_claim_control_number ??
+        (eraRow as { clp01_claim_control_number?: string | null } | null)?.clp01_claim_control_number ??
+        null;
+      if (icn) {
+        claim.original_payer_claim_control_number = icn;
+      }
+    }
 
     const gate = await assertClaimReadyForSubmission({
       organizationId: claim.organization_id,

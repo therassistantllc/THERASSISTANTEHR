@@ -38,6 +38,15 @@ export interface ProfessionalClaim {
   claim_number?: string | null;
   patient_account_number?: string | null;
   claim_status?: string | null;
+  // 2300/CLM05-3 frequency: '1' original, '7' replacement of prior claim,
+  // '8' void/cancel of prior claim. Defaults to '1' when null. For '7'/'8'
+  // the generator must also emit a 2300 REF*F8 with the payer's original
+  // claim control number (ICN), supplied via original_payer_claim_control_number.
+  claim_frequency_code?: string | null;
+  // Payer-assigned Claim Control Number (CLP07 on the 835 for the prior
+  // claim). Required on corrected children (frequency 7/8) so payers can
+  // tie the resubmission to the original instead of treating it as a dup.
+  original_payer_claim_control_number?: string | null;
   total_charge?: number | string | null;
   place_of_service?: string | null;
   diagnosis_codes?: string[] | null;

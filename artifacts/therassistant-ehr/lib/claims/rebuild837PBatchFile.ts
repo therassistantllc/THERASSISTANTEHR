@@ -33,6 +33,9 @@ function normalizeClaim(row: Row): ProfessionalClaim {
     claim_number: (row.claim_number as string | null | undefined) ?? null,
     patient_account_number: (row.patient_account_number as string | null | undefined) ?? null,
     claim_status: (row.claim_status as string | null | undefined) ?? null,
+    claim_frequency_code: (row.claim_frequency_code as string | null | undefined) ?? "1",
+    original_payer_claim_control_number:
+      (row.original_payer_claim_control_number as string | null | undefined) ?? null,
     total_charge: (row.total_charge as number | string | null | undefined) ?? 0,
     place_of_service: (row.place_of_service as string | null | undefined) ?? null,
     diagnosis_codes: Array.isArray(row.diagnosis_codes) ? row.diagnosis_codes.map(String) : [],
@@ -200,6 +203,48 @@ export async function rebuild837PBatchFile(args: {
   const claims = ((claimRows ?? []) as Row[]).map(normalizeClaim);
   if (claims.length !== claimIds.length) {
     return { ok: false, batchId, error: "One or more linked claims were not found" };
+  }
+
+  // Build a map of original_claim_id → most recent payer Claim Control Number
+  // for any corrected children (frequency 7/8) in this batch, so the
+  // generator can emit REF*F8 in loop 2300. Looked up dynamically rather
+  // than persisted on the corrected claim so it tolerates ERA arriving
+  // after the corrected child was created.
+  const originalClaimIdByChild = new Map<string, string>();
+  for (const row of (claimRows ?? []) as Row[]) {
+    const freq = (row.claim_frequency_code as string | null | undefined) ?? "1";
+    const orig = row.original_claim_id;
+    if ((freq === "7" || freq === "8") && typeof orig === "string" && orig) {
+      originalClaimIdByChild.set(asString(row.id), orig);
+    }
+  }
+  const originalIds = Array.from(new Set(originalClaimIdByChild.values()));
+  const icnByOriginal = new Map<string, string>();
+  if (originalIds.length > 0) {
+    const { data: eraRows } = await (supabase as any)
+      .from("era_claim_payments")
+      .select("professional_claim_id, payer_claim_control_number, clp01_claim_control_number, created_at")
+      .in("professional_claim_id", originalIds)
+      .is("archived_at", null)
+      .order("created_at", { ascending: false });
+    for (const row of ((eraRows ?? []) as Row[])) {
+      const pcid = asString(row.professional_claim_id);
+      if (!pcid || icnByOriginal.has(pcid)) continue;
+      const icn =
+        (typeof row.payer_claim_control_number === "string" && row.payer_claim_control_number) ||
+        (typeof row.clp01_claim_control_number === "string" && row.clp01_claim_control_number) ||
+        "";
+      if (icn) icnByOriginal.set(pcid, icn);
+    }
+  }
+  for (const claim of claims) {
+    const origId = originalClaimIdByChild.get(claim.id);
+    if (origId) {
+      const icn = icnByOriginal.get(origId);
+      if (icn && !claim.original_payer_claim_control_number) {
+        claim.original_payer_claim_control_number = icn;
+      }
+    }
   }
 
   const [{ data: lineRows, error: lineErr }, { data: partiesRows, error: partiesErr }] = await Promise.all([
