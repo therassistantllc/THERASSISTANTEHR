@@ -40,6 +40,20 @@ interface ClaimSummary {
   earliestDos: string | null;
 }
 
+interface EscalationSummary {
+  id: string;
+  status: string;
+  priority: string;
+  note: string | null;
+  assigneeUserId: string | null;
+  assigneeDisplayName: string | null;
+  openedAt: string;
+  openedByUserId: string | null;
+  resolvedAt: string | null;
+  resolvedByUserId: string | null;
+  resolutionNote: string | null;
+}
+
 interface BatchRow {
   id: string;
   batchNumber: string;
@@ -62,6 +76,9 @@ interface BatchRow {
   practiceName: string | null;
   clinicianName: string | null;
   attempts: AttemptHistoryEntry[];
+  assignedToUserId: string | null;
+  assignedToDisplayName: string | null;
+  openEscalation: EscalationSummary | null;
 }
 
 interface AttemptHistoryEntry {
@@ -171,13 +188,29 @@ export async function GET(request: Request) {
       followUpDue: searchParams.get("followUpDue"),
     };
 
-    const { data: batches, error: batchError } = await supabase
+    let batchQuery: any = (supabase as any)
       .from("claim_837p_batches")
       .select(
-        "id, batch_number, batch_status, claim_count, total_charge_amount, generated_file_name, submitted_at, created_at, updated_at, last_submission_attempted_at, last_submission_endpoint, last_submission_http_status, submission_attempt_count, submission_error, submission_idempotency_key, office_ally_transaction_id, availity_transaction_id",
+        "id, batch_number, batch_status, claim_count, total_charge_amount, generated_file_name, submitted_at, created_at, updated_at, last_submission_attempted_at, last_submission_endpoint, last_submission_http_status, submission_attempt_count, submission_error, submission_idempotency_key, office_ally_transaction_id, availity_transaction_id, assigned_to_user_id, assigned_to_display_name",
       )
       .eq("organization_id", organizationId)
-      .is("archived_at", null)
+      .is("archived_at", null);
+    // assignedBiller pushes down at the SQL layer now that batches carry
+    // their own assignee. "__unassigned__" matches rows with a null
+    // assignee; a uuid matches that specific staff member; any non-uuid
+    // value is ignored on the server (client should always send the id).
+    if (f.assignedBiller) {
+      if (f.assignedBiller === "__unassigned__") {
+        batchQuery = batchQuery.is("assigned_to_user_id", null);
+      } else if (
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          f.assignedBiller,
+        )
+      ) {
+        batchQuery = batchQuery.eq("assigned_to_user_id", f.assignedBiller);
+      }
+    }
+    const { data: batches, error: batchError } = await batchQuery
       .order("last_submission_attempted_at", { ascending: false, nullsFirst: false })
       .limit(MAX_BATCHES);
 
@@ -190,13 +223,33 @@ export async function GET(request: Request) {
 
     const batchIds = failed.map((b) => text(b.id)).filter(Boolean);
 
-    // Fan out: pull batch→claim membership, then per-claim data.
-    const { data: batchClaims } = await supabase
-      .from("claim_837p_batch_claims")
-      .select("batch_id, professional_claim_id")
-      .eq("organization_id", organizationId)
-      .in("batch_id", batchIds)
-      .is("archived_at", null);
+    // Fan out: pull batch→claim membership, then per-claim data, plus
+    // any open escalations against these batches.
+    const [{ data: batchClaims }, { data: openEscalations }] = await Promise.all([
+      supabase
+        .from("claim_837p_batch_claims")
+        .select("batch_id, professional_claim_id")
+        .eq("organization_id", organizationId)
+        .in("batch_id", batchIds)
+        .is("archived_at", null),
+      (supabase as any)
+        .from("claim_837p_batch_escalations")
+        .select(
+          "id, batch_id, status, priority, note, assigned_to_user_id, assigned_to_display_name, opened_at, opened_by_user_id, resolved_at, resolved_by_user_id, resolution_note",
+        )
+        .eq("organization_id", organizationId)
+        .eq("status", "open")
+        .in("batch_id", batchIds)
+        .order("opened_at", { ascending: false }),
+    ]);
+
+    // First row per batch wins (we ordered desc), so we keep the most
+    // recent open escalation when there are duplicates from a retry.
+    const escByBatch = new Map<string, DbRow>();
+    for (const e of (openEscalations ?? []) as DbRow[]) {
+      const bid = text(e.batch_id);
+      if (bid && !escByBatch.has(bid)) escByBatch.set(bid, e);
+    }
 
     // Per-batch transmission attempt history (Task #442). Ordered oldest →
     // newest so the UI can render a chronological timeline without sorting.
@@ -406,6 +459,23 @@ export async function GET(request: Request) {
             : Number(b.last_submission_http_status),
       });
 
+      const esc = escByBatch.get(batchId) ?? null;
+      const openEscalation: EscalationSummary | null = esc
+        ? {
+            id: text(esc.id),
+            status: text(esc.status) || "open",
+            priority: text(esc.priority) || "normal",
+            note: text(esc.note) || null,
+            assigneeUserId: text(esc.assigned_to_user_id) || null,
+            assigneeDisplayName: text(esc.assigned_to_display_name) || null,
+            openedAt: text(esc.opened_at),
+            openedByUserId: text(esc.opened_by_user_id) || null,
+            resolvedAt: text(esc.resolved_at) || null,
+            resolvedByUserId: text(esc.resolved_by_user_id) || null,
+            resolutionNote: text(esc.resolution_note) || null,
+          }
+        : null;
+
       const row: BatchRow = {
         id: batchId,
         batchNumber: text(b.batch_number),
@@ -434,6 +504,9 @@ export async function GET(request: Request) {
         practiceName,
         clinicianName,
         attempts: attemptsByBatchId.get(batchId) ?? [],
+        assignedToUserId: text(b.assigned_to_user_id) || null,
+        assignedToDisplayName: text(b.assigned_to_display_name) || null,
+        openEscalation,
       };
 
       // Universal-rail filter pass. The filter rail is queue-wide, so a
@@ -472,14 +545,9 @@ export async function GET(request: Request) {
         });
         if (!anyMatch) continue;
       }
-      // assignedBiller: batches don't carry a per-row assignee, so they
-      // are effectively unassigned. A query for "unassigned/—/-/none"
-      // matches everything; any other name matches nothing.
-      if (f.assignedBiller) {
-        const needle = f.assignedBiller.trim().toLowerCase();
-        const isUnassignedQuery = ["unassigned", "—", "-", "none"].includes(needle);
-        if (!isUnassignedQuery) continue;
-      }
+      // assignedBiller is pushed down at the SQL layer above (matches
+      // claim_837p_batches.assigned_to_user_id or the "__unassigned__"
+      // sentinel) so there is nothing left to do here.
       // followUpDue: batches don't carry a follow-up-due date, so we
       // treat the last attempt date as the implied follow-up anchor
       // (the natural "next-look" day). Compare ISO date prefixes.
@@ -491,9 +559,31 @@ export async function GET(request: Request) {
       rows.push(row);
     }
 
+    // Filter-rail option list — populate the "Assigned biller" select
+    // with the org's billers so the queue can route an escalation to a
+    // teammate without typing a name.
+    const { data: billers } = await (supabase as any)
+      .from("staff_profiles")
+      .select("id, first_name, last_name, email")
+      .eq("organization_id", organizationId)
+      .is("archived_at", null)
+      .order("last_name", { ascending: true })
+      .limit(200);
+    const assignees = ((billers as DbRow[]) ?? []).map((s) => {
+      const composed = [s.first_name, s.last_name]
+        .map(text)
+        .filter(Boolean)
+        .join(" ");
+      return {
+        id: text(s.id),
+        displayName: composed || text(s.email) || "Unknown",
+      };
+    });
+
     return NextResponse.json({
       success: true,
       items: rows,
+      assignees,
       meta: {
         scanned: (batches ?? []).length,
         failed: failed.length,

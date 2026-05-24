@@ -15,12 +15,22 @@
  *                         batch so it can be reworked or rebatched
  *                         elsewhere. Decrements claim_count and
  *                         total_charge_amount on the batch.
- *   - "escalate"        — Mark the batch as escalated by writing the
- *                         note + escalator into submission_error
- *                         (audit-visible) and bumping updated_at. We
- *                         deliberately don't open a workqueue_items row
- *                         here because that table is scoped per-claim,
- *                         not per-batch.
+ *   - "escalate"        — Open a routable escalation record against
+ *                         this batch. Inserts a row into
+ *                         `claim_837p_batch_escalations` (assignee +
+ *                         priority + note + opened_at) and stamps the
+ *                         batch's `assigned_to_user_id` so the
+ *                         universal "Assigned biller" filter on the
+ *                         queue can push down. We deliberately do NOT
+ *                         munge `submission_error` here — that column
+ *                         is the payer/clearinghouse's verdict and
+ *                         must remain unedited so retries and audit
+ *                         trails stay truthful.
+ *   - "resolve_escalation"
+ *                       — Close the current open escalation on this
+ *                         batch (sets status=resolved, resolved_at,
+ *                         resolved_by) and clears the batch-level
+ *                         assignee.
  *
  * Every action is org-scoped and uses optimistic concurrency on the
  * batch's updated_at so two simultaneous biller actions don't clobber
@@ -32,11 +42,22 @@ import { requireBillingAccess } from "@/lib/billing/requireBillingAccess";
 
 type DbRow = Record<string, unknown>;
 
+const ALLOWED_PRIORITIES = new Set(["low", "normal", "high", "urgent"]);
+
 interface Body {
   organizationId?: string;
-  action?: "retry" | "rebuild" | "remove_claim" | "escalate";
+  action?:
+    | "retry"
+    | "rebuild"
+    | "remove_claim"
+    | "escalate"
+    | "resolve_escalation";
   claimId?: string;
   note?: string;
+  assigneeUserId?: string | null;
+  assigneeDisplayName?: string | null;
+  priority?: string;
+  resolutionNote?: string;
 }
 
 function text(v: unknown): string {
@@ -298,56 +319,244 @@ export async function POST(
 
     if (action === "escalate") {
       const note = text(body.note) || "Escalated for technical review.";
-      const userLabel = guard.userId
-        ? `user ${guard.userId}`
-        : "billing user";
-      const stamp = new Date().toISOString();
-      const escalationLine = `[ESCALATED ${stamp} by ${userLabel}] ${note}`;
-      const prevError = text((batch as DbRow).submission_error);
-      const nextError = prevError
-        ? `${escalationLine}\n\n${prevError}`.slice(0, 2000)
-        : escalationLine.slice(0, 2000);
+      const priority = text(body.priority).toLowerCase() || "normal";
+      if (!ALLOWED_PRIORITIES.has(priority)) {
+        return NextResponse.json(
+          { success: false, error: `Invalid priority: ${priority}` },
+          { status: 400 },
+        );
+      }
+      // Always derive the assignee's display name server-side from
+      // staff_profiles. We never trust a client-supplied display name —
+      // and we require the assignee belong to this organization, so a
+      // forged user id can't slip past tenant boundaries.
+      const assigneeUserIdRaw = text(body.assigneeUserId) || null;
+      let assigneeUserId: string | null = null;
+      let assigneeDisplayName: string | null = null;
+      if (assigneeUserIdRaw) {
+        const { data: staff } = await (supabase as any)
+          .from("staff_profiles")
+          .select("id, first_name, last_name, email")
+          .eq("id", assigneeUserIdRaw)
+          .eq("organization_id", organizationId)
+          .maybeSingle();
+        if (!staff) {
+          return NextResponse.json(
+            { success: false, error: "Assignee is not a member of this organization" },
+            { status: 422 },
+          );
+        }
+        assigneeUserId = text((staff as DbRow).id);
+        const composed = [(staff as DbRow).first_name, (staff as DbRow).last_name]
+          .map(text)
+          .filter(Boolean)
+          .join(" ");
+        assigneeDisplayName =
+          composed || text((staff as DbRow).email) || null;
+      }
 
+      const stamp = new Date().toISOString();
+
+      // Single-open invariant: a batch may have at most one open
+      // escalation at a time. A reassign (re-escalate while one is
+      // already open) supersedes the prior row by marking it
+      // "cancelled" with an audit-friendly resolution note. The DB
+      // also enforces this via a partial unique index, so racing
+      // reassigns can't both win.
+      const { data: priorOpen } = await (supabase as any)
+        .from("claim_837p_batch_escalations")
+        .select("id, assigned_to_display_name")
+        .eq("organization_id", organizationId)
+        .eq("batch_id", batchId)
+        .eq("status", "open");
+      const priorIds = ((priorOpen as DbRow[]) ?? [])
+        .map((r) => text(r.id))
+        .filter(Boolean);
+      if (priorIds.length > 0) {
+        const { error: cancelErr } = await (supabase as any)
+          .from("claim_837p_batch_escalations")
+          .update({
+            status: "cancelled",
+            resolved_at: stamp,
+            resolved_by_user_id: guard.userId ?? null,
+            resolution_note: "Superseded by reassign",
+          })
+          .in("id", priorIds)
+          .eq("organization_id", organizationId);
+        if (cancelErr) {
+          return NextResponse.json(
+            { success: false, error: cancelErr.message },
+            { status: 422 },
+          );
+        }
+      }
+
+      // Create the new routable escalation record.
+      const { data: inserted, error: insertErr } = await (supabase as any)
+        .from("claim_837p_batch_escalations")
+        .insert({
+          organization_id: organizationId,
+          batch_id: batchId,
+          status: "open",
+          priority,
+          note,
+          assigned_to_user_id: assigneeUserId,
+          assigned_to_display_name: assigneeDisplayName,
+          opened_by_user_id: guard.userId ?? null,
+          opened_at: stamp,
+        })
+        .select(
+          "id, status, priority, note, assigned_to_user_id, assigned_to_display_name, opened_at, opened_by_user_id",
+        )
+        .single();
+      if (insertErr || !inserted) {
+        return NextResponse.json(
+          { success: false, error: insertErr?.message || "Failed to record escalation" },
+          { status: 422 },
+        );
+      }
+
+      // Mirror the assignee onto the batch so the queue's universal
+      // "Assigned biller" filter can push down at SQL. If this update
+      // loses on optimistic concurrency we keep the escalation row
+      // (it's the source of truth) and let the next refresh re-sync.
       const { data: updated, error: updateErr } = await supabase
         .from("claim_837p_batches")
         .update({
-          submission_error: nextError,
+          assigned_to_user_id: assigneeUserId,
+          assigned_to_display_name: assigneeDisplayName,
           updated_at: stamp,
         })
         .eq("id", batchId)
         .eq("organization_id", organizationId)
         .eq("updated_at", observedUpdatedAt)
-        .select("id, submission_error, updated_at");
+        .select("id, assigned_to_user_id, assigned_to_display_name, updated_at");
       if (updateErr) {
         return NextResponse.json(
           { success: false, error: updateErr.message },
           { status: 422 },
         );
       }
-      if (!updated || updated.length === 0) {
-        return NextResponse.json(
-          {
-            success: false,
-            error:
-              "Batch was modified by another request. Reload and try again.",
-          },
-          { status: 409 },
-        );
-      }
+
       await writeAudit(supabase, {
         organizationId,
         userId: guard.userId ?? null,
         batchId,
         eventType: "transmission_failure.escalate",
-        summary: `Escalated batch ${batchId} for technical review`,
+        summary: `Escalated batch ${batchId} to ${
+          assigneeDisplayName ?? "unassigned"
+        } (${priority})`,
         metadata: {
+          escalationId: (inserted as DbRow).id,
           note,
+          priority,
+          assigneeUserId,
+          assigneeDisplayName,
           escalatedBy: guard.userId ?? null,
           escalatedAt: stamp,
           previousBatchStatus: text((batch as DbRow).batch_status),
         },
       });
-      return NextResponse.json({ success: true, batch: updated[0] });
+      return NextResponse.json({
+        success: true,
+        escalation: inserted,
+        batch: updated && updated.length ? updated[0] : null,
+      });
+    }
+
+    if (action === "resolve_escalation") {
+      const stamp = new Date().toISOString();
+      const resolutionNote = text(body.resolutionNote) || null;
+      const { data: open, error: openErr } = await (supabase as any)
+        .from("claim_837p_batch_escalations")
+        .select("id, assigned_to_user_id, assigned_to_display_name")
+        .eq("organization_id", organizationId)
+        .eq("batch_id", batchId)
+        .eq("status", "open")
+        .order("opened_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (openErr) {
+        return NextResponse.json(
+          { success: false, error: openErr.message },
+          { status: 422 },
+        );
+      }
+      if (!open) {
+        return NextResponse.json(
+          { success: false, error: "No open escalation on this batch" },
+          { status: 404 },
+        );
+      }
+
+      const { data: resolved, error: resolveErr } = await (supabase as any)
+        .from("claim_837p_batch_escalations")
+        .update({
+          status: "resolved",
+          resolved_at: stamp,
+          resolved_by_user_id: guard.userId ?? null,
+          resolution_note: resolutionNote,
+        })
+        .eq("id", (open as DbRow).id)
+        .eq("organization_id", organizationId)
+        .select("id, status, resolved_at, resolved_by_user_id, resolution_note");
+      if (resolveErr) {
+        return NextResponse.json(
+          { success: false, error: resolveErr.message },
+          { status: 422 },
+        );
+      }
+
+      // Mirror the batch's `assigned_to_*` from whatever escalation is
+      // still open (if any). The DB partial unique index guarantees at
+      // most one remains, but we tolerate stragglers by taking the most
+      // recent. Only clear the batch assignee when no open escalation
+      // remains — otherwise we'd break the "Assigned biller" filter for
+      // batches that still have a routed escalation.
+      const { data: remaining } = await (supabase as any)
+        .from("claim_837p_batch_escalations")
+        .select("assigned_to_user_id, assigned_to_display_name")
+        .eq("organization_id", organizationId)
+        .eq("batch_id", batchId)
+        .eq("status", "open")
+        .order("opened_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const nextAssigneeId = remaining
+        ? (text((remaining as DbRow).assigned_to_user_id) || null)
+        : null;
+      const nextAssigneeName = remaining
+        ? (text((remaining as DbRow).assigned_to_display_name) || null)
+        : null;
+      await supabase
+        .from("claim_837p_batches")
+        .update({
+          assigned_to_user_id: nextAssigneeId,
+          assigned_to_display_name: nextAssigneeName,
+          updated_at: stamp,
+        })
+        .eq("id", batchId)
+        .eq("organization_id", organizationId)
+        .eq("updated_at", observedUpdatedAt);
+
+      await writeAudit(supabase, {
+        organizationId,
+        userId: guard.userId ?? null,
+        batchId,
+        eventType: "transmission_failure.resolve_escalation",
+        summary: `Resolved escalation on batch ${batchId}`,
+        metadata: {
+          escalationId: (open as DbRow).id,
+          resolutionNote,
+          resolvedBy: guard.userId ?? null,
+          resolvedAt: stamp,
+        },
+      });
+
+      return NextResponse.json({
+        success: true,
+        escalation: resolved && resolved.length ? resolved[0] : null,
+      });
     }
 
     return NextResponse.json(

@@ -45,6 +45,20 @@ interface AttemptHistoryEntry {
   actorDisplayName: string | null;
 }
 
+interface EscalationSummary {
+  id: string;
+  status: string;
+  priority: string;
+  note: string | null;
+  assigneeUserId: string | null;
+  assigneeDisplayName: string | null;
+  openedAt: string;
+  openedByUserId: string | null;
+  resolvedAt: string | null;
+  resolvedByUserId: string | null;
+  resolutionNote: string | null;
+}
+
 interface FailureRow {
   id: string;
   batchNumber: string;
@@ -67,12 +81,28 @@ interface FailureRow {
   practiceName: string | null;
   clinicianName: string | null;
   attempts: AttemptHistoryEntry[];
+  assignedToUserId: string | null;
+  assignedToDisplayName: string | null;
+  openEscalation: EscalationSummary | null;
+}
+
+interface Assignee {
+  id: string;
+  displayName: string;
 }
 
 interface ApiPayload {
   success: boolean;
   error?: string;
   items?: FailureRow[];
+  assignees?: Assignee[];
+}
+
+interface EscalationDraft {
+  row: FailureRow;
+  assigneeUserId: string;
+  priority: "low" | "normal" | "high" | "urgent";
+  note: string;
 }
 
 function getOrganizationId(): string {
@@ -117,6 +147,7 @@ const queueDef = getWorkqueue("transmission_failures");
 export default function TransmissionFailuresClient() {
   const organizationId = useMemo(() => getOrganizationId(), []);
   const [items, setItems] = useState<FailureRow[]>([]);
+  const [assignees, setAssignees] = useState<Assignee[]>([]);
   const [loading, setLoading] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
   const [activeTab, setActiveTab] = useState<TransmissionFailureTabId>(
@@ -128,6 +159,7 @@ export default function TransmissionFailuresClient() {
   const [message, setMessage] = useState<
     { tone: "success" | "error"; text: string } | null
   >(null);
+  const [escalationDraft, setEscalationDraft] = useState<EscalationDraft | null>(null);
 
   // ── Load ────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -147,6 +179,7 @@ export default function TransmissionFailuresClient() {
       .then((json) => {
         if (json.success && Array.isArray(json.items)) {
           setItems(json.items);
+          if (Array.isArray(json.assignees)) setAssignees(json.assignees);
         } else {
           setItems([]);
           if (json.error) setMessage({ tone: "error", text: json.error });
@@ -200,7 +233,15 @@ export default function TransmissionFailuresClient() {
           { value: "ready_to_generate", label: "Re-queued" },
         ],
       },
-      { id: "assignedBiller", label: "Assigned biller", kind: "text", placeholder: "Name or 'unassigned'" },
+      {
+        id: "assignedBiller",
+        label: "Assigned biller",
+        kind: "select",
+        options: [
+          { value: "__unassigned__", label: "Unassigned" },
+          ...assignees.map((a) => ({ value: a.id, label: a.displayName })),
+        ],
+      },
       { id: "minAmount", label: "Min $", kind: "number", placeholder: "0" },
       { id: "maxAmount", label: "Max $", kind: "number" },
       {
@@ -277,13 +318,9 @@ export default function TransmissionFailuresClient() {
         });
         if (!anyMatch) return false;
       }
-      if (v.assignedBiller) {
-        // Batches are inherently unassigned; only an "unassigned"
-        // sentinel matches. Any specific name filters all rows out.
-        const needle = v.assignedBiller.trim().toLowerCase();
-        const isUnassignedQuery = ["unassigned", "—", "-", "none"].includes(needle);
-        if (!isUnassignedQuery) return false;
-      }
+      // assignedBiller is pushed down at the server (matches the
+      // batch's assigned_to_user_id, or the "__unassigned__" sentinel)
+      // so there is nothing left to enforce client-side.
       if (v.followUpDue) {
         // Last attempt date is the implied follow-up anchor for batches.
         const attemptDate = r.attemptedAt ? r.attemptedAt.slice(0, 10) : null;
@@ -419,8 +456,17 @@ export default function TransmissionFailuresClient() {
   );
 
   // ── Actions: optimistic patch + server call ─────────────────────────────
+  type ActionId = "retry" | "rebuild" | "escalate" | "resolve_escalation";
+  interface ExtraArgs {
+    note?: string;
+    assigneeUserId?: string | null;
+    assigneeDisplayName?: string | null;
+    priority?: string;
+    resolutionNote?: string;
+  }
+
   const applyOptimistic = useCallback(
-    (batchId: string, action: "retry" | "rebuild" | "escalate"): FailureRow[] => {
+    (batchId: string, action: ActionId, extra?: ExtraArgs): FailureRow[] => {
       let snapshot: FailureRow[] = [];
       setItems((prev) => {
         snapshot = prev;
@@ -436,9 +482,33 @@ export default function TransmissionFailuresClient() {
             };
           }
           if (action === "escalate") {
+            const assigneeId = extra?.assigneeUserId ?? null;
+            const assigneeName = extra?.assigneeDisplayName ?? null;
             return {
               ...r,
-              errorMessage: `[ESCALATED] ${r.errorMessage}`,
+              assignedToUserId: assigneeId,
+              assignedToDisplayName: assigneeName,
+              openEscalation: {
+                id: "pending",
+                status: "open",
+                priority: extra?.priority ?? "normal",
+                note: extra?.note ?? null,
+                assigneeUserId: assigneeId,
+                assigneeDisplayName: assigneeName,
+                openedAt: new Date().toISOString(),
+                openedByUserId: null,
+                resolvedAt: null,
+                resolvedByUserId: null,
+                resolutionNote: null,
+              },
+            };
+          }
+          if (action === "resolve_escalation") {
+            return {
+              ...r,
+              assignedToUserId: null,
+              assignedToDisplayName: null,
+              openEscalation: null,
             };
           }
           return r;
@@ -452,12 +522,12 @@ export default function TransmissionFailuresClient() {
   const runAction = useCallback(
     async (
       batchId: string,
-      action: "retry" | "rebuild" | "escalate",
-      extra?: { note?: string },
+      action: ActionId,
+      extra?: ExtraArgs,
     ) => {
       setBusyId(batchId);
       setMessage(null);
-      const snapshot = applyOptimistic(batchId, action);
+      const snapshot = applyOptimistic(batchId, action, extra);
       try {
         const res = await fetch(
           `/api/billing/transmission-failures/${encodeURIComponent(batchId)}`,
@@ -476,7 +546,11 @@ export default function TransmissionFailuresClient() {
             ? "Retry transmitted."
             : action === "rebuild"
               ? "Batch re-queued for rebuild."
-              : "Escalation recorded.";
+              : action === "resolve_escalation"
+                ? "Escalation resolved."
+                : extra?.assigneeDisplayName
+                  ? `Escalation assigned to ${extra.assigneeDisplayName}.`
+                  : "Escalation opened (unassigned).";
         setMessage({ tone: "success", text: label });
         setReloadKey((k) => k + 1);
       } catch (e) {
@@ -547,16 +621,33 @@ export default function TransmissionFailuresClient() {
     [organizationId],
   );
 
-  const escalate = useCallback(
-    (batchId: string) => {
-      if (typeof window === "undefined") return;
-      const note =
-        window.prompt(
-          "Describe the technical issue to escalate (optional):",
-          "",
-        ) ?? null;
-      if (note === null) return;
-      void runAction(batchId, "escalate", { note });
+  const openEscalateModal = useCallback((row: FailureRow) => {
+    setEscalationDraft({
+      row,
+      assigneeUserId: row.assignedToUserId ?? "",
+      priority: (row.openEscalation?.priority as EscalationDraft["priority"]) ?? "normal",
+      note: "",
+    });
+  }, []);
+
+  const submitEscalation = useCallback(
+    async (draft: EscalationDraft) => {
+      const assignee = assignees.find((a) => a.id === draft.assigneeUserId) ?? null;
+      setEscalationDraft(null);
+      await runAction(draft.row.id, "escalate", {
+        note: draft.note.trim(),
+        priority: draft.priority,
+        assigneeUserId: assignee?.id ?? null,
+        assigneeDisplayName: assignee?.displayName ?? null,
+      });
+    },
+    [assignees, runAction],
+  );
+
+  const resolveEscalation = useCallback(
+    (row: FailureRow) => {
+      if (!row.openEscalation) return;
+      void runAction(row.id, "resolve_escalation", {});
     },
     [runAction],
   );
@@ -627,19 +718,26 @@ export default function TransmissionFailuresClient() {
       },
       {
         id: "escalate",
-        label: "Escalate technical issue",
+        label: "Escalate / reassign…",
         variant: "danger",
-        onClick: (r) => escalate(r.id),
+        onClick: (r) => openEscalateModal(r),
         disabled: (r) => busyId === r.id,
       },
+      {
+        id: "resolve_escalation",
+        label: "Resolve escalation",
+        onClick: (r) => resolveEscalation(r),
+        disabled: (r) => busyId === r.id || !r.openEscalation,
+      },
     ],
-    [busyId, runAction, escalate, promptRemoveClaim],
+    [busyId, runAction, openEscalateModal, resolveEscalation, promptRemoveClaim],
   );
 
   // ── Detail panel ────────────────────────────────────────────────────────
   const detailTabs: DetailTab[] = useMemo(() => {
     if (!selectedRow) return [];
     const r = selectedRow;
+    const esc = r.openEscalation;
     return [
       {
         id: "errorLog",
@@ -653,6 +751,42 @@ export default function TransmissionFailuresClient() {
               <p style={{ margin: 0, fontSize: 12.5, color: "#475569" }}>
                 {describeFailureTab(r.tab)}
               </p>
+            </div>
+            <div
+              style={{
+                padding: 10,
+                border: `1px solid ${esc ? "#fcd34d" : "#e2e8f0"}`,
+                background: esc ? "#fffbeb" : "#f8fafc",
+                borderRadius: 6,
+                display: "grid",
+                gap: 6,
+                fontSize: 12.5,
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                <strong style={{ fontSize: 13 }}>
+                  {esc ? "Escalation open" : "No escalation open"}
+                </strong>
+                {esc ? (
+                  <span style={{ fontSize: 11, color: "#92400e", textTransform: "uppercase" }}>
+                    {esc.priority} priority
+                  </span>
+                ) : null}
+              </div>
+              <div style={{ color: "#475569" }}>
+                Assignee:{" "}
+                <strong style={{ color: "#0f172a" }}>
+                  {r.assignedToDisplayName ?? esc?.assigneeDisplayName ?? "Unassigned"}
+                </strong>
+              </div>
+              {esc?.openedAt ? (
+                <div style={{ color: "#64748B", fontSize: 11.5 }}>
+                  Opened {formatDateTime(esc.openedAt)}
+                </div>
+              ) : null}
+              {esc?.note ? (
+                <p style={{ margin: 0, color: "#334155", whiteSpace: "pre-wrap" }}>{esc.note}</p>
+              ) : null}
             </div>
             <pre
               style={{
@@ -950,13 +1084,23 @@ export default function TransmissionFailuresClient() {
       },
       {
         id: "escalate",
-        label: "Escalate technical issue",
+        label: r.openEscalation ? "Reassign escalation…" : "Escalate technical issue…",
         variant: "danger",
-        onClick: () => escalate(r.id),
+        onClick: () => openEscalateModal(r),
         disabled: busyId === r.id,
       },
+      ...(r.openEscalation
+        ? [
+            {
+              id: "resolve_escalation",
+              label: "Resolve escalation",
+              onClick: () => resolveEscalation(r),
+              disabled: busyId === r.id,
+            } as PrimaryAction,
+          ]
+        : []),
     ];
-  }, [selectedRow, busyId, runAction, escalate, promptRemoveClaim]);
+  }, [selectedRow, busyId, runAction, openEscalateModal, resolveEscalation, promptRemoveClaim]);
 
   // Primary tabs surfaced via the shell so we stay layout-only here.
   const primaryTabs: PrimaryTab[] = useMemo(
@@ -1008,6 +1152,150 @@ export default function TransmissionFailuresClient() {
       detailTabs={detailTabs}
       detailActions={detailActions}
       message={message}
+      overlay={
+        escalationDraft ? (
+          <EscalationModal
+            draft={escalationDraft}
+            assignees={assignees}
+            onChange={setEscalationDraft}
+            onCancel={() => setEscalationDraft(null)}
+            onSubmit={() => void submitEscalation(escalationDraft)}
+          />
+        ) : null
+      }
     />
+  );
+}
+
+function EscalationModal({
+  draft,
+  assignees,
+  onChange,
+  onCancel,
+  onSubmit,
+}: {
+  draft: EscalationDraft;
+  assignees: Assignee[];
+  onChange: (next: EscalationDraft) => void;
+  onCancel: () => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Escalate transmission failure"
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15, 23, 42, 0.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 50,
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onCancel();
+      }}
+    >
+      <div
+        style={{
+          width: 460,
+          maxWidth: "calc(100vw - 32px)",
+          background: "white",
+          borderRadius: 8,
+          padding: 20,
+          display: "grid",
+          gap: 14,
+          boxShadow: "0 18px 48px rgba(15,23,42,0.25)",
+        }}
+      >
+        <div>
+          <h2 style={{ margin: 0, fontSize: 16 }}>
+            Escalate batch {draft.row.batchNumber || draft.row.id.slice(0, 8)}
+          </h2>
+          <p style={{ margin: "4px 0 0", fontSize: 12.5, color: "#64748B" }}>
+            Route this transmission failure to a teammate. The batch is tagged
+            with the assignee and an open escalation record.
+          </p>
+        </div>
+        <label style={{ display: "grid", gap: 4, fontSize: 12.5 }}>
+          <span style={{ color: "#334155" }}>Assignee</span>
+          <select
+            value={draft.assigneeUserId}
+            onChange={(e) => onChange({ ...draft, assigneeUserId: e.target.value })}
+            style={{ height: 32, padding: "0 8px", fontSize: 13 }}
+          >
+            <option value="">Unassigned</option>
+            {assignees.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.displayName}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label style={{ display: "grid", gap: 4, fontSize: 12.5 }}>
+          <span style={{ color: "#334155" }}>Priority</span>
+          <select
+            value={draft.priority}
+            onChange={(e) =>
+              onChange({
+                ...draft,
+                priority: e.target.value as EscalationDraft["priority"],
+              })
+            }
+            style={{ height: 32, padding: "0 8px", fontSize: 13 }}
+          >
+            <option value="low">Low</option>
+            <option value="normal">Normal</option>
+            <option value="high">High</option>
+            <option value="urgent">Urgent</option>
+          </select>
+        </label>
+        <label style={{ display: "grid", gap: 4, fontSize: 12.5 }}>
+          <span style={{ color: "#334155" }}>Note (optional)</span>
+          <textarea
+            value={draft.note}
+            onChange={(e) => onChange({ ...draft, note: e.target.value })}
+            rows={4}
+            placeholder="What needs the biller's attention?"
+            style={{ padding: 8, fontSize: 13, resize: "vertical" }}
+          />
+        </label>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button
+            type="button"
+            onClick={onCancel}
+            style={{
+              height: 32,
+              padding: "0 12px",
+              fontSize: 13,
+              border: "1px solid #cbd5e1",
+              background: "white",
+              borderRadius: 4,
+              cursor: "pointer",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onSubmit}
+            style={{
+              height: 32,
+              padding: "0 14px",
+              fontSize: 13,
+              border: "1px solid #b91c1c",
+              background: "#b91c1c",
+              color: "white",
+              borderRadius: 4,
+              cursor: "pointer",
+            }}
+          >
+            Open escalation
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

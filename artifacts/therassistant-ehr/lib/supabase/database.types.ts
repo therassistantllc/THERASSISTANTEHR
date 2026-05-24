@@ -988,6 +988,8 @@ export type Database = {
       claim_837p_batches: {
         Row: {
           archived_at: string | null
+          assigned_to_display_name: string | null
+          assigned_to_user_id: string | null
           batch_number: string
           batch_status: string
           claim_count: number
@@ -1009,6 +1011,8 @@ export type Database = {
         }
         Insert: {
           archived_at?: string | null
+          assigned_to_display_name?: string | null
+          assigned_to_user_id?: string | null
           batch_number: string
           batch_status?: string
           claim_count?: number
@@ -1030,6 +1034,8 @@ export type Database = {
         }
         Update: {
           archived_at?: string | null
+          assigned_to_display_name?: string | null
+          assigned_to_user_id?: string | null
           batch_number?: string
           batch_status?: string
           claim_count?: number
@@ -1052,6 +1058,75 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "claim_837p_batches_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      claim_837p_batch_escalations: {
+        Row: {
+          assigned_to_display_name: string | null
+          assigned_to_user_id: string | null
+          batch_id: string
+          created_at: string
+          id: string
+          note: string | null
+          opened_at: string
+          opened_by_user_id: string | null
+          organization_id: string
+          priority: string
+          resolution_note: string | null
+          resolved_at: string | null
+          resolved_by_user_id: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          assigned_to_display_name?: string | null
+          assigned_to_user_id?: string | null
+          batch_id: string
+          created_at?: string
+          id?: string
+          note?: string | null
+          opened_at?: string
+          opened_by_user_id?: string | null
+          organization_id: string
+          priority?: string
+          resolution_note?: string | null
+          resolved_at?: string | null
+          resolved_by_user_id?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          assigned_to_display_name?: string | null
+          assigned_to_user_id?: string | null
+          batch_id?: string
+          created_at?: string
+          id?: string
+          note?: string | null
+          opened_at?: string
+          opened_by_user_id?: string | null
+          organization_id?: string
+          priority?: string
+          resolution_note?: string | null
+          resolved_at?: string | null
+          resolved_by_user_id?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "claim_837p_batch_escalations_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "claim_837p_batches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "claim_837p_batch_escalations_organization_id_fkey"
             columns: ["organization_id"]
             isOneToOne: false
             referencedRelation: "organizations"
