@@ -83,10 +83,12 @@ export async function POST(
     if (guard instanceof NextResponse) return guard;
     const organizationId = guard.organizationId;
 
+    // requireOrgAccess already gates access; requireAuthenticatedStaff is
+    // only used to stamp created_by_user_id when a staff profile exists.
+    // Don't 401 if the profile lookup fails — the org guard is the real
+    // auth and other write routes (e.g. cases POST) treat staff lookup
+    // as best-effort.
     const staff = await requireAuthenticatedStaff();
-    if (!staff) {
-      return NextResponse.json({ success: false, error: "Authentication required" }, { status: 401 });
-    }
 
     const priority = body.priority && PRIORITIES.has(body.priority) ? body.priority : "primary";
 
