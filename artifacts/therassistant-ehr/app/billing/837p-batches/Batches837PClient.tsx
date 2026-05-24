@@ -1,54 +1,101 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { DEFAULT_ORG_ID } from "@/lib/config";
+import WorkqueueShell, {
+  type ColumnDef,
+  type DetailTab,
+  type FilterDef,
+  type PrimaryAction,
+  type RowAction,
+  type SummaryMetric,
+} from "@/components/billing/WorkqueueShell";
+
+type PayerMixEntry = { payerId: string; payerName: string; count: number };
 
 type BatchClaim = {
   id: string;
   patientId: string;
   patientName: string;
-  dateOfBirth?: string | null;
-  claimNumber?: unknown;
-  status?: unknown;
+  claimNumber: unknown;
+  status: unknown;
   totalChargeAmount: number;
-  updatedAt?: unknown;
+  payerId: string;
+  payerName: string;
 };
 
-type Batch837P = {
+type BatchRow = {
   id: string;
-  batchNumber?: unknown;
-  status?: unknown;
+  batchNumber: string;
+  status: string;
+  tab: string;
   claimCount: number;
   totalChargeAmount: number;
-  generatedFileName?: unknown;
-  submittedAt?: unknown;
-  createdAt?: unknown;
-  updatedAt?: unknown;
+  generatedFileName: string;
+  submittedAt: string;
+  createdAt: string;
+  updatedAt: string;
+  submissionError: string;
+  lastHttpStatus: number | null;
+  ageDays: number;
+  createdBy: string;
+  clearinghouseStatus: string;
+  errorCount: number;
+  payerMix: PayerMixEntry[];
   claims: BatchClaim[];
 };
 
 type Payload = {
   success: boolean;
   error?: string;
-  metrics?: {
-    total: number;
-    readyToGenerate: number;
-    generated: number;
-    submitted: number;
-    rejected: number;
-  };
-  batches?: Batch837P[];
+  totals?: { count: number; totalCharges: number; oldestAgeDays: number; urgentCount: number };
+  tabCounts?: Record<string, number>;
+  payerOptions?: Array<{ value: string; label: string }>;
+  batches?: BatchRow[];
+};
+
+type TransmissionEvent = {
+  id: string;
+  at: string;
+  kind: "submission" | "status" | "response";
+  severity: "info" | "success" | "warning" | "error";
+  title: string;
+  detail: string;
+  claimNumber: string;
 };
 
 type Acknowledgement = {
   id: string;
-  acknowledgement_type: string;
-  file_name: string | null;
-  raw_content: string | null;
-  parsed_content: unknown;
-  created_at: string;
+  type: string;
+  fileName: string;
+  receivedAt: string;
+  parsed: unknown;
 };
+
+type BatchDetail = {
+  success: boolean;
+  error?: string;
+  acknowledgements?: Acknowledgement[];
+  timeline?: TransmissionEvent[];
+  claims?: Array<{ id: string; patientId: string; patientName: string; claimNumber: string; status: string; totalCharge: number }>;
+};
+
+const TABS: Array<{ id: string; label: string }> = [
+  { id: "draft", label: "Draft Batches" },
+  { id: "ready", label: "Ready to Submit" },
+  { id: "submitted", label: "Submitted Batches" },
+  { id: "failed", label: "Failed Batches" },
+  { id: "partial", label: "Partially Accepted" },
+];
+
+const AGING_OPTIONS = [
+  { value: "0-7", label: "0–7 days" },
+  { value: "8-30", label: "8–30 days" },
+  { value: "31-60", label: "31–60 days" },
+  { value: "61-90", label: "61–90 days" },
+  { value: "90+", label: "90+ days" },
+];
 
 function getOrganizationId() {
   if (typeof window === "undefined") return DEFAULT_ORG_ID;
@@ -56,414 +103,635 @@ function getOrganizationId() {
   return params.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
 }
 
-function getHighlightBatchId() {
-  if (typeof window === "undefined") return null;
-  return new URLSearchParams(window.location.search).get("batchId");
+function formatDate(value: unknown) {
+  if (!value) return "—";
+  const d = new Date(String(value));
+  return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleDateString();
 }
 
-function formatDate(value: unknown) {
-  if (!value) return "Not listed";
-  const date = new Date(String(value));
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString();
+function formatDateTime(value: unknown) {
+  if (!value) return "—";
+  const d = new Date(String(value));
+  return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString();
 }
 
 function formatMoney(value: number) {
   return Number(value ?? 0).toLocaleString(undefined, { style: "currency", currency: "USD" });
 }
 
-function statusClass(value: unknown) {
-  const status = String(value ?? "").toLowerCase();
-  if (status.includes("accepted") || status.includes("generated") || status.includes("submitted")) return "status status-green";
-  if (status.includes("rejected") || status.includes("failed")) return "status status-red";
-  return "status status-yellow";
+function payerMixSummary(mix: PayerMixEntry[]): string {
+  if (mix.length === 0) return "—";
+  return mix
+    .slice(0, 3)
+    .map((p) => `${p.payerName} (${p.count})`)
+    .join(", ") + (mix.length > 3 ? ` +${mix.length - 3}` : "");
 }
-
-const SUBMITTABLE = new Set(["generated", "ready", "queued"]);
-const RETRY_STATUSES = new Set(["rejected", "rejected_999", "rejected_oa", "failed"]);
 
 export default function Batches837PClient() {
   const organizationId = useMemo(() => getOrganizationId(), []);
-  const highlightBatchId = useMemo(() => getHighlightBatchId(), []);
-  const highlightedRef = useRef<HTMLElement | null>(null);
   const [payload, setPayload] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [activeTab, setActiveTab] = useState<string>("draft");
+  const [filterValues, setFilterValues] = useState<Record<string, string>>({});
+  const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [toast, setToast] = useState<{ tone: "ok" | "err"; message: string } | null>(null);
-  const [ackModal, setAckModal] = useState<{ batchId: string; type: "999" | "277CA"; loading: boolean; items: Acknowledgement[]; error: string | null } | null>(null);
+  const [message, setMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+  const [detail, setDetail] = useState<Record<string, BatchDetail | undefined>>({});
+  const [filePreviews, setFilePreviews] = useState<Record<string, string | undefined>>({});
 
   const load = useCallback(async () => {
-    if (!organizationId) {
-      setError("Missing organizationId. Add ?organizationId=... to the URL or configure NEXT_PUBLIC_ORGANIZATION_ID.");
-      setLoading(false);
-      return;
-    }
+    if (!organizationId) return;
     setLoading(true);
     try {
-      const response = await fetch(`/api/billing/837p-batches?organizationId=${encodeURIComponent(organizationId)}`, { cache: "no-store" });
-      const json = (await response.json()) as Payload;
-      if (!response.ok || !json.success) throw new Error(json.error ?? "Failed to load 837P batches");
+      const params = new URLSearchParams({ organizationId, tab: activeTab });
+      for (const [k, v] of Object.entries(filterValues)) if (v) params.set(k, v);
+      const res = await fetch(`/api/billing/837p-batches?${params.toString()}`, { cache: "no-store" });
+      const json = (await res.json()) as Payload;
+      if (!res.ok || !json.success) throw new Error(json.error ?? "Failed to load batches");
       setPayload(json);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Failed to load 837P batches");
+    } catch (e) {
+      setMessage({ tone: "error", text: e instanceof Error ? e.message : "Failed to load batches" });
     } finally {
       setLoading(false);
     }
-  }, [organizationId]);
-
-  useEffect(() => {
-    if (!highlightBatchId || loading) return;
-    const node = highlightedRef.current;
-    if (node) node.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, [highlightBatchId, loading, payload]);
+  }, [organizationId, activeTab, filterValues]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const metrics = payload?.metrics ?? { total: 0, readyToGenerate: 0, generated: 0, submitted: 0, rejected: 0 };
-  const batches = payload?.batches ?? [];
-  const selectedIds = useMemo(() => Object.entries(selected).filter(([, v]) => v).map(([id]) => id), [selected]);
-  const hasSelection = selectedIds.length > 0;
-
-  function flash(tone: "ok" | "err", message: string) {
-    setToast({ tone, message });
-    setTimeout(() => setToast(null), 4000);
-  }
-
-  async function markSubmitted(batchIds: string[], action: "submit" | "retry" = "submit") {
-    let ok = 0;
-    const errs: string[] = [];
-    for (const batchId of batchIds) {
+  // Load per-batch detail (for the right panel) lazily.
+  const loadDetail = useCallback(
+    async (batchId: string) => {
+      if (detail[batchId]) return;
       try {
-        const res = await fetch(`/api/claims/837p/batch/${encodeURIComponent(batchId)}/submit`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ organizationId, action }),
-        });
-        const json = await res.json();
-        if (!res.ok || !json.success) errs.push(`${batchId.slice(0, 8)}: ${json.error ?? "failed"}`);
-        else ok++;
+        const res = await fetch(
+          `/api/billing/batches/${encodeURIComponent(batchId)}?organizationId=${encodeURIComponent(organizationId)}`,
+          { cache: "no-store" },
+        );
+        const json = (await res.json()) as BatchDetail;
+        setDetail((cur) => ({ ...cur, [batchId]: json }));
       } catch (e) {
-        errs.push(`${batchId.slice(0, 8)}: ${e instanceof Error ? e.message : "failed"}`);
+        setDetail((cur) => ({
+          ...cur,
+          [batchId]: { success: false, error: e instanceof Error ? e.message : "Failed" },
+        }));
       }
-    }
-    return { ok, errs };
-  }
+    },
+    [detail, organizationId],
+  );
 
-  async function handleSubmitSelected() {
-    const eligible = batches.filter((b) => selected[b.id] && SUBMITTABLE.has(String(b.status ?? "").toLowerCase()));
-    if (eligible.length === 0) {
-      flash("err", "Select one or more batches in a submittable state (generated/ready/queued).");
-      return;
-    }
-    if (!window.confirm(`Submit ${eligible.length} batch(es) to the clearinghouse?`)) return;
-    setBusy("submit");
-    const { ok, errs } = await markSubmitted(eligible.map((b) => b.id));
-    setBusy(null);
-    setSelected({});
-    await load();
-    flash(errs.length ? "err" : "ok", `${ok} submitted${errs.length ? `; errors: ${errs.join("; ")}` : ""}.`);
-  }
-
-  async function handleRetryRejected() {
-    const targets = (hasSelection ? batches.filter((b) => selected[b.id]) : batches).filter((b) =>
-      RETRY_STATUSES.has(String(b.status ?? "").toLowerCase()),
-    );
-    if (targets.length === 0) {
-      flash("err", "No rejected batches to retry.");
-      return;
-    }
-    if (!window.confirm(`Retry ${targets.length} rejected batch(es)?`)) return;
-    setBusy("retry");
-    const { ok, errs } = await markSubmitted(targets.map((b) => b.id), "retry");
-    setBusy(null);
-    setSelected({});
-    await load();
-    flash(errs.length ? "err" : "ok", `${ok} retried${errs.length ? `; errors: ${errs.join("; ")}` : ""}.`);
-  }
-
-  async function handleRevalidate() {
-    const targets = (hasSelection ? batches.filter((b) => selected[b.id]) : batches);
-    if (targets.length === 0) {
-      flash("err", "No batches to revalidate.");
-      return;
-    }
-    setBusy("revalidate");
-    let passed = 0;
-    let failedClaims = 0;
-    const errs: string[] = [];
-    for (const b of targets) {
+  const loadFilePreview = useCallback(
+    async (batchId: string) => {
+      if (filePreviews[batchId] !== undefined) return;
       try {
-        const res = await fetch(`/api/claims/837p/batch/${encodeURIComponent(b.id)}/revalidate`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ organizationId }),
-        });
-        const json = await res.json();
-        if (!res.ok || !json.success) errs.push(`${b.id.slice(0, 8)}: ${json.error ?? "failed"}`);
-        else {
-          passed += Number(json.passed ?? 0);
-          failedClaims += Array.isArray(json.failed) ? json.failed.length : 0;
+        const res = await fetch(
+          `/api/claims/837p/batch/${encodeURIComponent(batchId)}/file?organizationId=${encodeURIComponent(organizationId)}`,
+          { cache: "no-store" },
+        );
+        if (!res.ok) {
+          const txt = await res.text();
+          setFilePreviews((cur) => ({ ...cur, [batchId]: `(${res.status}) ${txt.slice(0, 400)}` }));
+          return;
         }
+        const txt = await res.text();
+        setFilePreviews((cur) => ({ ...cur, [batchId]: txt.slice(0, 4000) }));
       } catch (e) {
-        errs.push(`${b.id.slice(0, 8)}: ${e instanceof Error ? e.message : "failed"}`);
+        setFilePreviews((cur) => ({
+          ...cur,
+          [batchId]: `Error: ${e instanceof Error ? e.message : "preview failed"}`,
+        }));
       }
+    },
+    [filePreviews, organizationId],
+  );
+
+  useEffect(() => {
+    if (selectedRowId) {
+      void loadDetail(selectedRowId);
+      void loadFilePreview(selectedRowId);
     }
-    setBusy(null);
-    await load();
-    flash(errs.length ? "err" : "ok", `Revalidated ${targets.length} batch(es): ${passed} claim(s) passed, ${failedClaims} still blocked${errs.length ? `; ${errs.join("; ")}` : ""}.`);
+  }, [selectedRowId, loadDetail, loadFilePreview]);
+
+  function flash(tone: "success" | "error", text: string) {
+    setMessage({ tone, text });
+    window.setTimeout(() => setMessage(null), 5000);
   }
 
-  function handleExport(batchId: string) {
-    const url = `/api/claims/837p/batch/${encodeURIComponent(batchId)}/file?organizationId=${encodeURIComponent(organizationId)}`;
-    window.open(url, "_blank", "noopener,noreferrer");
-  }
-
-  async function openAck(batchId: string, type: "999" | "277CA") {
-    setAckModal({ batchId, type, loading: true, items: [], error: null });
+  async function callAction(url: string, body: Record<string, unknown>, label: string) {
+    setBusy(label);
     try {
-      const res = await fetch(
-        `/api/claims/837p/batch/${encodeURIComponent(batchId)}/acknowledgements?organizationId=${encodeURIComponent(organizationId)}&type=${type}`,
-        { cache: "no-store" },
-      );
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ organizationId, ...body }),
+      });
       const json = await res.json();
-      if (!res.ok || !json.success) throw new Error(json.error ?? "Failed");
-      setAckModal({ batchId, type, loading: false, items: (json.acknowledgements ?? []) as Acknowledgement[], error: null });
+      if (!res.ok || !json.success) throw new Error(json.error ?? `${label} failed`);
+      flash("success", `${label} succeeded.`);
+      // Reset cached detail/preview so next selection re-loads.
+      setDetail({});
+      setFilePreviews({});
+      await load();
     } catch (e) {
-      setAckModal({ batchId, type, loading: false, items: [], error: e instanceof Error ? e.message : "Failed" });
+      flash("error", e instanceof Error ? e.message : `${label} failed`);
+    } finally {
+      setBusy(null);
     }
   }
 
-  return (
-    <main className="app-shell">
-      <section className="hero-panel">
-        <div>
-          <p className="eyebrow">Billing</p>
-          <h1>Claim Submission</h1>
-          <p className="hero-copy">Submit and monitor 837P batch transmissions using existing clearinghouse integration workflows.</p>
-        </div>
-        <div className="hero-actions">
-          <Link className="button button-secondary" href="/billing/charge-capture">Charge Capture</Link>
-          <Link className="button button-secondary" href="/calendar">Calendar</Link>
-        </div>
-      </section>
+  const batches = payload?.batches ?? [];
+  const totals = payload?.totals ?? { count: 0, totalCharges: 0, oldestAgeDays: 0, urgentCount: 0 };
+  const tabCounts = payload?.tabCounts ?? {};
+  const payerOptions = payload?.payerOptions ?? [];
+  const selectedBatch = useMemo(
+    () => (selectedRowId ? batches.find((b) => b.id === selectedRowId) ?? null : null),
+    [selectedRowId, batches],
+  );
 
-      {error ? <div className="alert-panel">{error}</div> : null}
-      {toast ? (
-        <div
-          className="alert-panel"
+  const summary: SummaryMetric[] = [
+    { id: "count", label: "Total batches", value: totals.count.toLocaleString() },
+    { id: "dollars", label: "Total charges", value: formatMoney(totals.totalCharges) },
+    {
+      id: "oldest",
+      label: "Oldest batch age",
+      value: `${totals.oldestAgeDays} day${totals.oldestAgeDays === 1 ? "" : "s"}`,
+      tone: totals.oldestAgeDays >= 14 ? "amber" : "default",
+    },
+    {
+      id: "urgent",
+      label: "Urgent items",
+      value: totals.urgentCount.toLocaleString(),
+      tone: totals.urgentCount > 0 ? "red" : "default",
+    },
+  ];
+
+  const filters: FilterDef[] = [
+    { id: "practice", label: "Practice", kind: "text", placeholder: "Practice…", width: 140 },
+    { id: "clinician", label: "Clinician", kind: "text", placeholder: "Clinician…", width: 140 },
+    {
+      id: "payer",
+      label: "Payer",
+      kind: "select",
+      options: payerOptions,
+      width: 180,
+    },
+    { id: "client", label: "Client", kind: "text", placeholder: "Name…", width: 180 },
+    { id: "dosFrom", label: "DOS from", kind: "date" },
+    { id: "dosTo", label: "DOS to", kind: "date" },
+    { id: "status", label: "Status", kind: "text", placeholder: "Raw status…", width: 140 },
+    { id: "assignedBiller", label: "Assigned biller", kind: "text", placeholder: "Biller…", width: 140 },
+    { id: "minAmount", label: "Min $", kind: "number", width: 100 },
+    { id: "maxAmount", label: "Max $", kind: "number", width: 100 },
+    { id: "agingBucket", label: "Aging", kind: "select", options: AGING_OPTIONS, width: 140 },
+    { id: "carcRarc", label: "CARC/RARC", kind: "text", placeholder: "Code…", width: 120 },
+    {
+      id: "priority",
+      label: "Priority",
+      kind: "select",
+      options: [{ value: "urgent", label: "Urgent only" }],
+      width: 140,
+    },
+    { id: "followUpDue", label: "Follow-up due", kind: "date" },
+  ];
+
+  const columns: ColumnDef<BatchRow>[] = [
+    { id: "batchNumber", header: "Batch ID", cell: (r) => <code>{r.batchNumber}</code> },
+    { id: "createdAt", header: "Created date", cell: (r) => formatDate(r.createdAt) },
+    { id: "claimCount", header: "Claim count", align: "right", cell: (r) => r.claimCount.toLocaleString() },
+    { id: "totalCharges", header: "Total charges", align: "right", cell: (r) => formatMoney(r.totalChargeAmount) },
+    { id: "payerMix", header: "Payer mix", cell: (r) => payerMixSummary(r.payerMix) },
+    { id: "createdBy", header: "Created by", cell: (r) => r.createdBy },
+    {
+      id: "chStatus",
+      header: "Clearinghouse status",
+      cell: (r) => (
+        <span
           style={{
-            background: toast.tone === "ok" ? "#ECFDF5" : "#FEF2F2",
-            borderColor: toast.tone === "ok" ? "#A7F3D0" : "#FECACA",
-            color: toast.tone === "ok" ? "#065F46" : "#991B1B",
+            fontSize: 12,
+            padding: "2px 8px",
+            borderRadius: 10,
+            background:
+              r.clearinghouseStatus === "Accepted"
+                ? "#DCFCE7"
+                : r.clearinghouseStatus === "Rejected"
+                ? "#FEE2E2"
+                : r.clearinghouseStatus === "Partial"
+                ? "#FEF3C7"
+                : "#E0E7FF",
+            color:
+              r.clearinghouseStatus === "Accepted"
+                ? "#166534"
+                : r.clearinghouseStatus === "Rejected"
+                ? "#991B1B"
+                : r.clearinghouseStatus === "Partial"
+                ? "#92400E"
+                : "#3730A3",
           }}
         >
-          {toast.message}
-        </div>
-      ) : null}
+          {r.clearinghouseStatus}
+        </span>
+      ),
+    },
+    {
+      id: "errorCount",
+      header: "Error count",
+      align: "right",
+      cell: (r) => (r.errorCount > 0 ? <strong style={{ color: "#DC2626" }}>{r.errorCount}</strong> : "0"),
+    },
+    { id: "submittedAt", header: "Submission date", cell: (r) => formatDate(r.submittedAt) },
+  ];
 
-      <section className="metric-grid">
-        <article className="metric-card"><span>Total Batches</span><strong>{loading ? "—" : metrics.total}</strong></article>
-        <article className="metric-card"><span>Ready to Generate</span><strong>{loading ? "—" : metrics.readyToGenerate}</strong></article>
-        <article className="metric-card"><span>Submitted</span><strong>{loading ? "—" : metrics.submitted}</strong></article>
-        <article className="metric-card"><span>Rejected</span><strong>{loading ? "—" : metrics.rejected}</strong></article>
-      </section>
+  const submittableTabs = new Set(["ready", "failed"]);
+  const draftTabs = new Set(["draft", "ready", "failed"]);
 
-      <section className="panel">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <h2 style={{ margin: 0 }}>Submission Queue</h2>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button
-              type="button"
-              className="button"
-              disabled={busy !== null || !hasSelection}
-              onClick={() => void handleSubmitSelected()}
-              title={hasSelection ? "Mark selected generated/ready batches as submitted" : "Select one or more batches first"}
-            >
-              {busy === "submit" ? "Submitting…" : `Submit selected${hasSelection ? ` (${selectedIds.length})` : ""}`}
-            </button>
-            <button
-              type="button"
-              className="button button-secondary"
-              disabled={busy !== null}
-              onClick={() => void handleRetryRejected()}
-              title={hasSelection ? "Retry rejected batches in your selection" : "Retry every rejected batch"}
-            >
-              {busy === "retry" ? "Retrying…" : "Retry rejected"}
-            </button>
-            <button
-              type="button"
-              className="button button-secondary"
-              disabled={busy !== null}
-              onClick={() => void handleRevalidate()}
-              title={hasSelection ? "Re-run validation on claims in selected batches" : "Re-run validation on claims in all listed batches"}
-            >
-              {busy === "revalidate" ? "Revalidating…" : "Revalidate"}
-            </button>
-          </div>
-        </div>
+  const rowActions: RowAction<BatchRow>[] = [
+    {
+      id: "submit",
+      label: "Submit",
+      variant: "primary",
+      disabled: (r) => !submittableTabs.has(r.tab) || busy !== null,
+      onClick: (r) =>
+        void callAction(
+          `/api/claims/837p/batch/${encodeURIComponent(r.id)}/submit`,
+          { action: r.tab === "failed" ? "retry" : "submit" },
+          "Submit batch",
+        ),
+    },
+    {
+      id: "download",
+      label: "Download 837",
+      onClick: (r) => {
+        const url = `/api/claims/837p/batch/${encodeURIComponent(r.id)}/file?organizationId=${encodeURIComponent(organizationId)}`;
+        window.open(url, "_blank", "noopener,noreferrer");
+      },
+    },
+    {
+      id: "rebuild",
+      label: "Rebuild",
+      disabled: (r) => !draftTabs.has(r.tab) || busy !== null,
+      onClick: (r) =>
+        void callAction(`/api/claims/837p/batch/${encodeURIComponent(r.id)}/rebuild`, {}, "Rebuild batch"),
+    },
+    {
+      id: "cancel",
+      label: "Cancel",
+      variant: "danger",
+      disabled: (r) => r.tab === "submitted" || busy !== null,
+      onClick: (r) => {
+        if (!window.confirm(`Cancel batch ${r.batchNumber} and release ${r.claimCount} claim(s)?`)) return;
+        void callAction(`/api/claims/837p/batch/${encodeURIComponent(r.id)}/cancel`, {}, "Cancel batch");
+      },
+    },
+  ];
 
-        {loading ? <div className="empty-state">Loading 837P batches…</div> : null}
-        {!loading && batches.length === 0 ? <div className="empty-state">No 837P batches found.</div> : null}
-
-        <div className="stack-list">
-          {batches.map((batch) => {
-            const isHighlighted = highlightBatchId === batch.id;
-            const statusLower = String(batch.status ?? "").toLowerCase();
-            const canExport = true; // file endpoint reports a clear 404 if no content yet
-            return (
-              <article
-                className="stack-item"
-                key={batch.id}
-                ref={isHighlighted ? highlightedRef : undefined}
-                style={isHighlighted ? {
-                  border: "2px solid #3B82F6",
-                  background: "#EFF6FF",
-                  boxShadow: "0 0 0 4px rgba(59,130,246,0.12)",
-                  transition: "background 0.3s",
-                } : undefined}
+  const detailTabs: DetailTab[] = [
+    {
+      id: "claims",
+      label: "Claims in batch",
+      render: () => {
+        if (!selectedBatch) return null;
+        const det = detail[selectedBatch.id];
+        const rows = det?.claims ?? selectedBatch.claims.map((c) => ({
+          id: c.id,
+          patientId: c.patientId,
+          patientName: c.patientName,
+          claimNumber: String(c.claimNumber ?? ""),
+          status: String(c.status ?? ""),
+          totalCharge: c.totalChargeAmount,
+        }));
+        if (rows.length === 0) {
+          return <div style={{ padding: 12, color: "#64748b" }}>No claims linked to this batch.</div>;
+        }
+        const canRemove = selectedBatch.tab !== "submitted";
+        return (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: 8 }}>
+            {rows.map((c) => (
+              <div
+                key={c.id}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  padding: "8px 10px",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: 6,
+                  gap: 8,
+                }}
               >
-                <div className="stack-row">
-                  <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-                    <input
-                      type="checkbox"
-                      checked={Boolean(selected[batch.id])}
-                      onChange={(e) => setSelected((prev) => ({ ...prev, [batch.id]: e.target.checked }))}
-                      style={{ marginTop: 4 }}
-                      aria-label={`Select batch ${String(batch.batchNumber ?? batch.id.slice(0, 8))}`}
-                    />
-                    <div>
-                      <strong>
-                        {String(batch.batchNumber ?? "837P Batch")}
-                        {isHighlighted ? (
-                          <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, color: "#3B82F6", background: "#DBEAFE", padding: "2px 8px", borderRadius: 12 }}>
-                            Selected
-                          </span>
-                        ) : null}
-                      </strong>
-                      <span>Created: {formatDate(batch.createdAt)} · Claims: {batch.claimCount}</span>
-                      <span>Total charge: {formatMoney(batch.totalChargeAmount)}</span>
-                      {batch.generatedFileName ? <span>File: {String(batch.generatedFileName)}</span> : null}
-                    </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>
+                    <Link className="inline-link" href={`/clients/${encodeURIComponent(c.patientId)}`}>
+                      {c.patientName}
+                    </Link>
                   </div>
-                  <div className="invoice-money-grid">
-                    <span className={statusClass(batch.status)}>{String(batch.status ?? "status not set")}</span>
-                    {batch.submittedAt ? <span>Submitted {formatDate(batch.submittedAt)}</span> : <span>Not submitted</span>}
+                  <div style={{ fontSize: 12, color: "#64748b" }}>
+                    {c.claimNumber || c.id.slice(0, 8)} · {c.status || "—"} · {formatMoney(c.totalCharge)}
                   </div>
                 </div>
-
-                <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-                  <Link
-                    className="button"
-                    href={`/billing/batches/${encodeURIComponent(batch.id)}?organizationId=${encodeURIComponent(organizationId)}`}
-                  >
-                    Open lifecycle
-                  </Link>
+                {canRemove ? (
                   <button
                     type="button"
                     className="button button-secondary"
-                    disabled={!canExport}
-                    onClick={() => handleExport(batch.id)}
+                    style={{ height: 26, padding: "0 8px", fontSize: 12 }}
+                    disabled={busy !== null}
+                    onClick={() => {
+                      if (!window.confirm(`Remove ${c.patientName} from this batch?`)) return;
+                      void callAction(
+                        `/api/claims/837p/batch/${encodeURIComponent(selectedBatch.id)}/claims/${encodeURIComponent(c.id)}/remove`,
+                        {},
+                        "Remove claim",
+                      );
+                    }}
                   >
-                    Export 837P
+                    Remove
                   </button>
-                  <button type="button" className="button button-secondary" onClick={() => void openAck(batch.id, "999")}>
-                    View 999
-                  </button>
-                  <button type="button" className="button button-secondary" onClick={() => void openAck(batch.id, "277CA")}>
-                    View 277CA
-                  </button>
-                  {RETRY_STATUSES.has(statusLower) ? (
-                    <button
-                      type="button"
-                      className="button"
-                      disabled={busy !== null}
-                      onClick={async () => {
-                        if (!window.confirm("Retry this rejected batch?")) return;
-                        setBusy("retry");
-                        const { ok, errs } = await markSubmitted([batch.id], "retry");
-                        setBusy(null);
-                        await load();
-                        flash(errs.length ? "err" : "ok", ok ? "Batch retried." : (errs.join("; ") || "Retry failed"));
-                      }}
-                    >
-                      Resubmit
-                    </button>
-                  ) : null}
-                </div>
-
-                {batch.claims.length > 0 ? (
-                  <div className="payment-history">
-                    <strong>Claims in Batch</strong>
-                    {batch.claims.map((claim) => (
-                      <span key={claim.id}>
-                        {claim.patientName} · Claim {String(claim.claimNumber ?? claim.id.slice(0, 8))} · {String(claim.status ?? "status not set")} · {formatMoney(claim.totalChargeAmount)}
-                      </span>
-                    ))}
-                  </div>
                 ) : null}
-              </article>
-            );
-          })}
-        </div>
-      </section>
-
-      {ackModal ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          onClick={() => setAckModal(null)}
-          style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, padding: 16 }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{ background: "#fff", borderRadius: 10, width: "100%", maxWidth: 760, maxHeight: "85vh", overflow: "auto", padding: 20, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-              <h3 style={{ margin: 0 }}>{ackModal.type} acknowledgements · batch {ackModal.batchId.slice(0, 8)}</h3>
-              <button type="button" className="button button-secondary" onClick={() => setAckModal(null)}>Close</button>
+              </div>
+            ))}
+          </div>
+        );
+      },
+    },
+    {
+      id: "file",
+      label: "837 file preview/download",
+      render: () => {
+        if (!selectedBatch) return null;
+        const preview = filePreviews[selectedBatch.id];
+        return (
+          <div style={{ padding: 8 }}>
+            <div style={{ marginBottom: 8 }}>
+              <a
+                className="button button-secondary"
+                href={`/api/claims/837p/batch/${encodeURIComponent(selectedBatch.id)}/file?organizationId=${encodeURIComponent(organizationId)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Download 837 file
+              </a>
+              {selectedBatch.generatedFileName ? (
+                <span style={{ marginLeft: 10, fontSize: 12, color: "#475569" }}>
+                  {selectedBatch.generatedFileName}
+                </span>
+              ) : null}
             </div>
-            {ackModal.loading ? (
-              <div className="empty-state">Loading…</div>
-            ) : ackModal.error ? (
-              <div className="alert-panel">{ackModal.error}</div>
-            ) : ackModal.items.length === 0 ? (
-              <div className="empty-state">
-                No {ackModal.type} acknowledgement received for this batch yet. Once the clearinghouse posts one,
-                it will be parsed and displayed here.
+            <pre
+              style={{
+                background: "#0f172a",
+                color: "#e2e8f0",
+                padding: 10,
+                borderRadius: 6,
+                fontSize: 11,
+                maxHeight: 320,
+                overflow: "auto",
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {preview ?? "Loading preview…"}
+            </pre>
+          </div>
+        );
+      },
+    },
+    {
+      id: "validation",
+      label: "Batch validation summary",
+      render: () => {
+        if (!selectedBatch) return null;
+        const det = detail[selectedBatch.id];
+        const claimErrors = (det?.claims ?? selectedBatch.claims).filter((c) => /reject|error|fail|denied/i.test(String(c.status ?? "")));
+        return (
+          <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ fontSize: 13 }}>
+              <strong>Batch status:</strong> {selectedBatch.status || "—"} (
+              {selectedBatch.clearinghouseStatus})
+              <br />
+              <strong>Error count:</strong> {selectedBatch.errorCount}
+              <br />
+              <strong>Last HTTP status:</strong> {String(selectedBatch.lastHttpStatus ?? "—")}
+            </div>
+            {selectedBatch.submissionError ? (
+              <div
+                style={{
+                  padding: 10,
+                  background: "#FEF2F2",
+                  border: "1px solid #FECACA",
+                  color: "#991B1B",
+                  borderRadius: 6,
+                  fontSize: 12,
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                {selectedBatch.submissionError}
               </div>
             ) : (
-              <div className="stack-list">
-                {ackModal.items.map((ack) => (
-                  <article key={ack.id} className="stack-item">
-                    <div className="stack-row">
-                      <div>
-                        <strong>{ack.file_name || `${ack.acknowledgement_type} ${ack.id.slice(0, 8)}`}</strong>
-                        <span>Received: {formatDate(ack.created_at)}</span>
-                      </div>
-                    </div>
-                    {ack.parsed_content ? (
-                      <pre style={{ background: "#F8FAFC", padding: 10, borderRadius: 6, fontSize: 12, overflow: "auto", margin: "8px 0" }}>
-                        {JSON.stringify(ack.parsed_content, null, 2)}
-                      </pre>
-                    ) : null}
-                    {ack.raw_content ? (
-                      <details>
-                        <summary style={{ cursor: "pointer", fontSize: 12, color: "#475569" }}>Raw EDI</summary>
-                        <pre style={{ background: "#0F172A", color: "#E2E8F0", padding: 10, borderRadius: 6, fontSize: 11, overflow: "auto", whiteSpace: "pre-wrap" }}>
-                          {ack.raw_content}
-                        </pre>
-                      </details>
-                    ) : null}
-                  </article>
-                ))}
+              <div style={{ fontSize: 12, color: "#475569" }}>No submission errors recorded.</div>
+            )}
+            {claimErrors.length > 0 ? (
+              <div>
+                <strong style={{ fontSize: 13 }}>Claims with issues ({claimErrors.length})</strong>
+                <ul style={{ fontSize: 12, paddingLeft: 20 }}>
+                  {claimErrors.map((c) => (
+                    <li key={c.id}>
+                      {("patientName" in c ? c.patientName : "")} · {String(c.status)}
+                    </li>
+                  ))}
+                </ul>
               </div>
+            ) : (
+              <div style={{ fontSize: 12, color: "#475569" }}>All claims in this batch validate cleanly.</div>
             )}
           </div>
-        </div>
-      ) : null}
-    </main>
+        );
+      },
+    },
+    {
+      id: "transmission",
+      label: "Transmission log",
+      render: () => {
+        if (!selectedBatch) return null;
+        const det = detail[selectedBatch.id];
+        const timeline = det?.timeline ?? [];
+        const acks = det?.acknowledgements ?? [];
+        return (
+          <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ fontSize: 13 }}>
+              <strong>Submitted at:</strong> {formatDateTime(selectedBatch.submittedAt)}
+              <br />
+              <strong>Acknowledgements:</strong> {acks.length}
+            </div>
+            {acks.length > 0 ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {acks.map((a) => (
+                  <div
+                    key={a.id}
+                    style={{
+                      padding: 8,
+                      border: "1px solid #e2e8f0",
+                      borderRadius: 6,
+                      fontSize: 12,
+                    }}
+                  >
+                    <strong>{a.type}</strong> · {a.fileName || "(no file name)"} · received{" "}
+                    {formatDateTime(a.receivedAt)}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {timeline.length === 0 ? (
+              <div style={{ fontSize: 12, color: "#475569" }}>No transmission events yet.</div>
+            ) : (
+              <ol style={{ paddingLeft: 20, fontSize: 12 }}>
+                {timeline.map((e) => (
+                  <li key={e.id} style={{ marginBottom: 6 }}>
+                    <span
+                      style={{
+                        color:
+                          e.severity === "error"
+                            ? "#DC2626"
+                            : e.severity === "warning"
+                            ? "#D97706"
+                            : e.severity === "success"
+                            ? "#059669"
+                            : "#2563EB",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {e.title}
+                    </span>
+                    <br />
+                    <span style={{ color: "#475569" }}>
+                      {formatDateTime(e.at)} · claim {e.claimNumber}
+                      {e.detail ? ` · ${e.detail}` : ""}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
+        );
+      },
+    },
+  ];
+
+  const detailActions: PrimaryAction[] = selectedBatch
+    ? [
+        {
+          id: "submit",
+          label: "Submit batch",
+          variant: "primary",
+          disabled: !submittableTabs.has(selectedBatch.tab) || busy !== null,
+          onClick: () =>
+            void callAction(
+              `/api/claims/837p/batch/${encodeURIComponent(selectedBatch.id)}/submit`,
+              { action: selectedBatch.tab === "failed" ? "retry" : "submit" },
+              "Submit batch",
+            ),
+        },
+        {
+          id: "rebuild",
+          label: "Rebuild batch",
+          disabled: !draftTabs.has(selectedBatch.tab) || busy !== null,
+          onClick: () =>
+            void callAction(`/api/claims/837p/batch/${encodeURIComponent(selectedBatch.id)}/rebuild`, {}, "Rebuild batch"),
+        },
+        {
+          id: "download",
+          label: "Download 837",
+          onClick: () => {
+            const url = `/api/claims/837p/batch/${encodeURIComponent(selectedBatch.id)}/file?organizationId=${encodeURIComponent(organizationId)}`;
+            window.open(url, "_blank", "noopener,noreferrer");
+          },
+        },
+        {
+          id: "cancel",
+          label: "Cancel batch",
+          variant: "danger",
+          disabled: selectedBatch.tab === "submitted" || busy !== null,
+          onClick: () => {
+            if (!window.confirm(`Cancel batch ${selectedBatch.batchNumber} and release ${selectedBatch.claimCount} claim(s)?`)) return;
+            void callAction(`/api/claims/837p/batch/${encodeURIComponent(selectedBatch.id)}/cancel`, {}, "Cancel batch");
+          },
+        },
+      ]
+    : [];
+
+  const headerActions: PrimaryAction[] = [
+    { id: "refresh", label: loading ? "Refreshing…" : "Refresh", onClick: () => void load(), disabled: loading },
+  ];
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {/* Tab strip */}
+      <nav
+        style={{
+          display: "flex",
+          gap: 6,
+          padding: "4px 4px 0",
+          borderBottom: "1px solid #e2e8f0",
+        }}
+        aria-label="Batch lifecycle tabs"
+      >
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => {
+              setActiveTab(t.id);
+              setSelectedRowId(null);
+            }}
+            style={{
+              padding: "8px 14px",
+              border: "none",
+              borderBottom: activeTab === t.id ? "2px solid #2563eb" : "2px solid transparent",
+              background: "transparent",
+              fontWeight: activeTab === t.id ? 600 : 500,
+              color: activeTab === t.id ? "#1d4ed8" : "#475569",
+              cursor: "pointer",
+            }}
+            aria-pressed={activeTab === t.id}
+          >
+            {t.label}
+            {tabCounts[t.id] !== undefined ? (
+              <span
+                style={{
+                  marginLeft: 8,
+                  fontSize: 11,
+                  background: "#e2e8f0",
+                  color: "#334155",
+                  borderRadius: 10,
+                  padding: "1px 8px",
+                }}
+              >
+                {tabCounts[t.id]}
+              </span>
+            ) : null}
+          </button>
+        ))}
+      </nav>
+
+      <WorkqueueShell<BatchRow>
+        title="Batch Review"
+        description="Final batch-level review before transmission to the clearinghouse."
+        headerActions={headerActions}
+        summary={summary}
+        filters={filters}
+        filterValues={filterValues}
+        onFilterChange={setFilterValues}
+        filterUrlNamespace="batches"
+        rows={batches}
+        columns={columns}
+        rowId={(r) => r.id}
+        loading={loading}
+        emptyMessage="No batches in this tab match the current filters."
+        selectedRowId={selectedRowId}
+        onSelectRow={setSelectedRowId}
+        rowActions={rowActions}
+        detailTabs={detailTabs}
+        detailActions={detailActions}
+        message={message}
+      />
+    </div>
   );
 }

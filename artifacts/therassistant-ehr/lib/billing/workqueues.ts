@@ -117,15 +117,7 @@ export const WORKQUEUES: WorkqueueDef[] = [
   {
     id: "batch_review",
     title: "Batch Review",
-    description: "Pending 837P batches awaiting biller sign-off before transmission.",
-    href: "/billing/batches",
-    stage: "submission_rejections",
-    status: "live",
-  },
-  {
-    id: "submitted_batches",
-    title: "Submitted Batches",
-    description: "Transmitted 837P batches and their acknowledgement status.",
+    description: "All 837P batches — draft, ready to submit, submitted, failed, and partially accepted.",
     href: "/billing/837p-batches",
     stage: "submission_rejections",
     status: "live",
