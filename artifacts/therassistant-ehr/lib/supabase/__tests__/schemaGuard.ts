@@ -86,6 +86,9 @@ const EXTRA_COLUMNS: Record<string, string[]> = {
   // Added by supabase/migrations/20260611010000_clients_emergency_contact.sql
   // (Task: capture full client identity when adding a new client).
   clients: ["emergency_contact_name", "emergency_contact_phone"],
+  // Added by supabase/migrations/20260615000000_payer_documentation_transmissions.sql
+  // (Task #550: send medical-review docs to the payer's records contact).
+  payer_profiles: ["records_email", "records_fax"],
 };
 
 const ENUM_COLUMNS: Record<string, Record<string, string>> = {

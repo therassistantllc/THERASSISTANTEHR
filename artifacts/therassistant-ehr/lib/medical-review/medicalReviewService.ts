@@ -428,6 +428,17 @@ export interface MedicalReviewClaimContext {
     createdAt: string;
     userId: string | null;
   }>;
+  transmissions: Array<{
+    id: string;
+    channel: "email" | "fax" | "logged";
+    recipient: string | null;
+    status: "queued" | "sent" | "failed" | "logged";
+    sentAt: string | null;
+    createdAt: string;
+    error: string | null;
+    providerMessageId: string | null;
+    files: Array<{ id: string; title: string; fileName: string }>;
+  }>;
 }
 
 export async function loadMedicalReviewClaimContext(
@@ -446,7 +457,7 @@ export async function loadMedicalReviewClaimContext(
   const encounterId = claim ? text((claim as DbRow).encounter_id) : "";
   const clientId = claim ? text((claim as DbRow).patient_id) : "";
 
-  const [{ data: note }, { data: plan }, { data: docs }, { data: hist }] = await Promise.all([
+  const [{ data: note }, { data: plan }, { data: docs }, { data: hist }, { data: txs }] = await Promise.all([
     encounterId
       ? sb.from("encounter_clinical_notes")
           .select("id, note_status, subjective, objective, assessment, plan, signed_at")
@@ -478,6 +489,12 @@ export async function loadMedicalReviewClaimContext(
       .eq("organization_id", organizationId)
       .eq("claim_id", claimId)
       .like("action", "medical_review_%")
+      .order("created_at", { ascending: false })
+      .limit(50),
+    sb.from("claim_documentation_transmissions")
+      .select("id, channel, recipient, status, sent_at, created_at, error, provider_message_id, file_list")
+      .eq("organization_id", organizationId)
+      .eq("claim_id", claimId)
       .order("created_at", { ascending: false })
       .limit(50),
   ]);
@@ -525,5 +542,35 @@ export async function loadMedicalReviewClaimContext(
       createdAt: text(h.created_at),
       userId: text(h.user_id) || null,
     })),
+    transmissions: ((txs as DbRow[]) ?? []).map((t) => {
+      const list = Array.isArray(t.file_list)
+        ? (t.file_list as Array<Record<string, unknown>>)
+        : [];
+      const channelRaw = text(t.channel).toLowerCase();
+      const channel: "email" | "fax" | "logged" =
+        channelRaw === "email" || channelRaw === "fax" || channelRaw === "logged"
+          ? channelRaw
+          : "logged";
+      const statusRaw = text(t.status).toLowerCase();
+      const status: "queued" | "sent" | "failed" | "logged" =
+        statusRaw === "sent" || statusRaw === "failed" || statusRaw === "logged" || statusRaw === "queued"
+          ? statusRaw
+          : "queued";
+      return {
+        id: text(t.id),
+        channel,
+        recipient: text(t.recipient) || null,
+        status,
+        sentAt: text(t.sent_at) || null,
+        createdAt: text(t.created_at),
+        error: text(t.error) || null,
+        providerMessageId: text(t.provider_message_id) || null,
+        files: list.map((f) => ({
+          id: text((f as { id?: unknown }).id),
+          title: text((f as { title?: unknown }).title) || text((f as { fileName?: unknown }).fileName) || "Document",
+          fileName: text((f as { fileName?: unknown }).fileName) || text((f as { title?: unknown }).title) || "document",
+        })),
+      };
+    }),
   };
 }

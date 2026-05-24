@@ -230,6 +230,107 @@ export async function sendCobUpdateEmail(
   }
 }
 
+export type PayerDocumentationAttachment = {
+  filename: string;
+  content: Buffer;
+};
+
+export type SendPayerDocumentationEmailInput = {
+  to: string;
+  payerName: string;
+  practiceName: string;
+  claimNumber: string;
+  patientName: string;
+  dateOfService: string | null;
+  note: string | null;
+  attachments: PayerDocumentationAttachment[];
+};
+
+export type SendPayerDocumentationEmailResult =
+  | { ok: true; providerId: string | null; fromEmail: string }
+  | { ok: false; error: string };
+
+export async function sendPayerDocumentationEmail(
+  input: SendPayerDocumentationEmailInput,
+): Promise<SendPayerDocumentationEmailResult> {
+  const credentials = await resolveResendCredentials();
+  if (!credentials) {
+    return {
+      ok: false,
+      error:
+        "Email is not configured. Connect Resend in Integrations (or set RESEND_API_KEY) before sending documentation to payers.",
+    };
+  }
+
+  const fromEmail =
+    credentials.fromEmail ??
+    process.env.RESEND_FROM_EMAIL?.trim() ??
+    "onboarding@resend.dev";
+
+  const safePayer = input.payerName.trim() || "Insurance Payer";
+  const safePractice = input.practiceName.trim() || "the billing office";
+  const safePatient = input.patientName.trim() || "the patient";
+  const dosText = input.dateOfService
+    ? new Date(input.dateOfService).toLocaleDateString()
+    : "the date of service on file";
+
+  const subject = `Medical records — claim ${input.claimNumber} (${safePatient})`;
+  const noteLine = input.note ? `\n\nNotes from the biller:\n${input.note}` : "";
+  const fileList = input.attachments.map((a) => `  • ${a.filename}`).join("\n");
+  const textBody =
+    `${safePayer} records team,\n\n` +
+    `Please find attached the documentation requested for the claim below.\n\n` +
+    `Claim number: ${input.claimNumber}\n` +
+    `Patient: ${safePatient}\n` +
+    `Date of service: ${dosText}\n` +
+    `Attachments (${input.attachments.length}):\n${fileList}` +
+    `${noteLine}\n\n` +
+    `Thank you,\n${safePractice}`;
+
+  const htmlBody = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; color: #1f2937; max-width: 640px; margin: 0 auto;">
+      <p>${escapeHtml(safePayer)} records team,</p>
+      <p>Please find attached the documentation requested for the claim below.</p>
+      <table style="font-size:14px;border-collapse:collapse;margin:12px 0;">
+        <tbody>
+          <tr><td style="padding:4px 12px 4px 0;color:#6b7280;">Claim number</td><td style="padding:4px 0;"><strong>${escapeHtml(input.claimNumber)}</strong></td></tr>
+          <tr><td style="padding:4px 12px 4px 0;color:#6b7280;">Patient</td><td style="padding:4px 0;">${escapeHtml(safePatient)}</td></tr>
+          <tr><td style="padding:4px 12px 4px 0;color:#6b7280;">Date of service</td><td style="padding:4px 0;">${escapeHtml(dosText)}</td></tr>
+        </tbody>
+      </table>
+      <p style="font-size:13px;color:#374151;"><strong>Attachments (${input.attachments.length}):</strong></p>
+      <ul style="font-size:13px;color:#374151;margin:0 0 12px 18px;padding:0;">
+        ${input.attachments.map((a) => `<li>${escapeHtml(a.filename)}</li>`).join("")}
+      </ul>
+      ${input.note ? `<p style="font-size:13px;color:#374151;white-space:pre-wrap;"><strong>Notes from the biller:</strong><br/>${escapeHtml(input.note)}</p>` : ""}
+      <p style="margin-top:24px;">Thank you,<br/>${escapeHtml(safePractice)}</p>
+    </div>
+  `;
+
+  try {
+    const client = new Resend(credentials.apiKey);
+    const result = await client.emails.send({
+      from: fromEmail,
+      to: input.to,
+      subject,
+      text: textBody,
+      html: htmlBody,
+      attachments: input.attachments.map((a) => ({
+        filename: a.filename,
+        content: a.content,
+      })),
+    });
+    if (result.error) {
+      const message = result.error.message || "Resend rejected the email";
+      return { ok: false, error: message };
+    }
+    return { ok: true, providerId: result.data?.id ?? null, fromEmail };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to send email";
+    return { ok: false, error: message };
+  }
+}
+
 export type SendPortalInviteEmailInput = {
   to: string;
   patientName: string;

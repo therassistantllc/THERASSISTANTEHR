@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireBillingAccess } from "@/lib/billing/requireBillingAccess";
 import { generateCoverLetterPdf, type CoverLetterAttachment } from "@/lib/pdf/coverLetter";
+import {
+  sendPayerDocumentationEmail,
+  type PayerDocumentationAttachment,
+} from "@/lib/email/resend";
 
 const COVER_LETTER_BUCKET = "mailroom-documents";
 
@@ -159,16 +163,272 @@ export async function POST(request: Request) {
         return NextResponse.json({ success: true, attached: titles });
       }
       case "send_documentation": {
-        const recipient = (body.recipientEmail ?? "").trim();
+        const recipientOverride = (body.recipientEmail ?? "").trim();
+
+        // Pull payer contact + practice/client snapshot for the email body.
+        const [{ data: payer }, { data: org }, { data: client }, { data: appt }] =
+          await Promise.all([
+            claim.payer_profile_id
+              ? sb.from("payer_profiles")
+                  .select("payer_name, records_email, records_fax, claims_fax")
+                  .eq("id", claim.payer_profile_id)
+                  .eq("organization_id", organizationId)
+                  .maybeSingle()
+              : Promise.resolve({ data: null }),
+            sb.from("organizations").select("name").eq("id", organizationId).maybeSingle(),
+            clientId
+              ? sb.from("clients")
+                  .select("first_name, last_name")
+                  .eq("id", clientId)
+                  .eq("organization_id", organizationId)
+                  .maybeSingle()
+              : Promise.resolve({ data: null }),
+            appointmentId
+              ? sb.from("appointments")
+                  .select("scheduled_start_at")
+                  .eq("id", appointmentId)
+                  .eq("organization_id", organizationId)
+                  .maybeSingle()
+              : Promise.resolve({ data: null }),
+          ]);
+
+        const payerName = (payer?.payer_name as string | null) || "Insurance Payer";
+        const recordsEmail = (payer?.records_email as string | null)?.trim() || "";
+        const recordsFax =
+          (payer?.records_fax as string | null)?.trim() ||
+          (payer?.claims_fax as string | null)?.trim() ||
+          "";
+
+        const recipient = recipientOverride || recordsEmail || recordsFax;
+        if (!recipient) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: `No documentation contact on file for ${payerName}. Add a records email or fax to the payer profile, or pass recipientEmail.`,
+            },
+            { status: 400 },
+          );
+        }
+
+        const looksLikeEmail = recipient.includes("@");
+        const channel: "email" | "fax" = looksLikeEmail ? "email" : "fax";
+
+        // Gather all non-archived documents on this claim plus the most
+        // recent cover letter (which is also a row in documents, but we
+        // pull it out so it can lead the attachment list).
+        const { data: docRows, error: docsErr } = await sb
+          .from("documents")
+          .select("id, title, file_name, mime_type, storage_bucket, storage_path, document_type, created_at")
+          .eq("organization_id", organizationId)
+          .eq("claim_id", claimId)
+          .is("archived_at", null)
+          .order("created_at", { ascending: false })
+          .limit(50);
+        if (docsErr) {
+          return NextResponse.json(
+            { success: false, error: docsErr.message ?? "Failed to load attached documents" },
+            { status: 500 },
+          );
+        }
+
+        type DocRow = {
+          id: string;
+          title: string | null;
+          file_name: string | null;
+          mime_type: string | null;
+          storage_bucket: string | null;
+          storage_path: string | null;
+          document_type: string | null;
+          created_at: string | null;
+        };
+        const allDocs = ((docRows ?? []) as DocRow[]).filter(
+          (d) => d.storage_bucket && d.storage_path,
+        );
+        if (allDocs.length === 0) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: "No documents are attached to this claim. Upload or attach records before sending.",
+            },
+            { status: 400 },
+          );
+        }
+        // Sort so the cover letter (if any) comes first.
+        allDocs.sort((a, b) => {
+          const ac = a.document_type === "cover_letter" ? 0 : 1;
+          const bc = b.document_type === "cover_letter" ? 0 : 1;
+          return ac - bc;
+        });
+
+        const sentAt = new Date();
+        const fileList = allDocs.map((d) => ({
+          id: String(d.id),
+          title: d.title || d.file_name || "Document",
+          fileName: d.file_name || "document",
+          documentType: d.document_type ?? null,
+          mimeType: d.mime_type ?? null,
+        }));
+        const documentIds = allDocs.map((d) => String(d.id));
+
+        // Seed a transmission row up front so even a failure is recorded.
+        const baseTransmission = {
+          organization_id: organizationId,
+          claim_id: claimId,
+          payer_profile_id: (claim.payer_profile_id as string | null) ?? null,
+          channel,
+          recipient,
+          document_ids: documentIds,
+          file_list: fileList,
+          note: note || null,
+          created_by_user_id: userId,
+        };
+
+        let transmissionStatus: "sent" | "failed" | "queued" = channel === "email" ? "queued" : "queued";
+        let transmissionError: string | null = null;
+        let providerMessageId: string | null = null;
+
+        if (channel === "email") {
+          // Download each file from storage as a Buffer for the email.
+          const attachments: PayerDocumentationAttachment[] = [];
+          for (const d of allDocs) {
+            const { data: blob, error: dlErr } = await supabase.storage
+              .from(String(d.storage_bucket))
+              .download(String(d.storage_path));
+            if (dlErr || !blob) {
+              transmissionError = `Failed to download ${d.file_name ?? d.id}: ${dlErr?.message ?? "unknown error"}`;
+              transmissionStatus = "failed";
+              break;
+            }
+            const arrayBuf = await blob.arrayBuffer();
+            attachments.push({
+              filename: d.file_name || `${d.title || "document"}.bin`,
+              content: Buffer.from(arrayBuf),
+            });
+          }
+
+          if (transmissionStatus !== "failed") {
+            const firstName = client ? String((client as { first_name?: unknown }).first_name ?? "").trim() : "";
+            const lastName = client ? String((client as { last_name?: unknown }).last_name ?? "").trim() : "";
+            const patientName = `${firstName} ${lastName}`.trim() || "Unknown patient";
+            const result = await sendPayerDocumentationEmail({
+              to: recipient,
+              payerName,
+              practiceName: (org?.name as string | null) || "Billing office",
+              claimNumber: (claim.claim_number as string | null) || claimId,
+              patientName,
+              dateOfService: appt ? ((appt as { scheduled_start_at?: string | null }).scheduled_start_at ?? null) : null,
+              note: note || null,
+              attachments,
+            });
+            if (result.ok) {
+              transmissionStatus = "sent";
+              providerMessageId = result.providerId;
+            } else {
+              transmissionStatus = "failed";
+              transmissionError = result.error;
+            }
+          }
+        } else {
+          // Fax channel: queue a row in fax_queue so the existing
+          // outbound-fax worker picks it up. The attachment files
+          // themselves are referenced by name in the body; the fax
+          // worker resolves them from storage via document_ids on the
+          // transmission row (file_list also carries titles for ops).
+          const subject = `Records — claim ${(claim.claim_number as string | null) || claimId}`;
+          const bodyText =
+            `Attached: ${fileList.length} file(s) for claim ${(claim.claim_number as string | null) || claimId}.\n` +
+            fileList.map((f) => `• ${f.title} (${f.fileName})`).join("\n") +
+            (note ? `\n\nNotes: ${note}` : "");
+          const { data: faxRow, error: faxErr } = await sb
+            .from("fax_queue")
+            .insert({
+              organization_id: organizationId,
+              claim_id: claimId,
+              to_fax_number: recipient,
+              subject,
+              body: bodyText,
+              status: "pending",
+              created_by_user_id: userId,
+            })
+            .select("id")
+            .single();
+          if (faxErr) {
+            transmissionStatus = "failed";
+            transmissionError = faxErr.message ?? "fax_queue insert failed";
+          } else {
+            transmissionStatus = "queued";
+            providerMessageId = faxRow ? String(faxRow.id) : null;
+          }
+        }
+
+        const { data: transmission, error: txErr } = await sb
+          .from("claim_documentation_transmissions")
+          .insert({
+            ...baseTransmission,
+            status: transmissionStatus,
+            provider_message_id: providerMessageId,
+            error: transmissionError,
+            sent_at: transmissionStatus === "sent" ? sentAt.toISOString() : null,
+          })
+          .select("id")
+          .single();
+        if (txErr) {
+          return NextResponse.json(
+            { success: false, error: txErr.message ?? "Failed to record transmission" },
+            { status: 500 },
+          );
+        }
+
+        const summary =
+          transmissionStatus === "sent"
+            ? `Sent ${fileList.length} document(s) to ${recipient}`
+            : transmissionStatus === "queued"
+              ? `Queued ${fileList.length} document(s) for ${channel} to ${recipient}`
+              : `Failed to send documentation to ${recipient}: ${transmissionError ?? "unknown error"}`;
+
         const audit = await writeAuditStrict(supabase, {
           organizationId, userId,
           action: "medical_review_documentation_sent",
           claimId, clientId, appointmentId,
-          summary: note || `Documentation sent${recipient ? ` to ${recipient}` : ""}`,
-          metadata: { recipient, note },
+          summary: note ? `${summary} — ${note}` : summary,
+          metadata: {
+            recipient,
+            channel,
+            status: transmissionStatus,
+            transmissionId: transmission ? String(transmission.id) : null,
+            providerMessageId,
+            error: transmissionError,
+            fileList,
+            note,
+          },
         });
         if (!audit.ok) return NextResponse.json({ success: false, error: audit.error }, { status: 500 });
-        return NextResponse.json({ success: true, sentAt: new Date().toISOString() });
+
+        if (transmissionStatus === "failed") {
+          return NextResponse.json(
+            {
+              success: false,
+              error: transmissionError ?? "Send failed",
+              transmissionId: transmission ? String(transmission.id) : null,
+              channel,
+              recipient,
+              fileList,
+              status: transmissionStatus,
+            },
+            { status: 502 },
+          );
+        }
+
+        return NextResponse.json({
+          success: true,
+          sentAt: transmissionStatus === "sent" ? sentAt.toISOString() : null,
+          channel,
+          recipient,
+          fileList,
+          status: transmissionStatus,
+          transmissionId: transmission ? String(transmission.id) : null,
+          providerMessageId,
+        });
       }
       case "create_cover_letter": {
         // Hydrate the bits we need to populate the letter. Each lookup is

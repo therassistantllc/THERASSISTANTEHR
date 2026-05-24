@@ -45,6 +45,17 @@ interface ContextPayload {
       id: string; action: string; summary: string | null;
       createdAt: string; userId: string | null;
     }>;
+    transmissions: Array<{
+      id: string;
+      channel: "email" | "fax" | "logged";
+      recipient: string | null;
+      status: "queued" | "sent" | "failed" | "logged";
+      sentAt: string | null;
+      createdAt: string;
+      error: string | null;
+      providerMessageId: string | null;
+      files: Array<{ id: string; title: string; fileName: string }>;
+    }>;
   };
 }
 
@@ -420,14 +431,24 @@ export default function MedicalReviewClient() {
           setRows((prev) => prev.filter((r) => r.claimId !== row.claimId));
           if (selectedRowId === row.id) setSelectedRowId(null);
         }
-        setToast(({
+        const sendMsg = (() => {
+          if (action !== "send_documentation") return null;
+          const recipient = typeof json?.recipient === "string" ? json.recipient : null;
+          const channel = typeof json?.channel === "string" ? json.channel : null;
+          const status = typeof json?.status === "string" ? json.status : null;
+          const count = Array.isArray(json?.fileList) ? json.fileList.length : 0;
+          if (!recipient) return "Documentation sent";
+          const verb = status === "queued" ? `Queued for ${channel ?? "fax"}` : "Sent";
+          return `${verb} ${count} file(s) to ${recipient}`;
+        })();
+        setToast(sendMsg ?? (({
           attach_records: "Records attached",
           send_documentation: "Documentation sent",
           create_cover_letter: "Cover letter created",
           route_to_clinician: `Routed to ${assignment?.display ?? "clinician"}`,
           route_to_admin: "Routed to admin",
           mark_submitted: "Marked submitted",
-        } as Record<string, string>)[action] ?? "Done");
+        } as Record<string, string>)[action] ?? "Done"));
       } catch (e) {
         setToast(e instanceof Error ? e.message : "Action failed");
       } finally {
@@ -795,17 +816,76 @@ export default function MedicalReviewClient() {
           if (!selectedRow) return null;
           if (ctxIsLoading && !ctx) return <p style={{ color: "#64748B", fontSize: 13 }}>Loading…</p>;
           const hist = ctx?.history ?? [];
-          if (hist.length === 0) return <p style={{ color: "#64748B", fontSize: 13 }}>No medical-review actions logged yet.</p>;
+          const txs = ctx?.transmissions ?? [];
+          if (hist.length === 0 && txs.length === 0) {
+            return <p style={{ color: "#64748B", fontSize: 13 }}>No medical-review actions logged yet.</p>;
+          }
+          const statusColor = (s: string) =>
+            s === "sent" ? "#15803D" :
+            s === "failed" ? "#B91C1C" :
+            s === "queued" ? "#B45309" :
+            "#475569";
           return (
-            <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-              {hist.map((h) => (
-                <li key={h.id} style={{ padding: "6px 0", borderBottom: "1px solid #F1F5F9", fontSize: 13 }}>
-                  <strong>{h.action.replace(/^medical_review_/, "").replace(/_/g, " ")}</strong>
-                  <span style={{ color: "#64748B", marginLeft: 8 }}>{formatDateTime(h.createdAt)}</span>
-                  {h.summary ? <div style={{ color: "#475569", fontSize: 12 }}>{h.summary}</div> : null}
-                </li>
-              ))}
-            </ul>
+            <div>
+              {txs.length > 0 ? (
+                <section style={{ marginBottom: 16 }}>
+                  <h4 style={{ fontSize: 13, margin: "0 0 6px", color: "#0F172A" }}>Documentation sent</h4>
+                  <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                    {txs.map((t) => (
+                      <li key={t.id} style={{ padding: "8px 0", borderBottom: "1px solid #F1F5F9", fontSize: 13 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>
+                          <div>
+                            <strong style={{ textTransform: "uppercase", fontSize: 11, letterSpacing: 0.5, color: "#475569" }}>
+                              {t.channel}
+                            </strong>
+                            <span style={{ marginLeft: 8 }}>
+                              {t.recipient || <span style={{ color: "#9CA3AF" }}>—</span>}
+                            </span>
+                          </div>
+                          <span
+                            style={{
+                              fontSize: 11, fontWeight: 700, color: statusColor(t.status),
+                              border: `1px solid ${statusColor(t.status)}`, padding: "1px 6px", borderRadius: 4,
+                              textTransform: "uppercase", letterSpacing: 0.5,
+                            }}
+                          >
+                            {t.status}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 12, color: "#64748B", marginTop: 2 }}>
+                          {t.sentAt ? `Sent ${formatDateTime(t.sentAt)}` : `Queued ${formatDateTime(t.createdAt)}`}
+                          {t.providerMessageId ? ` · ref ${t.providerMessageId.slice(0, 8)}` : ""}
+                        </div>
+                        {t.files.length > 0 ? (
+                          <ul style={{ margin: "6px 0 0 18px", padding: 0, fontSize: 12, color: "#374151" }}>
+                            {t.files.map((f) => (
+                              <li key={f.id || f.fileName}>{f.title}{f.fileName && f.fileName !== f.title ? ` (${f.fileName})` : ""}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        {t.error ? (
+                          <div style={{ fontSize: 12, color: "#B91C1C", marginTop: 4 }}>Error: {t.error}</div>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
+              {hist.length > 0 ? (
+                <section>
+                  <h4 style={{ fontSize: 13, margin: "0 0 6px", color: "#0F172A" }}>Action log</h4>
+                  <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                    {hist.map((h) => (
+                      <li key={h.id} style={{ padding: "6px 0", borderBottom: "1px solid #F1F5F9", fontSize: 13 }}>
+                        <strong>{h.action.replace(/^medical_review_/, "").replace(/_/g, " ")}</strong>
+                        <span style={{ color: "#64748B", marginLeft: 8 }}>{formatDateTime(h.createdAt)}</span>
+                        {h.summary ? <div style={{ color: "#475569", fontSize: 12 }}>{h.summary}</div> : null}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
+            </div>
           );
         },
       },
