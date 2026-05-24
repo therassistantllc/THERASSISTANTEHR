@@ -106,29 +106,19 @@ export async function POST(
 
     const eff = date(body.effectiveDate);
     if (!eff.ok) return NextResponse.json({ success: false, error: eff.err }, { status: 400 });
-    if (!eff.v) {
-      return NextResponse.json({ success: false, error: "Effective date is required" }, { status: 400 });
-    }
     const term = date(body.terminationDate);
     if (!term.ok) return NextResponse.json({ success: false, error: term.err }, { status: 400 });
-    if (term.v && eff.v > term.v) {
+    if (eff.v && term.v && eff.v > term.v) {
       return NextResponse.json({ success: false, error: "Effective date must be on or before termination date" }, { status: 400 });
     }
     const dob = date(body.subscriberDateOfBirth);
     if (!dob.ok) return NextResponse.json({ success: false, error: dob.err }, { status: 400 });
-    if (!dob.v) {
-      return NextResponse.json({ success: false, error: "Subscriber date of birth is required" }, { status: 400 });
-    }
 
-    const subFirst = s(body.subscriberFirstName);
-    const subLast = s(body.subscriberLastName);
-    const subMember = s(body.subscriberMemberId);
-    if (!subFirst || !subLast || !subMember) {
-      return NextResponse.json(
-        { success: false, error: "Subscriber first name, last name, and Member ID are required" },
-        { status: 400 },
-      );
-    }
+    // Only payer and policy/member ID are user-required. Subscriber name/DOB
+    // and effective date are NOT NULL in the DB, so we default to the client
+    // as the subscriber ("self") and today's effective date when the user
+    // omits them. These can be overwritten once eligibility is verified
+    // electronically.
     const relationship = s(body.subscriberRelationship) ?? "self";
 
     const copay = money(body.copayAmount, "Copay");
@@ -150,7 +140,7 @@ export async function POST(
     // caller's organization before any insert that references it.
     const { data: clientRow, error: clientErr } = await supabase
       .from("clients")
-      .select("id, organization_id")
+      .select("id, organization_id, first_name, last_name, date_of_birth")
       .eq("id", clientId)
       .eq("organization_id", organizationId)
       .maybeSingle();
@@ -174,13 +164,22 @@ export async function POST(
       return NextResponse.json({ success: false, error: "Payer not found for this organization" }, { status: 400 });
     }
 
+    // Default subscriber to the client themselves when the user didn't
+    // fill in subscriber name/DOB. Member ID falls back to the policy's
+    // member ID since that's what the user typed as the patient's ID.
+    const subFirst = s(body.subscriberFirstName) ?? clientRow.first_name;
+    const subLast = s(body.subscriberLastName) ?? clientRow.last_name;
+    const subDob = dob.v ?? clientRow.date_of_birth;
+    const subMember = s(body.subscriberMemberId) ?? policyNumber;
+    const effectiveDate = eff.v ?? new Date().toISOString().slice(0, 10);
+
     // insurance_subscribers has no client_id column; subscribers are scoped
     // by organization and linked to a policy via insurance_policies.subscriber_id.
     const subInsert: Record<string, unknown> = {
       organization_id: organizationId,
       first_name: subFirst,
       last_name: subLast,
-      date_of_birth: dob.v,
+      date_of_birth: subDob,
       member_id: subMember,
       phone: s(body.subscriberPhone),
       address_line_1: s(body.subscriberAddressLine1),
@@ -212,7 +211,7 @@ export async function POST(
       plan_name: s(body.planName),
       policy_number: policyNumber,
       group_number: s(body.groupNumber),
-      effective_date: eff.v,
+      effective_date: effectiveDate,
       termination_date: term.v,
       copay_amount: copay.v,
       coinsurance_percent: coins.v,

@@ -834,16 +834,7 @@ function CreatePolicyForm({
       gap: "0.5rem 0.75rem",
     }) as const;
 
-  const canSubmit = Boolean(
-    draft.payerId &&
-      draft.policyNumber.trim() &&
-      draft.effectiveDate &&
-      draft.subscriberFirstName &&
-      draft.subscriberLastName &&
-      draft.subscriberDateOfBirth &&
-      draft.subscriberMemberId &&
-      !disabled,
-  );
+  const canSubmit = Boolean(draft.payerId && draft.policyNumber.trim() && !disabled);
 
   return (
     <div
