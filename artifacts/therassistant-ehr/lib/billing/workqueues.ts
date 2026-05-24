@@ -308,6 +308,14 @@ export const WORKQUEUES: WorkqueueDef[] = [
     stage: "adjudication_denials",
     status: "live",
   },
+  {
+    id: "secondary_billing",
+    title: "Secondary Billing Needed",
+    description: "Generate secondary claims after primary payer adjudication.",
+    href: "/billing/secondary-billing",
+    stage: "adjudication_denials",
+    status: "live",
+  },
 
   // ── Payments & ERA ──────────────────────────────────────────────────────
   {
