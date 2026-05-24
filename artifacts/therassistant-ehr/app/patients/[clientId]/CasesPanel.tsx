@@ -410,30 +410,14 @@ export default function CasesPanel({
             Group insurance coverage by visit. Tag appointments and claims with the case they should be billed under.
           </p>
         </div>
-        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-          <button
-            type="button"
-            className="button"
-            onClick={() => {
-              setAddingStandaloneInsurance((v) => !v);
-              if (!addingStandaloneInsurance) setShowCreate(false);
-            }}
-            disabled={Boolean(busy)}
-          >
-            {addingStandaloneInsurance ? "Cancel" : "+ Add insurance"}
-          </button>
-          <button
-            type="button"
-            className="button button-secondary"
-            onClick={() => {
-              setShowCreate((v) => !v);
-              if (!showCreate) setAddingStandaloneInsurance(false);
-            }}
-            disabled={Boolean(busy)}
-          >
-            {showCreate ? "Cancel" : "New case"}
-          </button>
-        </div>
+        <button
+          type="button"
+          className="button"
+          onClick={() => setAddingStandaloneInsurance((v) => !v)}
+          disabled={Boolean(busy)}
+        >
+          {addingStandaloneInsurance ? "Cancel" : "+ New case"}
+        </button>
       </header>
 
       {error ? <div className="alert-panel">{error}</div> : null}
@@ -446,45 +430,9 @@ export default function CasesPanel({
             disabled={Boolean(busy)}
             onCancel={() => setAddingStandaloneInsurance(false)}
             onSubmit={(fields, priority) => createCaseWithInsurance(fields, priority)}
+            submitLabel="Save case"
+            heading="New case — insurance information"
           />
-        </div>
-      ) : null}
-
-      {showCreate ? (
-        <div className="content-card-section" style={{ display: "grid", gap: "0.5rem", padding: "0.75rem 0" }}>
-          <label>
-            <span>Case name</span>
-            <input
-              type="text"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              placeholder="e.g. Medicaid — Colorado Access"
-            />
-          </label>
-          <label>
-            <span>Case type</span>
-            <select value={newType} onChange={(e) => setNewType(e.target.value as CaseType)}>
-              {(Object.keys(CASE_TYPE_LABELS) as CaseType[]).map((t) => (
-                <option key={t} value={t}>
-                  {CASE_TYPE_LABELS[t]}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Notes</span>
-            <textarea
-              value={newNotes}
-              onChange={(e) => setNewNotes(e.target.value)}
-              rows={2}
-              placeholder="Optional notes for billers"
-            />
-          </label>
-          <div>
-            <button type="button" className="button" onClick={handleCreate} disabled={Boolean(busy)}>
-              Create case
-            </button>
-          </div>
         </div>
       ) : null}
 
@@ -930,12 +878,16 @@ function CreatePolicyForm({
   disabled,
   onCancel,
   onSubmit,
+  submitLabel = "Save insurance",
+  heading = "Add insurance policy",
 }: {
   payers: Array<{ id: string; payer_name: string; payer_id: string | null }>;
   availablePriorities: Priority[];
   disabled: boolean;
   onCancel: () => void;
   onSubmit: (fields: NewPolicyFields, priority: Priority) => void | Promise<void>;
+  submitLabel?: string;
+  heading?: string;
 }) {
   const [priority, setPriority] = useState<Priority>(availablePriorities[0] ?? "primary");
   const [draft, setDraft] = useState<NewPolicyFields>({
@@ -985,7 +937,7 @@ function CreatePolicyForm({
         background: "var(--surface-color, #fafafa)",
       }}
     >
-      <strong>Add insurance policy</strong>
+      <strong>{heading}</strong>
 
       <div style={grid(160)}>
         <label style={cellStyle}>
@@ -1128,7 +1080,7 @@ function CreatePolicyForm({
           disabled={!canSubmit}
           onClick={() => onSubmit(draft, priority)}
         >
-          Save insurance
+          {submitLabel}
         </button>
         <button type="button" className="button button-secondary" onClick={onCancel} disabled={disabled}>
           Cancel
