@@ -376,7 +376,10 @@ export default function MonthCalendarClient() {
     return map;
   }, [visibleAppointments]);
 
-  const today = new Date();
+  const [today, setToday] = useState<Date | null>(null);
+  useEffect(() => {
+    setToday(new Date());
+  }, []);
 
   function goPrev() {
     setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1));
@@ -385,7 +388,8 @@ export default function MonthCalendarClient() {
     setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1));
   }
   function goToday() {
-    setCursor(new Date(today.getFullYear(), today.getMonth(), 1));
+    const t = today ?? new Date();
+    setCursor(new Date(t.getFullYear(), t.getMonth(), 1));
   }
 
   function closeDrawer() {
@@ -581,7 +585,7 @@ export default function MonthCalendarClient() {
         <div className={styles.grid}>
           {gridDays.map((day) => {
             const inMonth = day.getMonth() === cursor.getMonth();
-            const isToday = isSameDay(day, today);
+            const isToday = today ? isSameDay(day, today) : false;
             const key = `${day.getFullYear()}-${day.getMonth()}-${day.getDate()}`;
             const dayAppointments = (dayBuckets.get(key) ?? []).sort((a, b) =>
               a.scheduledStartAt.localeCompare(b.scheduledStartAt),
