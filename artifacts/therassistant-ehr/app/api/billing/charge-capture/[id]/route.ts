@@ -30,7 +30,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
       return NextResponse.json({ success: false, error: "Charge not found" }, { status: 404 });
     }
 
-    const [clientRes, providerRes, policyRes] = await Promise.all([
+    const [clientRes, providerRes, policyRes, apptRes, encRes, eligRes] = await Promise.all([
       charge.client_id
         ? supabase.from("clients").select("id, first_name, last_name, date_of_birth, mrn").eq("id", charge.client_id).maybeSingle()
         : Promise.resolve({ data: null }),
@@ -40,11 +40,31 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
       charge.insurance_policy_id
         ? supabase.from("insurance_policies").select("id, payer_id, plan_name, policy_number, subscriber_id, copay_amount, deductible_amount, coinsurance_percent, priority").eq("id", charge.insurance_policy_id).maybeSingle()
         : Promise.resolve({ data: null }),
+      charge.appointment_id
+        ? (supabase as any).from("appointments").select("id, appointment_type, appointment_status, scheduled_start_at, scheduled_end_at, cpt_code, memo").eq("id", charge.appointment_id).maybeSingle()
+        : Promise.resolve({ data: null }),
+      charge.encounter_id
+        ? (supabase as any).from("encounters").select("id, encounter_status, required_billing_fields_complete, session_summary, started_at, ended_at, case_id").eq("id", charge.encounter_id).maybeSingle()
+        : Promise.resolve({ data: null }),
+      charge.client_id
+        ? (supabase as any)
+            .from("eligibility_checks")
+            .select("id, eligibility_status, checked_at, authorization_required, raw_status_text, copay_amount, deductible_remaining")
+            .eq("organization_id", organizationId)
+            .eq("client_id", charge.client_id)
+            .is("archived_at", null)
+            .order("checked_at", { ascending: false })
+            .limit(1)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
     ]);
 
     const client = clientRes.data as DbRow | null;
     const provider = providerRes.data as DbRow | null;
     const policy = policyRes.data as DbRow | null;
+    const appointment = (apptRes as { data: DbRow | null }).data;
+    const encounter = (encRes as { data: DbRow | null }).data;
+    const eligibility = (eligRes as { data: DbRow | null }).data;
 
     let payer: { id: string; name: string; payerType: string | null } | null = null;
     if (policy?.payer_id) {
@@ -99,6 +119,38 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
           }
         : null,
       diagnoses,
+      appointment: appointment
+        ? {
+            id: text(appointment.id),
+            type: text(appointment.appointment_type) || null,
+            status: text(appointment.appointment_status) || null,
+            startAt: (appointment.scheduled_start_at as string | null) ?? null,
+            endAt: (appointment.scheduled_end_at as string | null) ?? null,
+            cptCode: text(appointment.cpt_code) || null,
+            memo: text(appointment.memo) || null,
+          }
+        : null,
+      encounter: encounter
+        ? {
+            id: text(encounter.id),
+            status: text(encounter.encounter_status) || null,
+            billingFieldsComplete: Boolean(encounter.required_billing_fields_complete),
+            sessionSummary: text(encounter.session_summary) || null,
+            startedAt: (encounter.started_at as string | null) ?? null,
+            endedAt: (encounter.ended_at as string | null) ?? null,
+            caseId: (encounter.case_id as string | null) ?? null,
+          }
+        : null,
+      eligibility: eligibility
+        ? {
+            status: text(eligibility.eligibility_status) || null,
+            checkedAt: (eligibility.checked_at as string | null) ?? null,
+            authorizationRequired: Boolean(eligibility.authorization_required),
+            rawStatusText: text(eligibility.raw_status_text) || null,
+            copay: num(eligibility.copay_amount),
+            deductibleRemaining: num(eligibility.deductible_remaining),
+          }
+        : null,
       serviceLines: serviceLines.map((line, idx) => ({
         lineNumber: idx + 1,
         procedureCode: text(line.procedureCode),
@@ -137,7 +189,21 @@ interface SaveBody {
   }>;
   placeOfService?: string | null;
   serviceDate?: string | null;
+  /**
+   * Status transition action. Maps to allowed values on
+   * charge_capture_items.charge_status (captured, ready_for_claim,
+   * blocked, voided). Used by the row/detail Approve / Hold /
+   * Route-back buttons in the Charge Capture workqueue.
+   */
+  action?: "approve" | "hold" | "route_back";
+  actionReason?: string;
 }
+
+const ACTION_TO_STATUS: Record<NonNullable<SaveBody["action"]>, string> = {
+  approve: "ready_for_claim",
+  hold: "blocked",
+  route_back: "blocked",
+};
 
 export async function PATCH(request: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
@@ -152,6 +218,39 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
     const body = (await request.json().catch(() => ({}))) as SaveBody;
 
     const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
+
+    // ── Status transition (approve / hold / route-back) ─────────────────
+    // Handled before any code validation so a biller can hold/route a
+    // charge that currently has bad codes without first fixing them.
+    if (body.action) {
+      const targetStatus = ACTION_TO_STATUS[body.action];
+      if (!targetStatus) {
+        return NextResponse.json({ success: false, error: `Unknown action: ${body.action}` }, { status: 400 });
+      }
+      update.charge_status = targetStatus;
+      if (body.action === "hold" || body.action === "route_back") {
+        const label = body.action === "hold" ? "Held by biller" : "Routed back to clinician";
+        const reason = (body.actionReason ?? "").trim();
+        const entry = {
+          field: body.action,
+          message: reason ? `${label}: ${reason}` : label,
+          at: new Date().toISOString(),
+        };
+        const { data: existing } = await supabase
+          .from("charge_capture_items")
+          .select("blocker_reasons")
+          .eq("organization_id", organizationId)
+          .eq("id", id)
+          .is("archived_at", null)
+          .maybeSingle();
+        const prior = Array.isArray(existing?.blocker_reasons) ? (existing!.blocker_reasons as unknown[]) : [];
+        update.blocker_reasons = [...prior, entry];
+      } else if (body.action === "approve") {
+        // Clearing blockers on approve keeps the next step (release)
+        // from re-tripping over stale hold notes.
+        update.blocker_reasons = [];
+      }
+    }
 
     let computedTotal: number | null = null;
     if (Array.isArray(body.serviceLines)) {

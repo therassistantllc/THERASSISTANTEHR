@@ -243,6 +243,12 @@ const ROUTES: RouteSpec[] = [
     orgIdLocation: "query",
   },
   {
+    name: "GET /api/billing/charge-capture",
+    importPath: "../../../app/api/billing/charge-capture/route",
+    method: "GET",
+    orgIdLocation: "query",
+  },
+  {
     name: "GET /api/billing/charge-capture/[id]",
     importPath: "../../../app/api/billing/charge-capture/[id]/route",
     method: "GET",
@@ -475,6 +481,7 @@ describe("billing API tenant isolation (Task #167 e2e)", () => {
       "app/api/billing/blocked-claims/route.ts",
       "app/api/billing/charge-capture/[id]/route.ts",
       "app/api/billing/charge-capture/release/route.ts",
+      "app/api/billing/charge-capture/route.ts",
       "app/api/billing/claim-readiness/create-837p-batch/route.ts",
       "app/api/billing/claim-readiness/route.ts",
       "app/api/billing/codes/diagnoses/route.ts",
