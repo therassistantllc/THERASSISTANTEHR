@@ -18,6 +18,7 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireBillingAccess } from "@/lib/billing/requireBillingAccess";
+import { rebuild837PBatchFile } from "@/lib/claims/rebuild837PBatchFile";
 
 type Action = "generate" | "add_to_batch" | "return_to_charge_capture" | "hold" | "unhold";
 
@@ -202,10 +203,35 @@ export async function POST(
         batch_number: result.batch_number,
       });
 
+      // Auto-generate the 837P file so the freshly created batch lands as
+      // a downloadable, submittable file. On validator failure, mirror the
+      // Rebuild route: leave the batch in 'ready_to_generate' and surface
+      // 422 with the message rather than silently shipping an empty batch.
+      const rebuildResult = await rebuild837PBatchFile({
+        batchId: result.batch_id,
+        organizationId,
+      });
+      if (!rebuildResult.ok) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: rebuildResult.error ?? "Failed to generate 837P file",
+            batchId: result.batch_id,
+            batchNumber: result.batch_number,
+            status: "ready_to_generate",
+            claim: { id: claimId, claim_status: "batched" },
+          },
+          { status: 422 },
+        );
+      }
+
       return NextResponse.json({
         success: true,
         batchId: result.batch_id,
         batchNumber: result.batch_number,
+        status: "generated",
+        fileName: rebuildResult.fileName,
+        claimCount: rebuildResult.claimCount,
         claim: { id: claimId, claim_status: "batched" },
       });
     }

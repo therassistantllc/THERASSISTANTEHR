@@ -36,6 +36,7 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireBillingAccess } from "@/lib/billing/requireBillingAccess";
+import { rebuild837PBatchFile } from "@/lib/claims/rebuild837PBatchFile";
 
 const UNASSIGNED_PAYER_KEY = "__no_payer__";
 
@@ -325,6 +326,55 @@ export async function POST(request: Request) {
     const totalChargeAmount = created.reduce((s, b) => s + b.totalChargeAmount, 0);
     const totalClaims = created.reduce((s, b) => s + b.claimCount, 0);
 
+    // Auto-generate the 837P file for each freshly created batch. On
+    // validator failure, mirror the Rebuild route: leave the affected
+    // batch(es) in 'ready_to_generate' and surface a 422 with the
+    // per-batch errors so the caller can fix the underlying claim(s).
+    const generated: Array<{
+      batchId: string;
+      batchNumber: string;
+      status: "generated" | "ready_to_generate";
+      fileName?: string;
+      error?: string;
+    }> = [];
+    for (const b of created) {
+      const r = await rebuild837PBatchFile({ batchId: b.batchId, organizationId });
+      generated.push({
+        batchId: b.batchId,
+        batchNumber: b.batchNumber,
+        status: r.ok ? "generated" : "ready_to_generate",
+        fileName: r.ok ? r.fileName : undefined,
+        error: r.ok ? undefined : r.error ?? "Failed to generate 837P file",
+      });
+    }
+    const failed = generated.filter((g) => g.status !== "generated");
+    if (failed.length > 0) {
+      const summary = failed
+        .map((f) => `${f.batchNumber}: ${f.error}`)
+        .join("; ");
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Generated ${generated.length - failed.length} of ${generated.length} 837P file(s); ${failed.length} failed validation. ${summary}`,
+          batchId: created[0].batchId,
+          batchNumber: created[0].batchNumber,
+          claimCount: totalClaims,
+          totalChargeAmount,
+          batches: created.map((b, i) => ({
+            payerProfileId: b.payerProfileId,
+            batchId: b.batchId,
+            batchNumber: b.batchNumber,
+            claimCount: b.claimCount,
+            totalChargeAmount: b.totalChargeAmount,
+            status: generated[i].status,
+            fileName: generated[i].fileName,
+            error: generated[i].error,
+          })),
+        },
+        { status: 422 },
+      );
+    }
+
     // Preserve the single-batch response shape callers already depend on,
     // and add a `batches` array for the split path.
     const first = created[0];
@@ -334,12 +384,14 @@ export async function POST(request: Request) {
       batchNumber: first.batchNumber,
       claimCount: totalClaims,
       totalChargeAmount,
-      batches: created.map((b) => ({
+      batches: created.map((b, i) => ({
         payerProfileId: b.payerProfileId,
         batchId: b.batchId,
         batchNumber: b.batchNumber,
         claimCount: b.claimCount,
         totalChargeAmount: b.totalChargeAmount,
+        status: generated[i].status,
+        fileName: generated[i].fileName,
       })),
     });
   } catch (error) {

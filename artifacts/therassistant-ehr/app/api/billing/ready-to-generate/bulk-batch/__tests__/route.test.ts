@@ -171,6 +171,19 @@ before(() => {
       }),
     },
   });
+  mock.module("@/lib/claims/rebuild837PBatchFile", {
+    namedExports: {
+      // Stub the generator so this suite stays focused on the batch-creation
+      // invariants (one payer per batch, rollback semantics, etc.). The
+      // auto-generate-on-create behavior is covered separately.
+      rebuild837PBatchFile: async (args: { batchId: string }) => ({
+        ok: true,
+        batchId: args.batchId,
+        fileName: `${args.batchId}.x12`,
+        claimCount: 1,
+      }),
+    },
+  });
   mock.module("@/lib/billing/requireBillingAccess", {
     namedExports: {
       requireBillingAccess: async () => ({
