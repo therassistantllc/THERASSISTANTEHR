@@ -74,7 +74,7 @@ export async function POST(req: Request) {
     const wide = await supabase
       .from("era_claim_payments")
       .select(
-        "id, client_id, professional_claim_id, clp04_payment_amount, check_number, created_at",
+        "id, client_id, professional_claim_id, clp04_payment_amount, check_eft_number, created_at",
       )
       .eq("organization_id", organizationId)
       .eq("id", id)
@@ -124,7 +124,7 @@ export async function POST(req: Request) {
           csvCell(`era:${r.id}`),
           "era",
           csvCell(r.clp04_payment_amount),
-          csvCell(r.check_number),
+          csvCell(r.check_eft_number),
           csvCell(r.created_at),
           csvCell(r.client_id),
           csvCell(r.professional_claim_id),

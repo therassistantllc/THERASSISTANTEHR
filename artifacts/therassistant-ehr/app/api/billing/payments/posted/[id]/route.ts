@@ -122,7 +122,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       const { data, error } = await supabase
         .from("insurance_manual_payments")
         .select(
-          "id, organization_id, professional_claim_id, client_id, payer_profile_id, payer_payment_amount, patient_responsibility_amount, contractual_adjustment_amount, check_number, payment_date, mailroom_item_id, posting_status, reversed_at, reversal_reason, voided_at, void_reason, created_at, updated_at",
+          "id, organization_id, claim_id, client_id, payer_profile_id, paid_amount, patient_responsibility_amount, adjustment_amount, check_number, payment_date, mailroom_item_id, posting_status, reversed_at, reversal_reason, voided_at, void_reason, created_at, updated_at",
         )
         .eq("organization_id", organizationId)
         .eq("id", parsed.id)
@@ -136,11 +136,11 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       }
       const row = data as Record<string, unknown>;
       header = row;
-      professionalClaimId = (row.professional_claim_id as string | null) ?? null;
+      professionalClaimId = (row.claim_id as string | null) ?? null;
       clientId = (row.client_id as string | null) ?? null;
       payerProfileId = (row.payer_profile_id as string | null) ?? null;
       postingStatus = String(row.posting_status ?? "");
-      totalImpact = Number(row.payer_payment_amount ?? 0);
+      totalImpact = Number(row.paid_amount ?? 0);
       sourceTitle = `Manual EOB ${String(row.check_number ?? parsed.id.slice(0, 8))}`;
       const mrId = (row.mailroom_item_id as string | null) ?? null;
       if (mrId) {

@@ -178,9 +178,9 @@ export async function GET(request: Request) {
       claimIds.length
         ? (supabase as any)
             .from("era_claim_payments")
-            .select("claim_id, paid_amount, created_at")
+            .select("professional_claim_id, clp04_payment_amount, created_at")
             .eq("organization_id", organizationId)
-            .in("claim_id", claimIds)
+            .in("professional_claim_id", claimIds)
         : Promise.resolve({ data: [] as DbRow[] }),
       appointmentIds.length
         ? (supabase as any)
@@ -251,7 +251,7 @@ export async function GET(request: Request) {
 
     const eraByClaim = new Map<string, DbRow[]>();
     for (const p of (eraPayments ?? []) as DbRow[]) {
-      const key = text(p.claim_id);
+      const key = text(p.professional_claim_id);
       if (!key) continue;
       const arr = eraByClaim.get(key) ?? [];
       arr.push(p);

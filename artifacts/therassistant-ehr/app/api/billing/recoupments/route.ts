@@ -262,7 +262,7 @@ export async function GET(request: Request) {
       clientPaymentIds.length
         ? (supabase as any)
             .from("client_payments")
-            .select("id, amount, payment_date, created_at, posting_status")
+            .select("id, amount, posted_at, created_at, posting_status")
             .eq("organization_id", organizationId)
             .in("id", clientPaymentIds)
         : Promise.resolve({ data: [] as DbRow[] }),
@@ -483,7 +483,7 @@ export async function GET(request: Request) {
       const originalPaymentDate = era
         ? (text(era.check_issue_date) || text(era.created_at)?.slice(0, 10) || null)
         : cp
-        ? (text(cp.payment_date) || text(cp.created_at)?.slice(0, 10) || null)
+        ? (text(cp.posted_at)?.slice(0, 10) || text(cp.created_at)?.slice(0, 10) || null)
         : null;
       const originalPaidAmount = era
         ? money(era.clp04_payment_amount)

@@ -62,7 +62,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ clie
     if (sourceIds.length > 0) {
       const { data: payments } = await supabase
         .from("client_payments")
-        .select("id, payment_method, reference_number, paid_at, amount, posting_status, reversed_at")
+        .select("id, payment_method, reference_number, posted_at, amount, posting_status, reversed_at")
         .eq("organization_id", organizationId)
         .in("id", sourceIds);
       for (const p of (payments ?? []) as DbRow[]) {
@@ -80,7 +80,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ clie
               id: String(source.id),
               paymentMethod: (source.payment_method as string | null) ?? null,
               referenceNumber: (source.reference_number as string | null) ?? null,
-              paidAt: (source.paid_at as string | null) ?? null,
+              paidAt: (source.posted_at as string | null) ?? null,
               amount: source.amount ?? null,
               postingStatus: (source.posting_status as string | null) ?? null,
               reversedAt: (source.reversed_at as string | null) ?? null,

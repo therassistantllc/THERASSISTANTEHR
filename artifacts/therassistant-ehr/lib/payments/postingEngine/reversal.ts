@@ -357,7 +357,7 @@ async function loadPayment(
   const { data, error } = await supabase
     .from("insurance_manual_payments")
     .select(
-      "id, organization_id, client_id, professional_claim_id, payer_profile_id, payer_payment_amount, posting_status, reversed_at, voided_at, check_number",
+      "id, organization_id, client_id, claim_id, payer_profile_id, paid_amount, posting_status, reversed_at, voided_at, check_number",
     )
     .eq("organization_id", organizationId)
     .eq("id", target.id)
@@ -370,10 +370,10 @@ async function loadPayment(
     id: String(row.id),
     organizationId: String(row.organization_id),
     clientId: (row.client_id as string | null) ?? null,
-    professionalClaimId: (row.professional_claim_id as string | null) ?? null,
+    professionalClaimId: (row.claim_id as string | null) ?? null,
     payerProfileId: (row.payer_profile_id as string | null) ?? null,
     postingStatus: String(row.posting_status ?? ""),
-    totalImpact: Number(row.payer_payment_amount ?? 0),
+    totalImpact: Number(row.paid_amount ?? 0),
     reversedAt: (row.reversed_at as string | null) ?? null,
     voidedAt: (row.voided_at as string | null) ?? null,
     rawSourceLabel: `Manual EOB ${String(row.check_number ?? target.id.slice(0, 8))}`,
@@ -563,15 +563,15 @@ async function buildRefundPreview(
     } else {
       const { data: cpRow } = await supabase
         .from("client_payments")
-        .select("stripe_charge_id, stripe_payment_intent_id")
+        .select("stripe_charge_id")
         .eq("id", payment.id)
         .eq("organization_id", input.organizationId)
         .maybeSingle();
       const cp = cpRow as
-        | { stripe_charge_id?: string | null; stripe_payment_intent_id?: string | null }
+        | { stripe_charge_id?: string | null }
         | null;
       const chargeId = cp?.stripe_charge_id ?? null;
-      const piId = cp?.stripe_payment_intent_id ?? null;
+      const piId: string | null = null;
       if (chargeId || piId) {
         stripeRefund = {
           wouldFire: true,
@@ -1718,17 +1718,16 @@ async function recordRefundShared(
       try {
         const { data: cpRow } = await supabase
           .from("client_payments")
-          .select("stripe_charge_id, stripe_payment_intent_id, stripe_connected_account_id")
+          .select("stripe_charge_id, stripe_connected_account_id")
           .eq("id", payment.id)
           .eq("organization_id", input.organizationId)
           .maybeSingle();
         const cp = cpRow as {
           stripe_charge_id?: string | null;
-          stripe_payment_intent_id?: string | null;
           stripe_connected_account_id?: string | null;
         } | null;
         const chargeId = cp?.stripe_charge_id ?? null;
-        const piId = cp?.stripe_payment_intent_id ?? null;
+        const piId: string | null = null;
         const connectedAccountId = cp?.stripe_connected_account_id ?? null;
         if (chargeId || piId) {
           const form = new URLSearchParams();

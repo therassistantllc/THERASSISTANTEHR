@@ -298,7 +298,7 @@ export async function GET(request: Request) {
       batchIds.length
         ? (supabase as any)
             .from("era_import_batches")
-            .select("id, payer_profile_id, imported_at, parsed_summary")
+            .select("id, payer_identifier, payer_name, imported_at, parsed_summary")
             .in("id", batchIds)
         : Promise.resolve({ data: [] as DbRow[] }),
       claimIds.length
@@ -342,16 +342,14 @@ export async function GET(request: Request) {
           .concat(clientIdsSeed),
       ),
     ];
+    // era_import_batches has no payer_profile_id (denormalized payer_name
+     // and payer_identifier only); the authoritative join is via the
+     // professional_claims row's payer_profile_id.
     const payerIds = [
       ...new Set(
-        Array.from(batchById.values())
-          .map((b) => text(b.payer_profile_id))
-          .filter(Boolean)
-          .concat(
-            Array.from(claimById.values())
-              .map((c) => text(c.payer_profile_id))
-              .filter(Boolean),
-          ),
+        Array.from(claimById.values())
+          .map((c) => text(c.payer_profile_id))
+          .filter(Boolean),
       ),
     ];
     const appointmentIds = [
@@ -500,10 +498,7 @@ export async function GET(request: Request) {
       const claim = claimId ? claimById.get(claimId) ?? null : null;
       const batch = batchById.get(text(p.era_import_batch_id)) ?? null;
 
-      const payerId =
-        text(claim?.payer_profile_id) ||
-        text(batch?.payer_profile_id) ||
-        null;
+      const payerId = text(claim?.payer_profile_id) || null;
       const payer = payerId ? payerById.get(payerId) ?? null : null;
       const payerType =
         (text(payer?.payer_type) as UnderpaymentRow["payerType"]) || null;

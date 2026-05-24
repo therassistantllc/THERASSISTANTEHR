@@ -731,18 +731,17 @@ async function issueRefund(
     const { data: cpRow } = await supabase
       .from("client_payments")
       .select(
-        "id, stripe_charge_id, stripe_payment_intent_id, stripe_connected_account_id",
+        "id, stripe_charge_id, stripe_connected_account_id",
       )
       .eq("id", refund.source_client_payment_id ?? "")
       .eq("organization_id", organizationId)
       .maybeSingle();
     const cp = (cpRow ?? null) as {
       stripe_charge_id?: string | null;
-      stripe_payment_intent_id?: string | null;
       stripe_connected_account_id?: string | null;
     } | null;
     const chargeId = cp?.stripe_charge_id ?? null;
-    const piId = cp?.stripe_payment_intent_id ?? null;
+    const piId: string | null = null;
     const connectedAccountId = cp?.stripe_connected_account_id ?? null;
 
     // No Stripe key OR no Stripe-origin payment → fall back to manual

@@ -22,14 +22,10 @@ type ServiceLine = {
 
 type EraImportBatchRow = {
   id: string;
-  payer_profile_id: string | null;
+  payer_identifier: string | null;
+  payer_name: string | null;
   parsed_summary: Record<string, unknown> | null;
   imported_at: string | null;
-};
-
-type PayerProfileRow = {
-  id: string;
-  payer_name: string | null;
 };
 
 type ProfessionalClaimRow = {
@@ -128,7 +124,7 @@ export async function GET(request: Request) {
       batchIds.length
         ? supabase
             .from("era_import_batches")
-            .select("id, payer_profile_id, parsed_summary, imported_at")
+            .select("id, payer_identifier, payer_name, parsed_summary, imported_at")
             .in("id", batchIds)
         : Promise.resolve({ data: [] as EraImportBatchRow[], error: null }),
       claimIds.length
@@ -165,23 +161,10 @@ export async function GET(request: Request) {
       ((clientsRes.data ?? []) as ClientRow[]).map((c) => [c.id, c]),
     );
 
-    const payerIds = Array.from(
-      new Set(
-        Array.from(batchesById.values())
-          .map((b) => b.payer_profile_id)
-          .filter((id): id is string => Boolean(id)),
-      ),
-    );
-    const payersById = new Map<string, PayerProfileRow>();
-    if (payerIds.length > 0) {
-      const { data: payerRows } = await supabase
-        .from("payer_profiles")
-        .select("id, payer_name")
-        .in("id", payerIds);
-      for (const row of (payerRows ?? []) as PayerProfileRow[]) {
-        payersById.set(row.id, row);
-      }
-    }
+    // era_import_batches carries its own `payer_name` denormalized from
+    // N1*PR at import time; there is no FK to payer_profiles. The display
+    // payer name therefore comes straight from the batch row (with a
+    // parsed_summary.payer fallback), not from a payer_profiles join.
 
     const ledgerByPaymentId = new Map<string, LedgerRow[]>();
     for (const row of (ledgerRes.data ?? []) as LedgerRow[]) {
@@ -194,9 +177,8 @@ export async function GET(request: Request) {
       const batch = batchesById.get(row.era_import_batch_id) ?? null;
       const claim = row.professional_claim_id ? claimsById.get(row.professional_claim_id) ?? null : null;
       const client = row.client_id ? clientsById.get(row.client_id) ?? null : null;
-      const payer = batch?.payer_profile_id ? payersById.get(batch.payer_profile_id) ?? null : null;
       const parsedPayerName =
-        payer?.payer_name ??
+        batch?.payer_name ??
         (batch?.parsed_summary && typeof batch.parsed_summary === "object"
           ? safeString((batch.parsed_summary as Record<string, unknown>).payer)
           : null);
@@ -258,7 +240,7 @@ export async function GET(request: Request) {
                 [client.first_name, client.last_name].filter(Boolean).join(" ").trim() || "Unknown patient",
             }
           : null,
-        payer: { id: payer?.id ?? null, name: parsedPayerName ?? "Unknown payer" },
+        payer: { id: null, name: parsedPayerName ?? "Unknown payer" },
         checkNumber,
         importedAt: batch?.imported_at ?? null,
         createdAt: row.created_at,
