@@ -569,6 +569,7 @@ export default function EligibilityDetailClient({ clientId }: { clientId: string
                     <th>Checked at</th>
                     <th>Status</th>
                     <th>Payer / plan</th>
+                    <th>Service type</th>
                     <th>Copay</th>
                     <th>Deductible remaining</th>
                     <th>Coverage</th>
@@ -586,6 +587,7 @@ export default function EligibilityDetailClient({ clientId }: { clientId: string
                         <td>{formatDate(check.checkedAt)}</td>
                         <td><span className={statusClass(check.status)}>{check.status || "—"}</span></td>
                         <td>{check.payerName ?? "—"}{check.planName ? ` · ${check.planName}` : ""}</td>
+                        <td>{check.serviceTypeCode || "—"}</td>
                         <td>{money(check.copayAmount)}</td>
                         <td>{money(check.deductibleRemaining)}</td>
                         <td>{formatDate(check.coverageStartDate)} – {formatDate(check.coverageEndDate)}</td>

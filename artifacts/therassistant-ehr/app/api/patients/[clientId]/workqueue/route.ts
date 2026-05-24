@@ -24,8 +24,7 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
       .eq("organization_id", organizationId)
       .eq("client_id", clientId)
       .is("archived_at", null)
-      .order("created_at", { ascending: false })
-      .limit(50);
+      .order("created_at", { ascending: false });
 
     if (error) return NextResponse.json({ success: false, error: error.message }, { status: 422 });
 

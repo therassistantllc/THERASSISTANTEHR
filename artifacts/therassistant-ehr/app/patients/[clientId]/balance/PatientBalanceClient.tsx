@@ -574,9 +574,17 @@ function GenerateInvoiceModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ organizationId, claimId, amount: numericAmount }),
       });
-      const json = await res.json();
+      const json = (await res.json()) as { success?: boolean; error?: string; invoiceId?: string; patientInvoiceId?: string };
       if (!res.ok || !json.success) {
         throw new Error(json.error ?? "Could not generate invoice");
+      }
+      const newInvoiceId = String(json.invoiceId ?? json.patientInvoiceId ?? "");
+      const selectedClaim = claims.find((c) => c.id === claimId);
+      const clientIdForUrl = (selectedClaim as unknown as { clientId?: string })?.clientId
+        ?? (typeof window !== "undefined" ? window.location.pathname.split("/")[2] : "");
+      if (newInvoiceId && typeof window !== "undefined" && clientIdForUrl) {
+        const url = `/clients/${clientIdForUrl}/balance/invoice/${newInvoiceId}/print?organizationId=${encodeURIComponent(organizationId)}`;
+        window.open(url, "_blank", "noreferrer");
       }
       await onCreated(`Patient invoice generated and posted to ledger.`);
     } catch (e) {
