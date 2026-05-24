@@ -7,6 +7,7 @@ import { DEFAULT_ORG_ID } from "@/lib/config";
 
 const PATIENT_TABS = [
   { label: "Summary",     slug: "" },
+  { label: "Intake",      slug: "intake" },
   { label: "Visits",      slug: "appointments" },
   { label: "Conditions",  slug: "conditions" },
   { label: "Notes",       slug: "notes" },

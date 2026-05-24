@@ -242,37 +242,6 @@ type DocumentSummary = {
   mailroomItemId?: string | null;
 };
 
-type IntakeLink = {
-  id: string;
-  token: string;
-  url: string;
-  status: string;
-  expiresAt: string | null;
-  createdAt: string | null;
-  usedAt: string | null;
-  submissionId: string | null;
-  deliveryMethod?: string | null;
-  deliveredToEmail?: string | null;
-  deliveredAt?: string | null;
-  deliveryError?: string | null;
-  deliveryStatus?: string | null;
-  deliveryStatusAt?: string | null;
-};
-
-type IntakeSubmission = {
-  id: string;
-  status: string;
-  signatureName: string | null;
-  signatureSignedAt: string | null;
-  phq9Score: number | null;
-  phq9Severity: string | null;
-  gad7Score: number | null;
-  gad7Severity: string | null;
-  submittedAt: string | null;
-  insurance?: Record<string, unknown> | null;
-  consents?: Record<string, unknown> | null;
-};
-
 type MailroomSummary = {
   id: string;
   fileName?: string;
@@ -414,12 +383,6 @@ export default function PatientChartClient({
   const [error, setError] = useState<string | null>(null);
   const [cases, setCases] = useState<CaseRowSummary[]>([]);
   const [casesModalOpen, setCasesModalOpen] = useState(false);
-  const [intakeLinks, setIntakeLinks] = useState<IntakeLink[]>([]);
-  const [intakeSubmissions, setIntakeSubmissions] = useState<IntakeSubmission[]>([]);
-  const [intakeBusy, setIntakeBusy] = useState(false);
-  const [intakeMessage, setIntakeMessage] = useState<string | null>(null);
-  const [cardRefresh, setCardRefresh] = useState(0);
-  const [cardBusy, setCardBusy] = useState<string | null>(null);
   const [demoEditing, setDemoEditing] = useState(false);
   const [demoSaving, setDemoSaving] = useState(false);
   const [demoError, setDemoError] = useState<string | null>(null);
@@ -940,121 +903,6 @@ export default function PatientChartClient({
     }
   }
 
-  async function reloadIntake() {
-    try {
-      const [linksRes, subsRes] = await Promise.all([
-        fetch(`/api/intake/links?clientId=${encodeURIComponent(clientId)}`, { cache: "no-store" }),
-        fetch(`/api/intake/submissions?clientId=${encodeURIComponent(clientId)}`, { cache: "no-store" }),
-      ]);
-      const linksJson = await linksRes.json().catch(() => ({}));
-      const subsJson = await subsRes.json().catch(() => ({}));
-      if (linksRes.ok && linksJson.success) setIntakeLinks(linksJson.links ?? []);
-      if (subsRes.ok && subsJson.success) setIntakeSubmissions(subsJson.submissions ?? []);
-    } catch {
-      // intake data is best-effort
-    }
-  }
-
-  async function readFileAsDataUrl(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onerror = () => reject(reader.error ?? new Error("Failed to read file"));
-      reader.onload = () => resolve(String(reader.result ?? ""));
-      reader.readAsDataURL(file);
-    });
-  }
-
-  async function handleReplaceCard(submissionId: string, side: "front" | "back", file: File) {
-    const key = `${submissionId}:${side}`;
-    setCardBusy(key);
-    setIntakeMessage(null);
-    try {
-      if (!file.type.startsWith("image/")) {
-        throw new Error("Please choose an image file (PNG, JPEG, WebP, or GIF).");
-      }
-      if (file.size > 5 * 1024 * 1024) {
-        throw new Error("Image must be 5 MB or smaller.");
-      }
-      const content = await readFileAsDataUrl(file);
-      const response = await fetch(
-        `/api/intake/card/${encodeURIComponent(submissionId)}/${side}`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content, name: file.name, type: file.type }),
-        },
-      );
-      const json = await response.json().catch(() => ({}));
-      if (!response.ok || !json.success) throw new Error(json.error ?? "Failed to replace card image");
-      setIntakeMessage(`Insurance card ${side} updated.`);
-      setCardRefresh((n) => n + 1);
-      await reloadIntake();
-    } catch (err) {
-      setIntakeMessage(err instanceof Error ? err.message : "Failed to replace card image");
-    } finally {
-      setCardBusy(null);
-    }
-  }
-
-  async function handleRemoveCard(submissionId: string, side: "front" | "back") {
-    if (typeof window !== "undefined" && !window.confirm(`Remove the insurance card ${side} image from this submission?`)) {
-      return;
-    }
-    const key = `${submissionId}:${side}`;
-    setCardBusy(key);
-    setIntakeMessage(null);
-    try {
-      const response = await fetch(
-        `/api/intake/card/${encodeURIComponent(submissionId)}/${side}`,
-        { method: "DELETE" },
-      );
-      const json = await response.json().catch(() => ({}));
-      if (!response.ok || !json.success) throw new Error(json.error ?? "Failed to remove card image");
-      setIntakeMessage(`Insurance card ${side} removed.`);
-      setCardRefresh((n) => n + 1);
-      await reloadIntake();
-    } catch (err) {
-      setIntakeMessage(err instanceof Error ? err.message : "Failed to remove card image");
-    } finally {
-      setCardBusy(null);
-    }
-  }
-
-  async function handleCreateIntakeLink(delivery: "clipboard" | "email") {
-    setIntakeBusy(true);
-    setIntakeMessage(null);
-    try {
-      const response = await fetch(`/api/intake/links`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId, delivery }),
-      });
-      const json = await response.json();
-      if (!response.ok || !json.success) throw new Error(json.error ?? "Failed to create intake link");
-      const url = typeof window !== "undefined" ? `${window.location.origin}${json.link.url}` : json.link.url;
-      if (delivery === "email") {
-        const to = json.email?.to ?? "the patient";
-        setIntakeMessage(`Intake link emailed to ${to}.`);
-      } else {
-        try {
-          if (typeof navigator !== "undefined" && navigator.clipboard) {
-            await navigator.clipboard.writeText(url);
-            setIntakeMessage(`Intake link copied to clipboard: ${url}`);
-          } else {
-            setIntakeMessage(`Intake link: ${url}`);
-          }
-        } catch {
-          setIntakeMessage(`Intake link: ${url}`);
-        }
-      }
-      await reloadIntake();
-    } catch (linkError) {
-      setIntakeMessage(linkError instanceof Error ? linkError.message : "Failed to create intake link");
-    } finally {
-      setIntakeBusy(false);
-    }
-  }
-
   useEffect(() => {
     let cancelled = false;
     if (!organizationId) return;
@@ -1120,7 +968,6 @@ export default function PatientChartClient({
     }
 
     void loadPatient();
-    void reloadIntake();
     void reloadDemoAudit();
     void reloadCredits();
     return () => {
@@ -1221,23 +1068,12 @@ export default function PatientChartClient({
               </Link>
             ),
           )}
-          <button
-            type="button"
+          <Link
+            href={`/clients/${patient.id}/intake${orgQ}`}
             className="summary-rail-action"
-            onClick={() => handleCreateIntakeLink("email")}
-            disabled={intakeBusy || !patient.email}
-            title={patient.email ? `Email intake link to ${patient.email}` : "No email on file"}
           >
-            {intakeBusy ? "Sending…" : "Email intake link"}
-          </button>
-          <button
-            type="button"
-            className="summary-rail-action"
-            onClick={() => handleCreateIntakeLink("clipboard")}
-            disabled={intakeBusy}
-          >
-            {intakeBusy ? "Generating…" : "Copy intake link"}
-          </button>
+            Patient intake
+          </Link>
         </aside>
 
         <div className="summary-center">
@@ -2231,175 +2067,7 @@ export default function PatientChartClient({
         </aside>
       </section>
 
-      <section className="panel" style={{ marginBottom: "16px" }}>
-        <h2>Patient Intake</h2>
-        {intakeMessage ? <div className="alert-panel">{intakeMessage}</div> : null}
-        {intakeSubmissions.length === 0 && intakeLinks.length === 0 ? (
-          <p className="muted">No intake on file yet. Send the patient a one-time intake link.</p>
-        ) : null}
-        {intakeSubmissions.length > 0 ? (
-          <div className="stack-list">
-            {intakeSubmissions.slice(0, 3).map((submission) => {
-              const insurance = (submission.insurance ?? {}) as Record<string, unknown>;
-              const hasCard = (raw: unknown): boolean => {
-                if (!raw || typeof raw !== "object") return false;
-                const obj = raw as { path?: unknown; content?: unknown };
-                if (typeof obj.path === "string" && obj.path.length > 0) return true;
-                if (typeof obj.content === "string" && obj.content.startsWith("data:image/")) return true;
-                return false;
-              };
-              const cacheBust = `?v=${encodeURIComponent(String((insurance.cardFront as Record<string, unknown> | null | undefined)?.uploadedAt ?? "") + ":" + String((insurance.cardBack as Record<string, unknown> | null | undefined)?.uploadedAt ?? "") + ":" + cardRefresh)}`;
-              const frontUrl = hasCard(insurance.cardFront)
-                ? `/api/intake/card/${encodeURIComponent(submission.id)}/front${cacheBust}`
-                : null;
-              const backUrl = hasCard(insurance.cardBack)
-                ? `/api/intake/card/${encodeURIComponent(submission.id)}/back${cacheBust}`
-                : null;
-              const cardMeta = (raw: unknown): { uploadedAt: string | null; replacedByStaffName: string | null } => {
-                if (!raw || typeof raw !== "object") return { uploadedAt: null, replacedByStaffName: null };
-                const obj = raw as Record<string, unknown>;
-                const uploadedAt = typeof obj.uploadedAt === "string" ? obj.uploadedAt : null;
-                const replacedByStaffName = typeof obj.replacedByStaffName === "string" && obj.replacedByStaffName
-                  ? obj.replacedByStaffName
-                  : (typeof obj.replacedByStaffId === "string" && obj.replacedByStaffId ? "a staff member" : null);
-                return { uploadedAt, replacedByStaffName };
-              };
-              const frontMeta = cardMeta(insurance.cardFront);
-              const backMeta = cardMeta(insurance.cardBack);
-              const consents = (submission.consents ?? {}) as Record<string, unknown>;
-              const consentList = [
-                consents.hipaa ? "HIPAA" : null,
-                consents.telehealth ? "Telehealth" : null,
-                consents.roi ? "ROI" : null,
-              ].filter(Boolean).join(" · ");
-              return (
-                <div className="stack-item" key={submission.id}>
-                  <strong>Submitted: {formatDate(submission.submittedAt)}</strong>
-                  <span>Signed by: {submission.signatureName ?? "—"}</span>
-                  <span>
-                    PHQ-9: {submission.phq9Score ?? "—"} ({submission.phq9Severity ?? "—"}) ·
-                    GAD-7: {submission.gad7Score ?? "—"} ({submission.gad7Severity ?? "—"})
-                  </span>
-                  <span>Consents on file: {consentList || "—"}</span>
-                  <div style={{ marginTop: "6px" }}>
-                    <div style={{ display: "flex", gap: "16px", flexWrap: "wrap" }}>
-                      {(["front", "back"] as const).map((side) => {
-                        const url = side === "front" ? frontUrl : backUrl;
-                        const meta = side === "front" ? frontMeta : backMeta;
-                        const busyKey = `${submission.id}:${side}`;
-                        const busy = cardBusy === busyKey;
-                        const label = side === "front" ? "Front" : "Back";
-                        const provenance = url
-                          ? meta.replacedByStaffName
-                            ? `Updated by ${meta.replacedByStaffName}${meta.uploadedAt ? ` on ${formatDateTime(meta.uploadedAt)}` : ""}`
-                            : meta.uploadedAt
-                              ? `Uploaded by patient at intake (${formatDateTime(meta.uploadedAt)})`
-                              : "Uploaded by patient at intake"
-                          : null;
-                        return (
-                          <div key={side} style={{ display: "flex", flexDirection: "column", gap: "4px", minWidth: "120px" }}>
-                            <span style={{ fontSize: "12px", fontWeight: 600 }}>Card {label}</span>
-                            {url ? (
-                              <a href={url} target="_blank" rel="noreferrer" title={`View insurance card ${side}`}>
-                                <img
-                                  src={url}
-                                  alt={`Insurance card ${side}`}
-                                  style={{ height: "70px", border: "1px solid var(--border, #ddd)", borderRadius: "4px", display: "block" }}
-                                />
-                              </a>
-                            ) : (
-                              <div style={{ height: "70px", width: "120px", border: "1px dashed var(--border, #ccc)", borderRadius: "4px", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted, #777)", fontSize: "12px" }}>
-                                No image
-                              </div>
-                            )}
-                            <div style={{ fontSize: "12px", display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
-                              <label className="button button-secondary" style={{ padding: "2px 8px", cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1 }}>
-                                {busy ? "Working…" : url ? "Replace" : "Upload"}
-                                <input
-                                  type="file"
-                                  accept="image/png,image/jpeg,image/webp,image/gif"
-                                  style={{ display: "none" }}
-                                  disabled={busy}
-                                  onChange={(event) => {
-                                    const file = event.target.files?.[0];
-                                    event.target.value = "";
-                                    if (file) void handleReplaceCard(submission.id, side, file);
-                                  }}
-                                />
-                              </label>
-                              {url ? (
-                                <button
-                                  type="button"
-                                  className="button button-secondary"
-                                  style={{ padding: "2px 8px" }}
-                                  disabled={busy}
-                                  onClick={() => void handleRemoveCard(submission.id, side)}
-                                >
-                                  Remove
-                                </button>
-                              ) : null}
-                              {url ? (
-                                <a href={url} target="_blank" rel="noreferrer">View original</a>
-                              ) : null}
-                            </div>
-                            {provenance ? (
-                              <span style={{ fontSize: "11px", color: "var(--muted, #777)" }}>{provenance}</span>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : null}
-        {intakeLinks.length > 0 ? (
-          <div className="stack-list" style={{ marginTop: "12px" }}>
-            <p className="muted" style={{ margin: 0 }}>Recent intake links</p>
-            {intakeLinks.slice(0, 5).map((link) => {
-              const method = (link.deliveryMethod ?? "clipboard").toLowerCase();
-              const deliveryStatus = (link.deliveryStatus ?? "").toLowerCase();
-              const deliveryLabel =
-                method === "email"
-                  ? link.deliveredAt
-                    ? `Emailed to ${link.deliveredToEmail ?? "patient"} on ${formatDate(link.deliveredAt)}`
-                    : `Email queued${link.deliveredToEmail ? ` to ${link.deliveredToEmail}` : ""}`
-                  : "Copied to clipboard";
-              let statusBadge: { className: string; text: string } | null = null;
-              if (method === "email") {
-                if (deliveryStatus === "delivered") {
-                  statusBadge = { className: "status status-green", text: `Delivered ${formatDate(link.deliveryStatusAt)}` };
-                } else if (deliveryStatus === "bounced") {
-                  statusBadge = { className: "status status-red", text: `Bounced ${formatDate(link.deliveryStatusAt)}` };
-                } else if (deliveryStatus === "complained") {
-                  statusBadge = { className: "status status-red", text: `Marked as spam ${formatDate(link.deliveryStatusAt)}` };
-                } else if (deliveryStatus === "failed") {
-                  statusBadge = { className: "status status-red", text: `Send failed ${formatDate(link.deliveryStatusAt)}` };
-                } else if (deliveryStatus === "sent") {
-                  statusBadge = { className: "status status-yellow", text: "Sent, awaiting delivery" };
-                }
-              }
-              return (
-                <div className="stack-item stack-row" key={link.id}>
-                  <div>
-                    <strong>{link.status}</strong>
-                    <span>Created: {formatDate(link.createdAt)} · Expires: {formatDate(link.expiresAt)}</span>
-                    <span>{deliveryLabel}</span>
-                    {statusBadge ? <span className={statusBadge.className}>{statusBadge.text}</span> : null}
-                    {link.usedAt ? <span>Used: {formatDate(link.usedAt)}</span> : null}
-                    {link.deliveryError ? (
-                      <span className="status status-red">Email error: {link.deliveryError}</span>
-                    ) : null}
-                  </div>
-                  <Link className="button button-secondary" href={link.url} target="_blank">Open link</Link>
-                </div>
-              );
-            })}
-          </div>
-        ) : null}
-      </section>
+      {/* Patient Intake section moved to its own tab at /clients/[id]/intake */}
 
       <section className="panel" style={{ marginBottom: "16px" }}>
         <h2>Mailroom Documents</h2>
