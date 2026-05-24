@@ -128,37 +128,67 @@ export async function GET(request: Request) {
     const organizationId = guard.organizationId;
 
     const { month, periodStart, periodEnd } = monthBounds(searchParams.get("month"));
+    const providerId = searchParams.get("providerId");
 
-    const { data: submittedClaims } = await supabase
-      .from("professional_claims")
-      .select("id, total_charge")
-      .eq("organization_id", organizationId)
-      .gte("submitted_at", periodStart)
-      .lt("submitted_at", periodEnd);
+    // When a clinician is selected, scope claims to that provider via their
+    // appointments. Pre-fetch the matching appointment_ids and `.in(...)` them
+    // into each claims query below. Empty set → zero counts.
+    let claimAppointmentFilter: string[] | null = null;
+    if (providerId) {
+      const { data: apptRows } = await supabase
+        .from("appointments")
+        .select("id")
+        .eq("organization_id", organizationId)
+        .eq("provider_id", providerId);
+      claimAppointmentFilter = (apptRows ?? []).map((r: { id: string }) => r.id);
+    }
 
-    const { count: paidClaimsCount } = await supabase
-      .from("professional_claims")
-      .select("id", { count: "exact", head: true })
-      .eq("organization_id", organizationId)
-      .eq("claim_status", "paid")
-      .gte("updated_at", periodStart)
-      .lt("updated_at", periodEnd);
+    function scopeClaims<T extends { in: (col: string, values: string[]) => T }>(query: T): T {
+      if (claimAppointmentFilter === null) return query;
+      if (claimAppointmentFilter.length === 0) return query.in("id", ["00000000-0000-0000-0000-000000000000"]);
+      return query.in("appointment_id", claimAppointmentFilter);
+    }
 
-    const { count: deniedOrRejectedCount } = await supabase
-      .from("professional_claims")
-      .select("id", { count: "exact", head: true })
-      .eq("organization_id", organizationId)
-      .in("claim_status", ["denied", "rejected_oa", "rejected_payer"])
-      .gte("updated_at", periodStart)
-      .lt("updated_at", periodEnd);
+    const { data: submittedClaims } = await scopeClaims(
+      supabase
+        .from("professional_claims")
+        .select("id, total_charge")
+        .eq("organization_id", organizationId)
+        .gte("submitted_at", periodStart)
+        .lt("submitted_at", periodEnd) as unknown as { in: (c: string, v: string[]) => unknown },
+    ) as unknown as { data: Array<{ id: string; total_charge: number | string | null }> | null };
 
-    const { data: payments } = await supabase
-      .from("patient_invoice_payments")
-      .select("id, amount")
-      .eq("organization_id", organizationId)
-      .gte("paid_at", periodStart)
-      .lt("paid_at", periodEnd)
-      .is("archived_at", null);
+    const { count: paidClaimsCount } = await scopeClaims(
+      supabase
+        .from("professional_claims")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", organizationId)
+        .eq("claim_status", "paid")
+        .gte("updated_at", periodStart)
+        .lt("updated_at", periodEnd) as unknown as { in: (c: string, v: string[]) => unknown },
+    ) as unknown as { count: number | null };
+
+    const { count: deniedOrRejectedCount } = await scopeClaims(
+      supabase
+        .from("professional_claims")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", organizationId)
+        .in("claim_status", ["denied", "rejected_oa", "rejected_payer"])
+        .gte("updated_at", periodStart)
+        .lt("updated_at", periodEnd) as unknown as { in: (c: string, v: string[]) => unknown },
+    ) as unknown as { count: number | null };
+
+    // Patient payments are not directly tied to a provider; when a clinician is
+    // selected, return 0 instead of practice-wide totals to keep the KPI honest.
+    const { data: payments } = providerId
+      ? { data: [] as Array<{ id: string; amount: number | string | null }> }
+      : await supabase
+          .from("patient_invoice_payments")
+          .select("id, amount")
+          .eq("organization_id", organizationId)
+          .gte("paid_at", periodStart)
+          .lt("paid_at", periodEnd)
+          .is("archived_at", null);
 
     const { data: openInvoices } = await supabase
       .from("patient_invoices")
@@ -200,12 +230,14 @@ export async function GET(request: Request) {
 
     // Claims aging: every claim that is outstanding (submitted but not paid/voided/draft),
     // bucketed by days since submitted_at.
-    const { data: outstandingClaims } = await supabase
-      .from("professional_claims")
-      .select("id, total_charge, claim_status, submitted_at")
-      .eq("organization_id", organizationId)
-      .in("claim_status", Array.from(OUTSTANDING_STATUSES))
-      .not("submitted_at", "is", null);
+    const { data: outstandingClaims } = await scopeClaims(
+      supabase
+        .from("professional_claims")
+        .select("id, total_charge, claim_status, submitted_at")
+        .eq("organization_id", organizationId)
+        .in("claim_status", Array.from(OUTSTANDING_STATUSES))
+        .not("submitted_at", "is", null) as unknown as { in: (c: string, v: string[]) => unknown },
+    ) as unknown as { data: Array<{ id: string; total_charge: number | string | null; claim_status: string; submitted_at: string | null }> | null };
 
     const aging: ClaimsAging = {
       bucket0to30: { count: 0, totalCharge: 0 },
@@ -236,13 +268,34 @@ export async function GET(request: Request) {
     aging.bucket61Plus.totalCharge = money(aging.bucket61Plus.totalCharge);
 
     // Denial / CARC breakdown from era_claim_payments.cas_adjustments (current month).
-    const { data: eraPayments } = await supabase
+    // When a clinician is selected, scope ERA rows to that provider's claims.
+    let scopedClaimIdsForEra: string[] | null = null;
+    if (providerId) {
+      if (claimAppointmentFilter && claimAppointmentFilter.length === 0) {
+        scopedClaimIdsForEra = [];
+      } else {
+        const { data: claimIdRows } = await scopeClaims(
+          supabase
+            .from("professional_claims")
+            .select("id")
+            .eq("organization_id", organizationId) as unknown as { in: (c: string, v: string[]) => unknown },
+        ) as unknown as { data: Array<{ id: string }> | null };
+        scopedClaimIdsForEra = (claimIdRows ?? []).map((r) => r.id);
+      }
+    }
+    let eraPaymentsQuery = supabase
       .from("era_claim_payments")
       .select("id, cas_adjustments, created_at")
       .eq("organization_id", organizationId)
       .gte("created_at", periodStart)
       .lt("created_at", periodEnd)
       .is("archived_at", null);
+    if (scopedClaimIdsForEra !== null) {
+      eraPaymentsQuery = scopedClaimIdsForEra.length === 0
+        ? eraPaymentsQuery.in("id", ["00000000-0000-0000-0000-000000000000"])
+        : eraPaymentsQuery.in("professional_claim_id", scopedClaimIdsForEra);
+    }
+    const { data: eraPayments } = await eraPaymentsQuery;
 
     const denialMap = new Map<string, DenialEntry>();
     let totalAdjustmentAmount = 0;
@@ -287,13 +340,15 @@ export async function GET(request: Request) {
     };
 
     // Payer performance: aggregate every claim with a payer_profile_id submitted in this month.
-    const { data: claimsForPayer } = await supabase
-      .from("professional_claims")
-      .select("id, payer_profile_id, claim_status, total_charge, submitted_at, updated_at")
-      .eq("organization_id", organizationId)
-      .not("payer_profile_id", "is", null)
-      .gte("submitted_at", periodStart)
-      .lt("submitted_at", periodEnd);
+    const { data: claimsForPayer } = await scopeClaims(
+      supabase
+        .from("professional_claims")
+        .select("id, payer_profile_id, claim_status, total_charge, submitted_at, updated_at")
+        .eq("organization_id", organizationId)
+        .not("payer_profile_id", "is", null)
+        .gte("submitted_at", periodStart)
+        .lt("submitted_at", periodEnd) as unknown as { in: (c: string, v: string[]) => unknown },
+    ) as unknown as { data: Array<{ id: string; payer_profile_id: string | null; claim_status: string; total_charge: number | string | null; submitted_at: string | null; updated_at: string | null }> | null };
 
     const payerIds = Array.from(
       new Set((claimsForPayer ?? []).map((c) => c.payer_profile_id).filter((id): id is string => Boolean(id))),
