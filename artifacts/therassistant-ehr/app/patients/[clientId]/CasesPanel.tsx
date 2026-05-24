@@ -123,6 +123,7 @@ export default function CasesPanel({
     notes: "",
   });
   const [addingPolicyForCaseId, setAddingPolicyForCaseId] = useState<string | null>(null);
+  const [addingStandaloneInsurance, setAddingStandaloneInsurance] = useState(false);
   const [payers, setPayers] = useState<Array<{ id: string; payer_name: string; payer_id: string | null }>>([]);
 
   const orgQ = useMemo(
@@ -276,6 +277,67 @@ export default function CasesPanel({
     });
   }
 
+  async function createCaseWithInsurance(fields: NewPolicyFields, priority: Priority) {
+    setBusy(`create-case-with-insurance`);
+    setError(null);
+    try {
+      const payer = payers.find((p) => p.id === fields.payerId);
+      const caseName = payer?.payer_name?.trim() || "Insurance";
+      const caseRes = await fetch(`/api/clients/${clientId}/cases`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          organizationId,
+          name: caseName,
+          caseType: "commercial",
+          notes: null,
+        }),
+      });
+      const caseJson = await caseRes.json().catch(() => ({}));
+      if (!caseRes.ok || !caseJson.success) {
+        const msg =
+          caseJson.error ??
+          (Array.isArray(caseJson.errors)
+            ? caseJson.errors.map((e: { message?: string }) => e.message).join("; ")
+            : "Failed to create case");
+        throw new Error(msg);
+      }
+      const newCaseId: string | undefined = caseJson.case?.id;
+      if (!newCaseId) throw new Error("Case created but id missing");
+
+      const createRes = await fetch(`/api/clients/${clientId}/policies`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ organizationId, priority, ...fields }),
+      });
+      const createJson = await createRes.json().catch(() => ({}));
+      if (!createRes.ok || !createJson.success) {
+        throw new Error(createJson.error ?? "Failed to create insurance policy");
+      }
+      const attachRes = await fetch(`/api/clients/${clientId}/cases/${newCaseId}/policies`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ organizationId, policyId: createJson.policyId, priority }),
+      });
+      const attachJson = await attachRes.json().catch(() => ({}));
+      if (!attachRes.ok || !attachJson.success) {
+        await load();
+        onMutate?.();
+        throw new Error(
+          (attachJson.error ?? "Failed to attach the new policy to the case") +
+            " — the policy was saved and is available to attach.",
+        );
+      }
+      setAddingStandaloneInsurance(false);
+      await load();
+      onMutate?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to add insurance");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function createAndAttachPolicy(caseId: string, fields: NewPolicyFields, priority: Priority) {
     setBusy(`create-policy:${caseId}`);
     setError(null);
@@ -332,17 +394,45 @@ export default function CasesPanel({
             Group insurance coverage by visit. Tag appointments and claims with the case they should be billed under.
           </p>
         </div>
-        <button
-          type="button"
-          className="button"
-          onClick={() => setShowCreate((v) => !v)}
-          disabled={Boolean(busy)}
-        >
-          {showCreate ? "Cancel" : "New case"}
-        </button>
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+          <button
+            type="button"
+            className="button"
+            onClick={() => {
+              setAddingStandaloneInsurance((v) => !v);
+              if (!addingStandaloneInsurance) setShowCreate(false);
+            }}
+            disabled={Boolean(busy)}
+          >
+            {addingStandaloneInsurance ? "Cancel" : "+ Add insurance"}
+          </button>
+          <button
+            type="button"
+            className="button button-secondary"
+            onClick={() => {
+              setShowCreate((v) => !v);
+              if (!showCreate) setAddingStandaloneInsurance(false);
+            }}
+            disabled={Boolean(busy)}
+          >
+            {showCreate ? "Cancel" : "New case"}
+          </button>
+        </div>
       </header>
 
       {error ? <div className="alert-panel">{error}</div> : null}
+
+      {addingStandaloneInsurance ? (
+        <div className="content-card-section" style={{ padding: "0.75rem 0" }}>
+          <CreatePolicyForm
+            payers={payers}
+            availablePriorities={PRIORITIES}
+            disabled={Boolean(busy)}
+            onCancel={() => setAddingStandaloneInsurance(false)}
+            onSubmit={(fields, priority) => createCaseWithInsurance(fields, priority)}
+          />
+        </div>
+      ) : null}
 
       {showCreate ? (
         <div className="content-card-section" style={{ display: "grid", gap: "0.5rem", padding: "0.75rem 0" }}>
