@@ -109,6 +109,26 @@ export default function EligibilityIssuesClient() {
   const [actingId, setActingId] = useState<string | null>(null);
   const [insuranceEditRow, setInsuranceEditRow] = useState<EligibilityIssueRow | null>(null);
 
+  // Routing picker state.
+  type RoutingPickerState = {
+    row: EligibilityIssueRow;
+    kind: "clinician" | "admin";
+    loading: boolean;
+    error: string | null;
+    assignees: Array<{
+      id: string;
+      name: string;
+      email: string | null;
+      jobTitle: string | null;
+      roles: string[];
+      isAppointmentProvider: boolean;
+    }>;
+    selectedId: string;
+    note: string;
+    submitting: boolean;
+  };
+  const [routingPicker, setRoutingPicker] = useState<RoutingPickerState | null>(null);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -344,6 +364,18 @@ export default function EligibilityIssuesClient() {
           </span>
         ),
       },
+      {
+        id: "assignedTo", header: "Routed to",
+        cell: (r) => r.assignedTo ? (
+          <span style={{ fontSize: 12 }}>
+            <div style={{ fontWeight: 600, color: "#0F172A" }}>{r.assignedTo}</div>
+            <div style={{ color: "#64748B", textTransform: "capitalize" }}>
+              {r.assignedToKind ?? "—"}
+              {r.inboxItemId ? " · inbox" : ""}
+            </div>
+          </span>
+        ) : <span style={{ color: "#9CA3AF" }}>Unassigned</span>,
+      },
     ],
     [],
   );
@@ -355,7 +387,11 @@ export default function EligibilityIssuesClient() {
 
   // ── Actions ─────────────────────────────────────────────────────────────
   const performAction = useCallback(
-    async (row: EligibilityIssueRow, action: string, note?: string) => {
+    async (
+      row: EligibilityIssueRow,
+      action: string,
+      opts?: { note?: string; assignedToUserId?: string },
+    ) => {
       setActingId(row.id);
       try {
         const res = await fetch("/api/billing/eligibility-issues/actions", {
@@ -368,7 +404,8 @@ export default function EligibilityIssuesClient() {
             clientId: row.clientId,
             claimId: row.relatedClaimId,
             providerId: row.providerId,
-            note,
+            note: opts?.note,
+            assignedToUserId: opts?.assignedToUserId,
           }),
         });
         const json = await res.json();
@@ -376,7 +413,12 @@ export default function EligibilityIssuesClient() {
           throw new Error(json?.error ?? "Action failed");
         }
         const assignment = (json?.assignment ?? null) as
-          | { kind: "clinician" | "admin"; display: string; userId: string | null }
+          | {
+              kind: "clinician" | "admin";
+              display: string;
+              userId: string | null;
+              email: string | null;
+            }
           | null;
         // Optimistic update — keep the row in place so the new state is visible
         // without a reload (assignment, hold, release).
@@ -386,7 +428,7 @@ export default function EligibilityIssuesClient() {
             case "mark_verified":
               return { ...r, manuallyVerifiedAt: new Date().toISOString() };
             case "hold_claim":
-              return { ...r, holdNote: note || "Held pending eligibility verification", claimStatus: "draft" };
+              return { ...r, holdNote: opts?.note || "Held pending eligibility verification", claimStatus: "draft" };
             case "release_claim":
               return { ...r, holdNote: null, claimStatus: "ready_for_validation" };
             case "route_to_clinician":
@@ -395,6 +437,9 @@ export default function EligibilityIssuesClient() {
                 ...r,
                 assignedTo: assignment?.display ?? (action === "route_to_clinician" ? "Clinician" : "Admin pool"),
                 assignedToKind: assignment?.kind ?? (action === "route_to_clinician" ? "clinician" : "admin"),
+                assignedToUserId: assignment?.userId ?? r.assignedToUserId,
+                assignedToEmail: assignment?.email ?? r.assignedToEmail,
+                inboxItemId: (json?.inboxItemId as string | null) ?? r.inboxItemId,
               };
             default:
               return r;
@@ -403,7 +448,7 @@ export default function EligibilityIssuesClient() {
         setToast(({
           mark_verified: "Marked verified",
           route_to_clinician: `Routed to ${assignment?.display ?? "clinician"}`,
-          route_to_admin: "Routed to admin",
+          route_to_admin: `Routed to ${assignment?.display ?? "admin"}`,
           hold_claim: "Claim placed on hold",
           release_claim: "Claim released",
         } as Record<string, string>)[action] ?? "Done");
@@ -477,17 +522,99 @@ export default function EligibilityIssuesClient() {
     [],
   );
 
+  const openRoutingPicker = useCallback(
+    async (row: EligibilityIssueRow, kind: "clinician" | "admin") => {
+      setRoutingPicker({
+        row,
+        kind,
+        loading: true,
+        error: null,
+        assignees: [],
+        selectedId: "",
+        note: "",
+        submitting: false,
+      });
+      try {
+        const params = new URLSearchParams({
+          organizationId,
+          kind,
+        });
+        if (row.appointmentId) params.set("appointmentId", row.appointmentId);
+        const res = await fetch(
+          `/api/billing/eligibility-issues/assignees?${params.toString()}`,
+          { cache: "no-store" },
+        );
+        const json = await res.json();
+        if (!res.ok || json?.success === false) {
+          throw new Error(json?.error ?? "Failed to load users");
+        }
+        const assignees = (json?.assignees ?? []) as RoutingPickerState["assignees"];
+        const defaultId =
+          assignees.find((a) => a.isAppointmentProvider)?.id ??
+          assignees[0]?.id ??
+          "";
+        setRoutingPicker((prev) =>
+          prev && prev.row.id === row.id && prev.kind === kind
+            ? { ...prev, loading: false, assignees, selectedId: defaultId }
+            : prev,
+        );
+      } catch (e) {
+        setRoutingPicker((prev) =>
+          prev && prev.row.id === row.id && prev.kind === kind
+            ? {
+                ...prev,
+                loading: false,
+                error: e instanceof Error ? e.message : "Failed to load users",
+              }
+            : prev,
+        );
+      }
+    },
+    [organizationId],
+  );
+
+  const submitRouting = useCallback(async () => {
+    setRoutingPicker((prev) => (prev ? { ...prev, submitting: true, error: null } : prev));
+    // Snapshot the current picker state so we can use it without depending on
+    // it inside this callback.
+    const picker = routingPicker;
+    if (!picker || !picker.selectedId) {
+      setRoutingPicker((prev) =>
+        prev ? { ...prev, submitting: false, error: "Pick a user to route to" } : prev,
+      );
+      return;
+    }
+    try {
+      await performAction(
+        picker.row,
+        picker.kind === "clinician" ? "route_to_clinician" : "route_to_admin",
+        { note: picker.note, assignedToUserId: picker.selectedId },
+      );
+      setRoutingPicker(null);
+    } catch (e) {
+      setRoutingPicker((prev) =>
+        prev
+          ? {
+              ...prev,
+              submitting: false,
+              error: e instanceof Error ? e.message : "Routing failed",
+            }
+          : prev,
+      );
+    }
+  }, [routingPicker, performAction]);
+
   const rowActions: RowAction<EligibilityIssueRow>[] = useMemo(
     () => [
       { id: "run", label: "Run eligibility", variant: "primary", onClick: (r) => void runEligibility(r), disabled: (r) => actingId === r.id },
       { id: "update_ins", label: "Update insurance", onClick: (r) => updateInsurance(r) },
       { id: "verify", label: "Mark verified manually", variant: "success", onClick: (r) => void performAction(r, "mark_verified"), disabled: (r) => actingId === r.id },
-      { id: "route_clin", label: "Route to clinician", onClick: (r) => void performAction(r, "route_to_clinician"), disabled: (r) => actingId === r.id },
-      { id: "route_admin", label: "Route to admin", onClick: (r) => void performAction(r, "route_to_admin"), disabled: (r) => actingId === r.id },
+      { id: "route_clin", label: "Route to clinician…", onClick: (r) => void openRoutingPicker(r, "clinician"), disabled: (r) => actingId === r.id },
+      { id: "route_admin", label: "Route to admin…", onClick: (r) => void openRoutingPicker(r, "admin"), disabled: (r) => actingId === r.id },
       { id: "hold", label: "Hold claim", onClick: (r) => void performAction(r, "hold_claim"), disabled: (r) => actingId === r.id || !r.relatedClaimId || Boolean(r.holdNote) },
       { id: "release", label: "Release after verification", onClick: (r) => void performAction(r, "release_claim"), disabled: (r) => actingId === r.id || !r.holdNote },
     ],
-    [actingId, performAction, runEligibility, updateInsurance],
+    [actingId, performAction, runEligibility, updateInsurance, openRoutingPicker],
   );
 
   // ── Detail panel ────────────────────────────────────────────────────────
@@ -621,10 +748,10 @@ export default function EligibilityIssuesClient() {
         onClick: () => updateInsurance(selectedRow) },
       { id: "verify", label: "Mark verified manually", variant: "success",
         onClick: () => void performAction(selectedRow, "mark_verified"), disabled: busy },
-      { id: "route_clinician", label: "Route to clinician",
-        onClick: () => void performAction(selectedRow, "route_to_clinician"), disabled: busy },
-      { id: "route_admin", label: "Route to admin",
-        onClick: () => void performAction(selectedRow, "route_to_admin"), disabled: busy },
+      { id: "route_clinician", label: "Route to clinician…",
+        onClick: () => void openRoutingPicker(selectedRow, "clinician"), disabled: busy },
+      { id: "route_admin", label: "Route to admin…",
+        onClick: () => void openRoutingPicker(selectedRow, "admin"), disabled: busy },
       { id: "hold", label: "Hold claim",
         onClick: () => void performAction(selectedRow, "hold_claim"),
         disabled: busy || !selectedRow.relatedClaimId || Boolean(selectedRow.holdNote) },
@@ -632,7 +759,7 @@ export default function EligibilityIssuesClient() {
         onClick: () => void performAction(selectedRow, "release_claim"),
         disabled: busy || !selectedRow.holdNote },
     ];
-  }, [selectedRow, actingId, runEligibility, performAction, updateInsurance]);
+  }, [selectedRow, actingId, runEligibility, performAction, updateInsurance, openRoutingPicker]);
 
   // ── Tabs (counts per issueType) ─────────────────────────────────────────
   const tabCounts = useMemo(() => {
@@ -719,7 +846,161 @@ export default function EligibilityIssuesClient() {
           onRunEligibility={runEligibility}
         />
       ) : null}
+
+      {routingPicker ? (
+        <RoutingPickerModal
+          state={routingPicker}
+          onChange={(patch) =>
+            setRoutingPicker((prev) => (prev ? { ...prev, ...patch } : prev))
+          }
+          onSubmit={() => void submitRouting()}
+          onClose={() => setRoutingPicker(null)}
+        />
+      ) : null}
     </>
+  );
+}
+
+type RoutingAssignee = {
+  id: string;
+  name: string;
+  email: string | null;
+  jobTitle: string | null;
+  roles: string[];
+  isAppointmentProvider: boolean;
+};
+
+type RoutingPickerProps = {
+  state: {
+    row: EligibilityIssueRow;
+    kind: "clinician" | "admin";
+    loading: boolean;
+    error: string | null;
+    assignees: RoutingAssignee[];
+    selectedId: string;
+    note: string;
+    submitting: boolean;
+  };
+  onChange: (
+    patch: Partial<{ selectedId: string; note: string; error: string | null }>,
+  ) => void;
+  onSubmit: () => void;
+  onClose: () => void;
+};
+
+function RoutingPickerModal({ state, onChange, onSubmit, onClose }: RoutingPickerProps) {
+  const kindLabel = state.kind === "clinician" ? "clinician" : "admin";
+  const title =
+    state.kind === "clinician" ? "Route to a specific clinician" : "Route to a specific admin";
+  const canSubmit = !state.submitting && !state.loading && Boolean(state.selectedId);
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)",
+        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1200,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#fff", borderRadius: 8, width: 480, maxWidth: "92vw",
+          padding: 20, boxShadow: "0 16px 48px rgba(0,0,0,0.2)",
+        }}
+      >
+        <h2 style={{ margin: "0 0 4px", fontSize: 16, color: "#0F172A" }}>{title}</h2>
+        <p style={{ margin: "0 0 14px", color: "#64748B", fontSize: 13 }}>
+          {state.row.clientName} · {state.row.payerName || "—"}. The selected {kindLabel}
+          {" "}will get an inbox item linking back to this eligibility issue.
+        </p>
+
+        {state.loading ? (
+          <p style={{ color: "#64748B", fontSize: 13 }}>Loading users…</p>
+        ) : state.assignees.length === 0 ? (
+          <p style={{ color: "#B45309", fontSize: 13 }}>
+            No active {kindLabel}s found in this organization. Add one before routing.
+          </p>
+        ) : (
+          <label style={{ display: "block", fontSize: 13, marginBottom: 10 }}>
+            <span style={{ display: "block", color: "#334155", marginBottom: 4 }}>
+              Assign to
+            </span>
+            <select
+              value={state.selectedId}
+              onChange={(e) => onChange({ selectedId: e.target.value })}
+              style={{
+                width: "100%", padding: "8px 10px", borderRadius: 6,
+                border: "1px solid #CBD5E1", fontSize: 14, background: "#fff",
+              }}
+            >
+              <option value="" disabled>Pick a user…</option>
+              {state.assignees.map((a) => {
+                const suffix = [
+                  a.jobTitle,
+                  a.email,
+                  a.isAppointmentProvider ? "appointment provider" : null,
+                ].filter(Boolean).join(" · ");
+                return (
+                  <option key={a.id} value={a.id}>
+                    {a.name}{suffix ? ` — ${suffix}` : ""}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+        )}
+
+        <label style={{ display: "block", fontSize: 13, marginBottom: 10 }}>
+          <span style={{ display: "block", color: "#334155", marginBottom: 4 }}>
+            Note for the assignee (optional)
+          </span>
+          <textarea
+            value={state.note}
+            onChange={(e) => onChange({ note: e.target.value })}
+            rows={3}
+            placeholder="What needs verifying before billing?"
+            style={{
+              width: "100%", padding: "8px 10px", borderRadius: 6,
+              border: "1px solid #CBD5E1", fontSize: 14, resize: "vertical",
+              fontFamily: "inherit",
+            }}
+          />
+        </label>
+
+        {state.error ? (
+          <p style={{ color: "#B91C1C", fontSize: 13, marginTop: 0 }}>{state.error}</p>
+        ) : null}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={state.submitting}
+            style={{
+              background: "transparent", color: "#475569", border: "1px solid #CBD5E1",
+              padding: "7px 14px", borderRadius: 6, fontSize: 14, cursor: "pointer",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onSubmit}
+            disabled={!canSubmit}
+            style={{
+              background: canSubmit ? "#0F172A" : "#94A3B8", color: "#fff",
+              border: "none", padding: "7px 14px", borderRadius: 6, fontSize: 14,
+              cursor: canSubmit ? "pointer" : "not-allowed", fontWeight: 600,
+            }}
+          >
+            {state.submitting ? "Routing…" : `Route to ${kindLabel}`}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

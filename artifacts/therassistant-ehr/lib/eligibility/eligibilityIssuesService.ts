@@ -50,8 +50,12 @@ export interface EligibilityIssueRow {
   // Assignment / routing — derived from audit_logs (latest wins per kind).
   providerId: string | null;
   practiceId: string | null;
-  assignedTo: string | null;        // free-text display ("Clinician: provider_id…" / "Admin pool")
+  assignedTo: string | null;        // resolved display name of the assignee
   assignedToKind: "clinician" | "admin" | "biller" | null;
+  assignedToUserId: string | null;  // staff_profiles.id of the routed-to user
+  assignedToEmail: string | null;
+  routedByUserId: string | null;    // auth user that performed the routing
+  inboxItemId: string | null;       // workqueue_items.id created for the assignee
   assignedBillerId: string | null;
   followUpDueAt: string | null;
   denialCode: string | null;        // CARC/RARC from claim billing_notes if present
@@ -404,7 +408,14 @@ export async function loadEligibilityIssues({
   // Latest-wins per (appointment, kind).
   const verifiedMap = new Map<string, string>();
   const holdMap = new Map<string, string>();
-  type Assignment = { kind: "clinician" | "admin" | "biller"; display: string; userId: string | null };
+  type Assignment = {
+    kind: "clinician" | "admin" | "biller";
+    display: string;
+    userId: string | null;
+    email: string | null;
+    routedByUserId: string | null;
+    inboxItemId: string | null;
+  };
   const assignedMap = new Map<string, Assignment>();
   const assignedBillerMap = new Map<string, string>();
   const followUpMap = new Map<string, string>();
@@ -439,15 +450,33 @@ export async function loadEligibilityIssues({
         holdMap.delete(k);
       }
       if (action === "eligibility_routed_clinician" && !assignedMap.has(k)) {
+        const staffId = text(meta.assignedToUserId);
         const providerId = text(meta.providerId);
+        const display =
+          text(meta.assignedToName) ||
+          text(meta.assignedToDisplay) ||
+          (providerId ? `Clinician ${providerId.slice(0, 8)}` : "Clinician");
         assignedMap.set(k, {
           kind: "clinician",
-          display: providerId ? `Clinician ${providerId.slice(0, 8)}` : "Clinician",
-          userId: providerId || null,
+          display,
+          userId: staffId || null,
+          email: text(meta.assignedToEmail) || null,
+          routedByUserId: text(meta.routedByUserId) || text(r.user_id) || null,
+          inboxItemId: text(meta.inboxItemId) || null,
         });
       }
       if (action === "eligibility_routed_admin" && !assignedMap.has(k)) {
-        assignedMap.set(k, { kind: "admin", display: "Admin pool", userId: null });
+        const staffId = text(meta.assignedToUserId);
+        const display =
+          text(meta.assignedToName) || text(meta.assignedToDisplay) || "Admin pool";
+        assignedMap.set(k, {
+          kind: "admin",
+          display,
+          userId: staffId || null,
+          email: text(meta.assignedToEmail) || null,
+          routedByUserId: text(meta.routedByUserId) || text(r.user_id) || null,
+          inboxItemId: text(meta.inboxItemId) || null,
+        });
       }
       if (action === "eligibility_assigned_biller" && !assignedBillerMap.has(k)) {
         const billerId = text(meta.billerId) || text(r.user_id);
@@ -539,6 +568,10 @@ export async function loadEligibilityIssues({
       practiceId: text(a.provider_location_id) || null,
       assignedTo: assignment ? assignment.display : null,
       assignedToKind: assignment ? assignment.kind : null,
+      assignedToUserId: assignment ? assignment.userId : null,
+      assignedToEmail: assignment ? assignment.email : null,
+      routedByUserId: assignment ? assignment.routedByUserId : null,
+      inboxItemId: assignment ? assignment.inboxItemId : null,
       assignedBillerId: assignedBillerMap.get(apptId) ?? null,
       followUpDueAt: followUpMap.get(apptId) ?? null,
       denialCode: claim ? carcRarcFromNotes(text(claim.billing_notes) || null) : null,
