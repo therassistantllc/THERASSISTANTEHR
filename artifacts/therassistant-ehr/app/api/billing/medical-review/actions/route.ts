@@ -180,6 +180,7 @@ export async function POST(request: Request) {
           { data: payer },
           { data: appt },
           { data: existingDocs },
+          { data: billingProfileRow },
         ] = await Promise.all([
           sb.from("organizations").select("name").eq("id", organizationId).maybeSingle(),
           clientId
@@ -210,7 +211,73 @@ export async function POST(request: Request) {
             .is("archived_at", null)
             .order("created_at", { ascending: false })
             .limit(50),
+          sb.from("system_settings")
+            .select("setting_value")
+            .eq("organization_id", organizationId)
+            .eq("setting_key", "organization.billing_profile")
+            .maybeSingle(),
         ]);
+
+        // Unpack the billing profile so the letterhead has a real address,
+        // phone, fax, email, and optional logo to render — not just the org
+        // name. Each piece is optional; missing values simply omit the line.
+        const billingProfile: Record<string, unknown> =
+          billingProfileRow?.setting_value &&
+          typeof billingProfileRow.setting_value === "object" &&
+          !Array.isArray(billingProfileRow.setting_value)
+            ? (billingProfileRow.setting_value as Record<string, unknown>)
+            : {};
+        const bpStr = (k: string): string | null => {
+          const v = billingProfile[k];
+          return typeof v === "string" && v.trim() ? v.trim() : null;
+        };
+        const letterheadName =
+          bpStr("billing_provider_name") || (org?.name as string | null) || "Billing Office";
+        const addrLine1 = bpStr("billing_address_line1");
+        const addrLine2 = bpStr("billing_address_line2");
+        const city = bpStr("billing_city");
+        const stateCode = bpStr("billing_state");
+        const zip = bpStr("billing_zip");
+        const cityStateZip = [city, stateCode].filter(Boolean).join(", ");
+        const cityStateZipLine = [cityStateZip, zip].filter(Boolean).join(" ");
+        const addressLines = [addrLine1, addrLine2, cityStateZipLine].filter(Boolean);
+        const organizationAddress = addressLines.length ? addressLines.join("\n") : null;
+        const organizationPhone = bpStr("billing_phone");
+        const organizationFax = bpStr("billing_fax");
+        const organizationEmail = bpStr("billing_email");
+
+        // Optional logo — fetch bytes from storage; non-JPEG / missing files
+        // are silently skipped so a broken logo never blocks the letter.
+        const logoBucket = bpStr("letterhead_logo_bucket");
+        const logoPath = bpStr("letterhead_logo_path");
+        // Defense in depth: only dereference the logo through the admin
+        // storage client when it lives in the canonical letterhead scope
+        // (dedicated bucket + this org's letterhead/ prefix). This stops a
+        // tampered billing_profile from pointing the cover-letter render at
+        // an unrelated storage object.
+        const LOGO_BUCKET_ALLOWED = "organization-assets";
+        const logoPrefix = `${organizationId}/letterhead/`;
+        const logoLocationOk =
+          !!logoBucket &&
+          !!logoPath &&
+          logoBucket === LOGO_BUCKET_ALLOWED &&
+          logoPath.startsWith(logoPrefix) &&
+          !logoPath.includes("..");
+        let logoJpegBytes: Uint8Array | null = null;
+        if (logoLocationOk) {
+          try {
+            const { data: blob, error: dlErr } = await supabase.storage
+              .from(logoBucket)
+              .download(logoPath);
+            if (!dlErr && blob) {
+              logoJpegBytes = new Uint8Array(await blob.arrayBuffer());
+            }
+          } catch (e) {
+            console.warn(
+              `[cover-letter] logo download failed: ${e instanceof Error ? e.message : String(e)}`,
+            );
+          }
+        }
 
         let providerName: string | null = null;
         const providerId = appt ? String(appt.provider_id ?? "") : "";
@@ -252,7 +319,7 @@ export async function POST(request: Request) {
         const clientFullName =
           `${clientFirst} ${clientLast}`.trim() || "Unknown patient";
         const clientDob = client ? (client.date_of_birth as string | null) : null;
-        const orgName = (org?.name as string | null) || "Billing Office";
+        const orgName = letterheadName;
         const payerName = (payer?.payer_name as string | null) || "Insurance Payer";
         const claimNumber = (claim.claim_number as string | null) || claimId;
         const dos = appt ? (appt.scheduled_start_at as string | null) : null;
@@ -264,6 +331,11 @@ export async function POST(request: Request) {
           const payerAttention = (body.payerAttention ?? "").trim() || null;
           pdfBytes = generateCoverLetterPdf({
             organizationName: orgName,
+            organizationAddress,
+            organizationPhone,
+            organizationFax,
+            organizationEmail,
+            logo: logoJpegBytes ? { jpegBytes: logoJpegBytes } : null,
             payerName,
             payerAttention,
             clientName: clientFullName,

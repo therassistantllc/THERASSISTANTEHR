@@ -26,6 +26,10 @@ type BillingProfile = {
   billing_state: string;
   billing_zip: string;
   billing_phone: string;
+  billing_fax: string;
+  billing_email: string;
+  letterhead_logo_bucket: string;
+  letterhead_logo_path: string;
   default_pos_office: string;
   default_pos_telehealth: string;
   default_service_location_id: string;
@@ -54,6 +58,10 @@ const EMPTY_BILLING: BillingProfile = {
   billing_state: "",
   billing_zip: "",
   billing_phone: "",
+  billing_fax: "",
+  billing_email: "",
+  letterhead_logo_bucket: "",
+  letterhead_logo_path: "",
   default_pos_office: "11",
   default_pos_telehealth: "10",
   default_service_location_id: "",
@@ -86,6 +94,15 @@ function validateField(field: keyof BillingProfile, value: string): string {
       if (digits.length !== 10) return "Phone must be a 10-digit US number.";
       return "";
     }
+    case "billing_fax": {
+      const digits = DIGITS_ONLY(v);
+      if (digits.length !== 10) return "Fax must be a 10-digit US number.";
+      return "";
+    }
+    case "billing_email": {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return "Billing email is not a valid address.";
+      return "";
+    }
     default:
       return "";
   }
@@ -97,6 +114,8 @@ function validateAll(billing: BillingProfile): BillingErrors {
     "billing_tax_id",
     "billing_zip",
     "billing_phone",
+    "billing_fax",
+    "billing_email",
   ];
   const errs: BillingErrors = {};
   for (const field of checked) {
@@ -159,6 +178,142 @@ function CmsBox({
   );
 }
 
+function LetterheadLogoField({
+  organizationId,
+  bucket,
+  path,
+  onChange,
+}: {
+  organizationId: string;
+  bucket: string;
+  path: string;
+  onChange: (bucket: string | null, path: string | null) => void;
+}) {
+  const [busy, setBusy] = useState<"upload" | "remove" | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const hasLogo = Boolean(bucket && path);
+
+  // Render a local preview from whatever the server has on file. We use a
+  // signed-url-style proxy through the existing storage if available; if not,
+  // skip the preview rather than block the form.
+  useEffect(() => {
+    let cancelled = false;
+    if (!hasLogo) { setPreviewUrl(null); return; }
+    // Bust the cache when the path changes so a re-upload shows immediately.
+    const cacheBust = encodeURIComponent(path);
+    const url = `/api/settings/organization/logo/preview?organizationId=${encodeURIComponent(organizationId)}&v=${cacheBust}`;
+    if (!cancelled) setPreviewUrl(url);
+    return () => { cancelled = true; };
+  }, [hasLogo, organizationId, path]);
+
+  async function handleFile(file: File) {
+    if (!/^image\/jpe?g$/i.test(file.type)) {
+      setMsg("Logo must be a JPEG image (image/jpeg).");
+      return;
+    }
+    setBusy("upload");
+    setMsg(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(
+        `/api/settings/organization/logo?organizationId=${encodeURIComponent(organizationId)}`,
+        { method: "POST", body: form },
+      );
+      const json = (await res.json()) as {
+        success?: boolean; error?: string;
+        logo?: { bucket: string; path: string };
+      };
+      if (!res.ok || !json.success || !json.logo) {
+        throw new Error(json.error || "Upload failed");
+      }
+      onChange(json.logo.bucket, json.logo.path);
+      setMsg("Logo uploaded.");
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Upload failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleRemove() {
+    setBusy("remove");
+    setMsg(null);
+    try {
+      const res = await fetch(
+        `/api/settings/organization/logo?organizationId=${encodeURIComponent(organizationId)}`,
+        { method: "DELETE" },
+      );
+      const json = (await res.json()) as { success?: boolean; error?: string };
+      if (!res.ok || !json.success) throw new Error(json.error || "Remove failed");
+      onChange(null, null);
+      setMsg("Logo removed.");
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Remove failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: "var(--space-4)" }}>
+      <label className="field-label" style={{ display: "block", marginBottom: "var(--space-2)" }}>
+        Letterhead Logo (JPEG only, up to 2 MB)
+      </label>
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap" }}>
+        {hasLogo && previewUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={previewUrl}
+            alt="Letterhead logo preview"
+            style={{
+              maxHeight: 64, maxWidth: 200,
+              border: "1px solid var(--line, #d8e1e9)",
+              borderRadius: 4, background: "#fff", padding: 4,
+            }}
+          />
+        ) : (
+          <div style={{
+            width: 200, height: 64,
+            border: "1px dashed var(--line, #d8e1e9)",
+            borderRadius: 4, display: "flex",
+            alignItems: "center", justifyContent: "center",
+            color: "var(--muted, #5c6e82)", fontSize: 12,
+          }}>
+            No logo uploaded
+          </div>
+        )}
+        <input
+          type="file"
+          accept="image/jpeg,image/jpg"
+          disabled={busy !== null || !organizationId}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) { void handleFile(f); e.target.value = ""; }
+          }}
+        />
+        {hasLogo && (
+          <button
+            type="button"
+            className="button button-secondary"
+            onClick={handleRemove}
+            disabled={busy !== null}
+          >
+            {busy === "remove" ? "Removing…" : "Remove"}
+          </button>
+        )}
+      </div>
+      {busy === "upload" && (
+        <div style={{ marginTop: 6, fontSize: 12, color: "var(--muted, #5c6e82)" }}>Uploading…</div>
+      )}
+      {msg && (
+        <div style={{ marginTop: 6, fontSize: 12, color: "var(--muted, #5c6e82)" }}>{msg}</div>
+      )}
+    </div>
+  );
+}
+
 function getOrganizationId() {
   if (typeof window === "undefined") return DEFAULT_ORG_ID;
   const params = new URLSearchParams(window.location.search);
@@ -197,6 +352,8 @@ export default function OrganizationSettingsClient() {
       billing_tax_id: true,
       billing_zip: true,
       billing_phone: true,
+      billing_fax: true,
+      billing_email: true,
     });
 
     const errs = validateAll(billing);
@@ -398,6 +555,32 @@ export default function OrganizationSettingsClient() {
               {bf("billing_state", "State (2-letter)")}
               {bf("billing_zip", "ZIP Code")}
             </div>
+          </section>
+
+          <section className="panel form-panel">
+            <h2>Billing Letterhead</h2>
+            <p style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)", marginBottom: "var(--space-4)" }}>
+              These contact details and logo appear on generated billing PDFs (cover
+              letters, appeal packets) so payers can reach the practice and recognise
+              its brand. The billing address and phone above are reused; add fax,
+              email, and an optional JPEG logo here.
+            </p>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-4)" }}>
+              {bf("billing_fax", "Billing Fax")}
+              {bf("billing_email", "Billing Email", "email")}
+            </div>
+            <LetterheadLogoField
+              organizationId={organizationId}
+              bucket={billing.letterhead_logo_bucket}
+              path={billing.letterhead_logo_path}
+              onChange={(b, p) =>
+                setBilling((prev) => ({
+                  ...prev,
+                  letterhead_logo_bucket: b ?? "",
+                  letterhead_logo_path: p ?? "",
+                }))
+              }
+            />
           </section>
 
           {/* ── Claim Header Preview ── */}

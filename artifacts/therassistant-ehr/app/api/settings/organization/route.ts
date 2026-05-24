@@ -66,6 +66,20 @@ function validateBillingProfile(profile: Record<string, unknown>): Record<string
   });
   if (repPhoneErr) errors.authorized_rep_phone = repPhoneErr;
 
+  // Letterhead extras — fax + email used on generated PDFs alongside the
+  // existing billing address/phone. Logo bytes live in storage; the
+  // billing_profile JSON just holds {bucket, path}.
+  const faxErr = validateStringField(profile, "billing_fax", "Billing fax", (v) => {
+    const digits = v.replace(/\D/g, "");
+    return digits.length === 10 ? null : "Billing fax must be a 10-digit US number.";
+  });
+  if (faxErr) errors.billing_fax = faxErr;
+
+  const emailErr = validateStringField(profile, "billing_email", "Billing email", (v) =>
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) ? null : "Billing email is not a valid address.",
+  );
+  if (emailErr) errors.billing_email = emailErr;
+
   return errors;
 }
 
@@ -163,6 +177,42 @@ export async function PATCH(req: NextRequest) {
     }
   }
 
+  // Defense in depth: the letterhead logo bucket/path/size/timestamp are
+  // server-managed — only the dedicated POST/DELETE /api/settings/organization/logo
+  // endpoint may write them. Strip any client-supplied values here so a
+  // malicious PATCH cannot point the logo at an arbitrary storage object
+  // (which would later be downloaded by the admin storage client during
+  // cover-letter render). We merge with the existing stored profile so the
+  // legitimately-uploaded logo metadata is preserved across PATCHes.
+  let mergedBillingProfile: Record<string, unknown> | null = null;
+  if (hasBillingProfile && isPlainObject(body.billing_profile)) {
+    const incoming = { ...(body.billing_profile as Record<string, unknown>) };
+    const SERVER_MANAGED = [
+      "letterhead_logo_bucket",
+      "letterhead_logo_path",
+      "letterhead_logo_size_bytes",
+      "letterhead_logo_updated_at",
+    ] as const;
+    for (const k of SERVER_MANAGED) delete incoming[k];
+
+    const { data: existing } = await supabase
+      .from("system_settings")
+      .select("setting_value")
+      .eq("organization_id", organizationId)
+      .eq("setting_key", BILLING_PROFILE_KEY)
+      .maybeSingle();
+    const existingProfile: Record<string, unknown> =
+      existing?.setting_value &&
+      typeof existing.setting_value === "object" &&
+      !Array.isArray(existing.setting_value)
+        ? (existing.setting_value as Record<string, unknown>)
+        : {};
+    mergedBillingProfile = { ...incoming };
+    for (const k of SERVER_MANAGED) {
+      if (k in existingProfile) mergedBillingProfile[k] = existingProfile[k];
+    }
+  }
+
   const orgFields = ["name", "legal_name", "slug", "default_state", "timezone", "tax_id_last4", "is_active"] as const;
   const orgUpdates: Record<string, unknown> = {};
   for (const field of orgFields) {
@@ -186,8 +236,9 @@ export async function PATCH(req: NextRequest) {
     );
   }
 
-  if (hasBillingProfile && isPlainObject(body.billing_profile)) {
+  if (hasBillingProfile && mergedBillingProfile) {
     const now = new Date().toISOString();
+    const profileToWrite = mergedBillingProfile;
     ops.push(
       Promise.resolve(
         supabase
@@ -196,7 +247,7 @@ export async function PATCH(req: NextRequest) {
             {
               organization_id: organizationId,
               setting_key: BILLING_PROFILE_KEY,
-              setting_value: body.billing_profile as Record<string, unknown>,
+              setting_value: profileToWrite,
               updated_at: now,
               created_at: now,
             },
