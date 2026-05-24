@@ -61,6 +61,30 @@ interface PolicyOption {
   payer_name?: string | null;
 }
 
+interface NewPolicyFields {
+  payerId: string;
+  planName: string | null;
+  policyNumber: string;
+  groupNumber: string | null;
+  effectiveDate: string | null;
+  terminationDate: string | null;
+  copayAmount: string | null;
+  coinsurancePercent: string | null;
+  deductibleAmount: string | null;
+  outOfPocketMax: string | null;
+  subscriberRelationship: string;
+  subscriberFirstName: string | null;
+  subscriberLastName: string | null;
+  subscriberDateOfBirth: string | null;
+  subscriberMemberId: string | null;
+  subscriberPhone: string | null;
+  subscriberAddressLine1: string | null;
+  subscriberAddressLine2: string | null;
+  subscriberCity: string | null;
+  subscriberState: string | null;
+  subscriberPostalCode: string | null;
+}
+
 const CASE_TYPE_LABELS: Record<CaseType, string> = {
   commercial: "Commercial",
   medicaid: "Medicaid",
@@ -98,6 +122,8 @@ export default function CasesPanel({
     caseType: "commercial",
     notes: "",
   });
+  const [addingPolicyForCaseId, setAddingPolicyForCaseId] = useState<string | null>(null);
+  const [payers, setPayers] = useState<Array<{ id: string; payer_name: string; payer_id: string | null }>>([]);
 
   const orgQ = useMemo(
     () => `?organizationId=${encodeURIComponent(organizationId)}`,
@@ -121,6 +147,24 @@ export default function CasesPanel({
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/insurance-payers${orgQ}`, { cache: "no-store" });
+        const json = await res.json();
+        if (!cancelled && res.ok && json.success) {
+          setPayers(json.payers ?? []);
+        }
+      } catch {
+        /* non-fatal — UI shows empty payer list */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [orgQ]);
 
   async function callCase(method: string, path: string, body?: unknown) {
     setBusy(path);
@@ -200,6 +244,46 @@ export default function CasesPanel({
       policyId,
       priority,
     });
+  }
+
+  async function createAndAttachPolicy(caseId: string, fields: NewPolicyFields, priority: Priority) {
+    setBusy(`create-policy:${caseId}`);
+    setError(null);
+    try {
+      const createRes = await fetch(`/api/clients/${clientId}/policies`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ organizationId, priority, ...fields }),
+      });
+      const createJson = await createRes.json().catch(() => ({}));
+      if (!createRes.ok || !createJson.success) {
+        throw new Error(createJson.error ?? "Failed to create insurance policy");
+      }
+      const attachRes = await fetch(`/api/clients/${clientId}/cases/${caseId}/policies`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ organizationId, policyId: createJson.policyId, priority }),
+      });
+      const attachJson = await attachRes.json().catch(() => ({}));
+      if (!attachRes.ok || !attachJson.success) {
+        // Policy was created but attach failed. Refresh so the new policy
+        // appears in availablePolicies and the user can attach it manually
+        // (or detach/archive it) instead of getting stuck on a stale view.
+        await load();
+        onMutate?.();
+        throw new Error(
+          (attachJson.error ?? "Failed to attach the new policy to the case") +
+            " — the policy was saved and is available to attach.",
+        );
+      }
+      setAddingPolicyForCaseId(null);
+      await load();
+      onMutate?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to add insurance");
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function detachPolicy(caseId: string, policyId: string) {
@@ -378,14 +462,50 @@ export default function CasesPanel({
                   </ul>
                 ) : null}
 
-                {attachable.length > 0 && PRIORITIES.some((p) => !usedPriorities.has(p)) ? (
-                  <AttachPolicyForm
-                    onAttach={(policyId, priority) => attachPolicy(c.id, policyId, priority)}
-                    availablePolicies={attachable}
-                    availablePriorities={PRIORITIES.filter((p) => !usedPriorities.has(p))}
-                    disabled={Boolean(busy)}
-                  />
-                ) : null}
+                {(() => {
+                  const openPriorities = PRIORITIES.filter((p) => !usedPriorities.has(p));
+                  if (openPriorities.length === 0) return null;
+                  const isAdding = addingPolicyForCaseId === c.id;
+                  return (
+                    <div style={{ display: "grid", gap: "0.5rem", marginTop: "0.5rem" }}>
+                      {c.policies.length === 0 ? (
+                        <div className="empty-state" style={{ padding: "0.5rem 0.75rem" }}>
+                          No insurance attached to this case yet. Add a policy to populate the billing fields.
+                        </div>
+                      ) : null}
+                      {attachable.length > 0 ? (
+                        <AttachPolicyForm
+                          onAttach={(policyId, priority) => attachPolicy(c.id, policyId, priority)}
+                          availablePolicies={attachable}
+                          availablePriorities={openPriorities}
+                          disabled={Boolean(busy)}
+                        />
+                      ) : null}
+                      {isAdding ? (
+                        <CreatePolicyForm
+                          payers={payers}
+                          availablePriorities={openPriorities}
+                          disabled={Boolean(busy)}
+                          onCancel={() => setAddingPolicyForCaseId(null)}
+                          onSubmit={(fields, priority) =>
+                            createAndAttachPolicy(c.id, fields, priority)
+                          }
+                        />
+                      ) : (
+                        <div>
+                          <button
+                            type="button"
+                            className="button"
+                            onClick={() => setAddingPolicyForCaseId(c.id)}
+                            disabled={Boolean(busy)}
+                          >
+                            + Add insurance
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.5rem" }}>
                   {isEditing ? (
@@ -636,8 +756,255 @@ function AttachPolicyForm({
         disabled={disabled || !policyId}
         onClick={() => policyId && onAttach(policyId, priority)}
       >
-        Attach policy
+        Attach existing
       </button>
+    </div>
+  );
+}
+
+const EMPTY_NEW_POLICY: NewPolicyFields = {
+  payerId: "",
+  planName: null,
+  policyNumber: "",
+  groupNumber: null,
+  effectiveDate: null,
+  terminationDate: null,
+  copayAmount: null,
+  coinsurancePercent: null,
+  deductibleAmount: null,
+  outOfPocketMax: null,
+  subscriberRelationship: "self",
+  subscriberFirstName: null,
+  subscriberLastName: null,
+  subscriberDateOfBirth: null,
+  subscriberMemberId: null,
+  subscriberPhone: null,
+  subscriberAddressLine1: null,
+  subscriberAddressLine2: null,
+  subscriberCity: null,
+  subscriberState: null,
+  subscriberPostalCode: null,
+};
+
+function CreatePolicyForm({
+  payers,
+  availablePriorities,
+  disabled,
+  onCancel,
+  onSubmit,
+}: {
+  payers: Array<{ id: string; payer_name: string; payer_id: string | null }>;
+  availablePriorities: Priority[];
+  disabled: boolean;
+  onCancel: () => void;
+  onSubmit: (fields: NewPolicyFields, priority: Priority) => void | Promise<void>;
+}) {
+  const [priority, setPriority] = useState<Priority>(availablePriorities[0] ?? "primary");
+  const [draft, setDraft] = useState<NewPolicyFields>({
+    ...EMPTY_NEW_POLICY,
+    payerId: payers[0]?.id ?? "",
+  });
+  const set = <K extends keyof NewPolicyFields>(k: K, v: NewPolicyFields[K]) =>
+    setDraft((d) => ({ ...d, [k]: v }));
+  const text = (k: keyof NewPolicyFields) =>
+    (k === "payerId" || k === "policyNumber" || k === "subscriberRelationship"
+      ? (draft[k] as string)
+      : ((draft[k] as string | null) ?? ""));
+  const setText = (k: keyof NewPolicyFields, raw: string) => {
+    const trimmed = raw;
+    if (k === "payerId" || k === "policyNumber" || k === "subscriberRelationship") {
+      set(k, trimmed as never);
+    } else {
+      set(k, (trimmed.length ? trimmed : null) as never);
+    }
+  };
+
+  const cellStyle = { display: "grid", gap: 4 } as const;
+  const labelStyle = {
+    fontSize: "0.7rem",
+    textTransform: "uppercase",
+    letterSpacing: "0.02em",
+    color: "var(--muted-color, #6b7280)",
+    fontWeight: 500,
+  } as const;
+  const grid = (min = 160) =>
+    ({
+      display: "grid",
+      gridTemplateColumns: `repeat(auto-fit, minmax(${min}px, 1fr))`,
+      gap: "0.5rem 0.75rem",
+    }) as const;
+
+  const canSubmit = Boolean(
+    draft.payerId &&
+      draft.policyNumber.trim() &&
+      draft.effectiveDate &&
+      draft.subscriberFirstName &&
+      draft.subscriberLastName &&
+      draft.subscriberDateOfBirth &&
+      draft.subscriberMemberId &&
+      !disabled,
+  );
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gap: "0.75rem",
+        padding: "0.75rem",
+        border: "1px solid var(--border-color, #e5e7eb)",
+        borderRadius: 8,
+        background: "var(--surface-color, #fafafa)",
+      }}
+    >
+      <strong>Add insurance policy</strong>
+
+      <div style={grid(160)}>
+        <label style={cellStyle}>
+          <span style={labelStyle}>Priority</span>
+          <select
+            value={priority}
+            onChange={(e) => setPriority(e.target.value as Priority)}
+            disabled={disabled}
+          >
+            {availablePriorities.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label style={cellStyle}>
+          <span style={labelStyle}>Payer *</span>
+          <select
+            value={draft.payerId}
+            onChange={(e) => setText("payerId", e.target.value)}
+            disabled={disabled || payers.length === 0}
+          >
+            {payers.length === 0 ? <option value="">No payers configured</option> : null}
+            {payers.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.payer_name}
+                {p.payer_id ? ` (${p.payer_id})` : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label style={cellStyle}>
+          <span style={labelStyle}>Plan name</span>
+          <input value={text("planName")} onChange={(e) => setText("planName", e.target.value)} disabled={disabled} />
+        </label>
+      </div>
+
+      <div style={grid(160)}>
+        <label style={cellStyle}>
+          <span style={labelStyle}>Policy / Member ID *</span>
+          <input value={text("policyNumber")} onChange={(e) => setText("policyNumber", e.target.value)} disabled={disabled} />
+        </label>
+        <label style={cellStyle}>
+          <span style={labelStyle}>Group #</span>
+          <input value={text("groupNumber")} onChange={(e) => setText("groupNumber", e.target.value)} disabled={disabled} />
+        </label>
+        <label style={cellStyle}>
+          <span style={labelStyle}>Effective (YYYY-MM-DD)</span>
+          <input type="date" value={text("effectiveDate")} onChange={(e) => setText("effectiveDate", e.target.value)} disabled={disabled} />
+        </label>
+        <label style={cellStyle}>
+          <span style={labelStyle}>Termination (YYYY-MM-DD)</span>
+          <input type="date" value={text("terminationDate")} onChange={(e) => setText("terminationDate", e.target.value)} disabled={disabled} />
+        </label>
+      </div>
+
+      <div style={grid(140)}>
+        <label style={cellStyle}>
+          <span style={labelStyle}>Copay ($)</span>
+          <input inputMode="decimal" value={text("copayAmount")} onChange={(e) => setText("copayAmount", e.target.value)} disabled={disabled} />
+        </label>
+        <label style={cellStyle}>
+          <span style={labelStyle}>Coinsurance (%)</span>
+          <input inputMode="decimal" value={text("coinsurancePercent")} onChange={(e) => setText("coinsurancePercent", e.target.value)} disabled={disabled} />
+        </label>
+        <label style={cellStyle}>
+          <span style={labelStyle}>Deductible ($)</span>
+          <input inputMode="decimal" value={text("deductibleAmount")} onChange={(e) => setText("deductibleAmount", e.target.value)} disabled={disabled} />
+        </label>
+        <label style={cellStyle}>
+          <span style={labelStyle}>Out-of-pocket max ($)</span>
+          <input inputMode="decimal" value={text("outOfPocketMax")} onChange={(e) => setText("outOfPocketMax", e.target.value)} disabled={disabled} />
+        </label>
+      </div>
+
+      <div style={grid(180)}>
+        <label style={cellStyle}>
+          <span style={labelStyle}>Subscriber relationship</span>
+          <select
+            value={draft.subscriberRelationship}
+            onChange={(e) => setText("subscriberRelationship", e.target.value)}
+            disabled={disabled}
+          >
+            <option value="self">Self</option>
+            <option value="spouse">Spouse</option>
+            <option value="child">Child</option>
+            <option value="other">Other</option>
+          </select>
+        </label>
+        <label style={cellStyle}>
+          <span style={labelStyle}>Subscriber first name</span>
+          <input value={text("subscriberFirstName")} onChange={(e) => setText("subscriberFirstName", e.target.value)} disabled={disabled} />
+        </label>
+        <label style={cellStyle}>
+          <span style={labelStyle}>Subscriber last name</span>
+          <input value={text("subscriberLastName")} onChange={(e) => setText("subscriberLastName", e.target.value)} disabled={disabled} />
+        </label>
+        <label style={cellStyle}>
+          <span style={labelStyle}>Subscriber DOB</span>
+          <input type="date" value={text("subscriberDateOfBirth")} onChange={(e) => setText("subscriberDateOfBirth", e.target.value)} disabled={disabled} />
+        </label>
+        <label style={cellStyle}>
+          <span style={labelStyle}>Subscriber Member ID</span>
+          <input value={text("subscriberMemberId")} onChange={(e) => setText("subscriberMemberId", e.target.value)} disabled={disabled} />
+        </label>
+        <label style={cellStyle}>
+          <span style={labelStyle}>Subscriber phone</span>
+          <input value={text("subscriberPhone")} onChange={(e) => setText("subscriberPhone", e.target.value)} disabled={disabled} />
+        </label>
+      </div>
+
+      <div style={grid(160)}>
+        <label style={cellStyle}>
+          <span style={labelStyle}>Address line 1</span>
+          <input value={text("subscriberAddressLine1")} onChange={(e) => setText("subscriberAddressLine1", e.target.value)} disabled={disabled} />
+        </label>
+        <label style={cellStyle}>
+          <span style={labelStyle}>Address line 2</span>
+          <input value={text("subscriberAddressLine2")} onChange={(e) => setText("subscriberAddressLine2", e.target.value)} disabled={disabled} />
+        </label>
+        <label style={cellStyle}>
+          <span style={labelStyle}>City</span>
+          <input value={text("subscriberCity")} onChange={(e) => setText("subscriberCity", e.target.value)} disabled={disabled} />
+        </label>
+        <label style={cellStyle}>
+          <span style={labelStyle}>State</span>
+          <input value={text("subscriberState")} onChange={(e) => setText("subscriberState", e.target.value)} disabled={disabled} maxLength={2} />
+        </label>
+        <label style={cellStyle}>
+          <span style={labelStyle}>Postal code</span>
+          <input value={text("subscriberPostalCode")} onChange={(e) => setText("subscriberPostalCode", e.target.value)} disabled={disabled} />
+        </label>
+      </div>
+
+      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+        <button
+          type="button"
+          className="button"
+          disabled={!canSubmit}
+          onClick={() => onSubmit(draft, priority)}
+        >
+          Save insurance
+        </button>
+        <button type="button" className="button button-secondary" onClick={onCancel} disabled={disabled}>
+          Cancel
+        </button>
+      </div>
     </div>
   );
 }
