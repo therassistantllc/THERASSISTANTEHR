@@ -87,6 +87,7 @@ const ENUM_COLUMNS: Record<string, Record<string, string>> = {
 };
 
 let tableColumnsCache: Record<string, Set<string>> | null = null;
+let tableRowColumnsCache: Record<string, Set<string>> | null = null;
 
 /**
  * Parse `database.types.ts` and extract the `Insert:` column lists per
@@ -141,6 +142,108 @@ export class SchemaGuardError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "SchemaGuardError";
+  }
+}
+
+/**
+ * Parse `database.types.ts` and extract the `Row:` column lists per
+ * table. Rows describe what the database can return for a SELECT, so the
+ * Row set is the source of truth for validating select column lists
+ * (Task #396 — guard against drift like `era_received_date`/`check_number`
+ * silently being requested from columns that no longer exist).
+ */
+function loadTableRowColumns(): Record<string, Set<string>> {
+  if (tableRowColumnsCache) return tableRowColumnsCache;
+  const src = readFileSync(TYPES_PATH, "utf-8");
+  const lines = src.split("\n");
+  const out: Record<string, Set<string>> = {};
+  let currentTable: string | null = null;
+  let inRow = false;
+  let cols: Set<string> | null = null;
+  for (const line of lines) {
+    const tableMatch = line.match(/^ {6}([a-z_][a-z0-9_]*): \{$/);
+    if (tableMatch) {
+      currentTable = tableMatch[1];
+      inRow = false;
+      cols = null;
+      continue;
+    }
+    if (!currentTable) continue;
+    if (!inRow) {
+      if (line === "        Row: {") {
+        inRow = true;
+        cols = new Set<string>();
+      }
+      continue;
+    }
+    if (line === "        }") {
+      if (cols && cols.size > 0) out[currentTable] = cols;
+      inRow = false;
+      cols = null;
+      continue;
+    }
+    const colMatch = line.match(/^ {10}([a-z_][a-z0-9_]*):/);
+    if (colMatch && cols) cols.add(colMatch[1]);
+  }
+  for (const [table, extras] of Object.entries(EXTRA_COLUMNS)) {
+    if (!out[table]) out[table] = new Set<string>();
+    for (const c of extras) out[table].add(c);
+  }
+  tableRowColumnsCache = out;
+  return out;
+}
+
+/**
+ * Validate a PostgREST `.select(...)` column list against the live row
+ * schema. Accepts comma-separated columns, with optional embedded
+ * resource clauses like `foreign_table(col1, col2)` which are recursed
+ * into using the foreign-table name as the table. Star (`*`) and PostgREST
+ * aliases (`alias:col`) are accepted; JSON arrow operators (`col->>x`)
+ * and count expressions are tolerated.
+ *
+ * Unknown columns throw `SchemaGuardError`. Unknown tables are ignored
+ * (helper-only tables that don't exist in the real schema pass through).
+ */
+export function validateSelect(table: string, selectClause: string): void {
+  const schema = loadTableRowColumns();
+  const cols = schema[table];
+  // Split the top-level select on commas, respecting parens depth so that
+  // embedded `foreign(...)` clauses stay intact.
+  const parts: string[] = [];
+  let depth = 0;
+  let buf = "";
+  for (const ch of selectClause) {
+    if (ch === "(") depth++;
+    else if (ch === ")") depth--;
+    if (ch === "," && depth === 0) {
+      parts.push(buf);
+      buf = "";
+      continue;
+    }
+    buf += ch;
+  }
+  if (buf.trim().length > 0) parts.push(buf);
+
+  for (const raw of parts) {
+    const piece = raw.trim();
+    if (!piece || piece === "*") continue;
+    // Embedded resource: `foreign[!hint](col1, col2)` or `alias:foreign(...)`
+    const embed = piece.match(/^(?:[a-z_][a-z0-9_]*\s*:\s*)?([a-z_][a-z0-9_]*)(?:![a-z_][a-z0-9_]*)?\s*\((.*)\)$/);
+    if (embed) {
+      validateSelect(embed[1], embed[2]);
+      continue;
+    }
+    // Strip alias prefix and JSON path / cast suffix.
+    let name = piece.includes(":") ? piece.split(":").pop()!.trim() : piece;
+    name = name.split(/->>?|::/)[0].trim();
+    if (!name || !/^[a-z_][a-z0-9_]*$/.test(name)) continue;
+    if (!cols) continue; // unknown table — pass through
+    if (!cols.has(name)) {
+      throw new SchemaGuardError(
+        `[schemaGuard] select on '${table}' references unknown column '${name}'. ` +
+          `Known columns: ${[...cols].sort().join(", ")}`,
+      );
+    }
   }
 }
 

@@ -148,18 +148,53 @@ function pageSize(filters: DashboardFilters): number {
   return Math.min(MAX_LIMIT * 50, off + lim);
 }
 
+/**
+ * Pre-resolve a payer filter to the matching `era_import_batches.id`s.
+ *
+ * The dashboard's payer filter targets the X12 payer key, but on the live
+ * schema `payer_identifier` / `payer_name` live on `era_import_batches`,
+ * NOT on `era_claim_payments` (Task #396 — column drift). So whenever a
+ * payer filter is active we resolve batch ids up front and then scope ERA
+ * row + count queries with `.in("era_import_batch_id", …)`.
+ *
+ * Returns null when no payer filter is active (caller skips the predicate).
+ * Returns [] when the filter is active but matches no batches — callers
+ * should short-circuit to zero rows.
+ */
+async function resolvePayerBatchIds(
+  supabase: SupabaseClient,
+  organizationId: string,
+  payerProfileId: string | null | undefined,
+): Promise<string[] | null> {
+  if (!payerProfileId || !String(payerProfileId).trim()) return null;
+  try {
+    const { data } = await supabase
+      .from("era_import_batches")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("payer_identifier", payerProfileId)
+      .limit(5000);
+    return (data ?? []).map((r) => String((r as { id: string }).id));
+  } catch {
+    return [];
+  }
+}
+
 async function loadEraRows(
   supabase: SupabaseClient,
   filters: DashboardFilters,
   providerClaimIds: string[] | null,
+  payerBatchIds: string[] | null,
 ): Promise<DashboardRow[]> {
   if (!wantSource(filters, "era")) return [];
   // Provider filter is active but no claim ids matched → short-circuit.
   if (providerClaimIds && providerClaimIds.length === 0) return [];
+  // Payer filter is active but no batches matched → short-circuit.
+  if (payerBatchIds && payerBatchIds.length === 0) return [];
   let q = supabase
     .from("era_claim_payments")
     .select(
-      "id, organization_id, client_id, professional_claim_id, payer_name, payer_identifier, posting_status, claim_match_status, clp04_payment_amount, check_number, era_import_batch_id, created_at, era_received_date, era_import_batches(received_at)",
+      "id, organization_id, client_id, professional_claim_id, posting_status, claim_match_status, clp04_payment_amount, check_eft_number, check_issue_date, era_import_batch_id, created_at, era_import_batches(imported_at, payment_date, payer_name, payer_identifier)",
     )
     .eq("organization_id", filters.organizationId)
     .is("archived_at", null)
@@ -167,16 +202,13 @@ async function loadEraRows(
     .limit(pageSize(filters));
   if (filters.clientId) q = q.eq("client_id", filters.clientId);
   if (providerClaimIds) q = q.in("professional_claim_id", providerClaimIds);
-  // Payer filter parity: ERA carries payer_identifier (X12 payer key);
-  // we also accept payer_profile_id matches in case the org's payer
-  // profile id was mirrored into the identifier column.
-  if (filters.payerProfileId) q = q.eq("payer_identifier", filters.payerProfileId);
+  if (payerBatchIds) q = q.in("era_import_batch_id", payerBatchIds);
   if (filters.postingStatus && filters.postingStatus.length > 0) {
     q = q.in("posting_status", filters.postingStatus);
   }
-  if (filters.eftCheckNumber) q = q.ilike("check_number", `%${filters.eftCheckNumber}%`);
-  if (filters.depositDateFrom) q = q.gte("era_received_date", filters.depositDateFrom);
-  if (filters.depositDateTo) q = q.lte("era_received_date", filters.depositDateTo);
+  if (filters.eftCheckNumber) q = q.ilike("check_eft_number", `%${filters.eftCheckNumber}%`);
+  if (filters.depositDateFrom) q = q.gte("check_issue_date", filters.depositDateFrom);
+  if (filters.depositDateTo) q = q.lte("check_issue_date", filters.depositDateTo);
   if (filters.paymentDateFrom) q = q.gte("created_at", filters.paymentDateFrom);
   if (filters.paymentDateTo) q = q.lte("created_at", filters.paymentDateTo);
   if (filters.eraImportDateFrom) q = q.gte("created_at", filters.eraImportDateFrom);
@@ -184,8 +216,8 @@ async function loadEraRows(
 
   const { data, error } = await q;
   if (error) {
-    // tolerate missing era_received_date / payer_name columns by retrying once with a slim select
-    if (/era_received_date|payer_name|payer_identifier|check_number/.test(error.message)) {
+    // tolerate missing optional columns by retrying once with a slim select
+    if (/check_issue_date|check_eft_number|era_import_batches/.test(error.message)) {
       const slim = await supabase
         .from("era_claim_payments")
         .select(
@@ -204,23 +236,34 @@ async function loadEraRows(
 }
 
 function mapEraRow(r: Record<string, unknown>): DashboardRow {
-  const batch = r["era_import_batches"] as { received_at?: string | null } | null | undefined;
+  const batch = r["era_import_batches"] as
+    | {
+        imported_at?: string | null;
+        payment_date?: string | null;
+        payer_name?: string | null;
+        payer_identifier?: string | null;
+      }
+    | null
+    | undefined;
   return {
     id: `era:${String(r["id"] ?? "")}`,
     source: "era",
     paymentType: "insurance",
     postingStatus: String(r["posting_status"] ?? "pending"),
     claimMatchStatus: (r["claim_match_status"] as string | null) ?? null,
-    payerName: (r["payer_name"] as string | null) ?? null,
+    payerName: batch?.payer_name ?? null,
     clientId: (r["client_id"] as string | null) ?? null,
     clientDisplayName: null,
     professionalClaimId: (r["professional_claim_id"] as string | null) ?? null,
-    checkNumber: (r["check_number"] as string | null) ?? null,
+    checkNumber: (r["check_eft_number"] as string | null) ?? null,
     amount: Number(r["clp04_payment_amount"] ?? 0),
     depositDate:
-      (r["era_received_date"] as string | null) ?? batch?.received_at ?? null,
+      (r["check_issue_date"] as string | null) ??
+      batch?.payment_date ??
+      batch?.imported_at ??
+      null,
     paymentDate: (r["created_at"] as string | null) ?? null,
-    importedAt: batch?.received_at ?? (r["created_at"] as string | null) ?? null,
+    importedAt: batch?.imported_at ?? (r["created_at"] as string | null) ?? null,
     remainingRecoupable: null,
   };
 }
@@ -508,6 +551,7 @@ async function loadTotals(
   supabase: SupabaseClient,
   filters: DashboardFilters,
   providerClaimIds: string[] | null,
+  payerBatchIds: string[] | null,
 ): Promise<DashboardTotals> {
   const totals: DashboardTotals = {
     imported: 0,
@@ -535,13 +579,13 @@ async function loadTotals(
       .is("archived_at", null);
     if (filters.clientId) r = r.eq("client_id", filters.clientId);
     if (providerClaimIds) r = r.in("professional_claim_id", providerClaimIds);
-    if (filters.payerProfileId) r = r.eq("payer_identifier", filters.payerProfileId);
+    if (payerBatchIds) r = r.in("era_import_batch_id", payerBatchIds);
     if (filters.postingStatus && filters.postingStatus.length > 0) {
       r = r.in("posting_status", filters.postingStatus);
     }
-    if (filters.eftCheckNumber) r = r.ilike("check_number", `%${filters.eftCheckNumber}%`);
-    if (filters.depositDateFrom) r = r.gte("era_received_date", filters.depositDateFrom);
-    if (filters.depositDateTo) r = r.lte("era_received_date", filters.depositDateTo);
+    if (filters.eftCheckNumber) r = r.ilike("check_eft_number", `%${filters.eftCheckNumber}%`);
+    if (filters.depositDateFrom) r = r.gte("check_issue_date", filters.depositDateFrom);
+    if (filters.depositDateTo) r = r.lte("check_issue_date", filters.depositDateTo);
     if (filters.paymentDateFrom) r = r.gte("created_at", filters.paymentDateFrom);
     if (filters.paymentDateTo) r = r.lte("created_at", filters.paymentDateTo);
     if (filters.eraImportDateFrom) r = r.gte("created_at", filters.eraImportDateFrom);
@@ -758,18 +802,17 @@ export async function queryPaymentsDashboard(
   supabase: SupabaseClient,
   filters: DashboardFilters,
 ): Promise<DashboardResult> {
-  const providerClaimIds = await resolveProviderClaimIds(
-    supabase,
-    filters.organizationId,
-    filters.providerNpi,
-  );
+  const [providerClaimIds, payerBatchIds] = await Promise.all([
+    resolveProviderClaimIds(supabase, filters.organizationId, filters.providerNpi),
+    resolvePayerBatchIds(supabase, filters.organizationId, filters.payerProfileId),
+  ]);
   const [eraRows, manualRows, patientRows, totals] = await Promise.all([
-    loadEraRows(supabase, filters, providerClaimIds),
+    loadEraRows(supabase, filters, providerClaimIds, payerBatchIds),
     loadManualRows(supabase, filters, providerClaimIds),
     loadPatientRows(supabase, filters, providerClaimIds),
     // Totals run independently against the FULL filtered population so
     // KPIs don't shrink to the visible page.
-    loadTotals(supabase, filters, providerClaimIds),
+    loadTotals(supabase, filters, providerClaimIds, payerBatchIds),
   ]);
   const sorted = [...eraRows, ...manualRows, ...patientRows].sort((a, b) => {
     const ad = a.paymentDate ?? a.depositDate ?? "";
