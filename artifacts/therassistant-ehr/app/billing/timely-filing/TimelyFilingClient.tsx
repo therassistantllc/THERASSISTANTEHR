@@ -265,29 +265,27 @@ function AttachProofModal({
   const [kind, setKind] = useState("clearinghouse_trace");
   const [reference, setReference] = useState("");
   const [description, setDescription] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function save() {
-    if (!reference.trim() && !description.trim()) {
-      setError("Provide a reference or description");
+    if (!reference.trim() && !description.trim() && files.length === 0) {
+      setError("Provide a reference, description, or file");
       return;
     }
     setSaving(true);
     setError(null);
-    const res = await fetch(
-      `/api/billing/claims/${row.id}/attach-proof`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          organizationId,
-          kind,
-          reference: reference.trim(),
-          description: description.trim(),
-        }),
-      },
-    );
+    const form = new FormData();
+    form.set("organizationId", organizationId);
+    form.set("kind", kind);
+    form.set("reference", reference.trim());
+    form.set("description", description.trim());
+    for (const f of files) form.append("files", f, f.name);
+    const res = await fetch(`/api/billing/claims/${row.id}/attach-proof`, {
+      method: "POST",
+      body: form,
+    });
     const json = await res.json().catch(() => ({}));
     setSaving(false);
     if (!res.ok || json?.success === false) {
@@ -333,6 +331,37 @@ function AttachProofModal({
           rows={3}
           style={fieldInput}
         />
+      </div>
+      <div style={{ marginTop: 12 }}>
+        <label style={fieldLabel}>
+          Supporting documents (PDF, image — up to 25 MB each)
+        </label>
+        <input
+          type="file"
+          multiple
+          accept="application/pdf,image/*"
+          onChange={(e) =>
+            setFiles(e.target.files ? Array.from(e.target.files) : [])
+          }
+          style={{ ...fieldInput, padding: 6 }}
+        />
+        {files.length > 0 ? (
+          <ul
+            style={{
+              margin: "6px 0 0",
+              padding: 0,
+              listStyle: "none",
+              fontSize: 12,
+              color: "#475569",
+            }}
+          >
+            {files.map((f, i) => (
+              <li key={i}>
+                {f.name} ({Math.max(1, Math.round(f.size / 1024))} KB)
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </div>
       {error ? (
         <div style={{ color: "#B91C1C", marginTop: 8, fontSize: 13 }}>{error}</div>
@@ -527,6 +556,144 @@ function NotesPanel({
           <div style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{n.body}</div>
         </div>
       ))}
+    </div>
+  );
+}
+
+type ProofFile = { name: string; mime: string; size: number; path: string };
+
+function parseProofNote(body: string): {
+  header: string;
+  files: ProofFile[];
+} {
+  const match = body.match(/^Files:\s*(\[.*\])\s*$/m);
+  if (!match) return { header: body, files: [] };
+  let files: ProofFile[] = [];
+  try {
+    const parsed = JSON.parse(match[1]);
+    if (Array.isArray(parsed)) {
+      files = parsed.filter(
+        (f): f is ProofFile =>
+          !!f &&
+          typeof f.name === "string" &&
+          typeof f.path === "string" &&
+          typeof f.mime === "string" &&
+          typeof f.size === "number",
+      );
+    }
+  } catch {
+    files = [];
+  }
+  const header = body.replace(match[0], "").trimEnd();
+  return { header, files };
+}
+
+function formatBytes(bytes: number) {
+  if (!bytes) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function ProofPanel({
+  claimId,
+  organizationId,
+  bumpKey,
+}: {
+  claimId: string;
+  organizationId: string;
+  bumpKey: number;
+}) {
+  const [notes, setNotes] = useState<Note[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setNotes(null);
+    setError(null);
+    fetch(
+      `/api/billing/claims/${claimId}/notes?organizationId=${encodeURIComponent(organizationId)}`,
+      { cache: "no-store" },
+    )
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return;
+        if (j?.success === false) setError(j.error || "Failed");
+        else setNotes((j?.notes ?? []) as Note[]);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Failed");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [claimId, organizationId, bumpKey]);
+
+  if (error) return <div style={{ color: "#B91C1C", fontSize: 13 }}>{error}</div>;
+  if (notes == null)
+    return <div style={{ color: "#94A3B8", fontSize: 13 }}>Loading…</div>;
+  const proofNotes = notes.filter((n) =>
+    n.body.startsWith("[Proof of timely filing]"),
+  );
+  if (proofNotes.length === 0)
+    return (
+      <div style={{ color: "#94A3B8", fontSize: 13 }}>Nothing recorded yet.</div>
+    );
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {proofNotes.map((n) => {
+        const { header, files } = parseProofNote(n.body);
+        return (
+          <div
+            key={n.id}
+            style={{
+              border: "1px solid #E5E7EB",
+              borderRadius: 6,
+              padding: 10,
+              background: "#F9FAFB",
+            }}
+          >
+            <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 4 }}>
+              {n.author_display_name ?? "Staff"} ·{" "}
+              {formatDateTime(n.created_at)}
+            </div>
+            <div style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{header}</div>
+            {files.length > 0 ? (
+              <ul
+                style={{
+                  margin: "8px 0 0",
+                  padding: 0,
+                  listStyle: "none",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 4,
+                }}
+              >
+                {files.map((f, i) => {
+                  const url = `/api/billing/claims/${claimId}/proof-files?organizationId=${encodeURIComponent(organizationId)}&path=${encodeURIComponent(f.path)}`;
+                  return (
+                    <li key={i} style={{ fontSize: 13 }}>
+                      <a
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        download={f.name}
+                        style={{ color: "#1D4ED8", textDecoration: "underline" }}
+                      >
+                        {f.name}
+                      </a>{" "}
+                      <span style={{ color: "#64748B", fontSize: 12 }}>
+                        ({f.mime || "file"} · {formatBytes(f.size)})
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1101,12 +1268,12 @@ export default function TimelyFilingClient() {
             <div>
               <div style={{ marginBottom: 10, fontSize: 12, color: "#475569" }}>
                 Anything attached via “Attach proof” appears here.
+                Uploaded receipts and EOBs are downloadable.
               </div>
-              <NotesPanel
+              <ProofPanel
                 claimId={selectedRow.id}
                 organizationId={organizationId}
                 bumpKey={bumpKey}
-                filter={(n) => n.body.startsWith("[Proof of timely filing]")}
               />
             </div>
           ) : null,
