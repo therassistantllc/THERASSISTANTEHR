@@ -7,13 +7,12 @@ import type { NextConfig } from "next";
  * Source = legacy /billing/<queue> route
  * Target = /billing/claims?tab=<lifecycle>&filter=<chip>
  *
- * The five lifecycle tabs are: needs_attention, submitted, denials,
- * follow_up, resolutions. The filter chip ids are defined in
- * components/billing/ClaimsWorkspace.tsx.
+ * Lifecycle tabs: needs_attention, submitted, denials, follow_up,
+ * resolutions. Chip ids are declared in components/billing/ClaimsWorkspace.tsx.
  *
- * Patient-balance, payments, and ERA routes are NOT redirected — they
- * live under the Payments and Patient Balances nav items and still
- * own their own UIs.
+ * Payments-class routes (era-import, paper-checks, partial-payments,
+ * unposted-payments, vcc, reconciliation-exceptions, payments) live
+ * under the Payments nav item and are intentionally NOT redirected.
  *
  * The detail route /billing/claims/[claimId] is excluded (it's the
  * per-claim drill-in for the new workspace, not a legacy queue).
@@ -37,28 +36,37 @@ const claimRedirects: Array<{ from: string; tab: string; filter?: string }> = [
   { from: "/billing/timely-filing", tab: "needs_attention", filter: "timely_filing" },
   { from: "/billing/fax-queue", tab: "needs_attention" },
   { from: "/billing/adjustments-review", tab: "needs_attention" },
+  { from: "/billing/blocked-claims", tab: "needs_attention" },
   // ── Submitted ────────────────────────────────────────────────────
   { from: "/billing/837p-batches", tab: "submitted" },
   { from: "/billing/batches", tab: "submitted" },
   { from: "/billing/submitted-claims", tab: "submitted" },
-  { from: "/billing/payer-received", tab: "submitted" },
+  { from: "/billing/payer-received", tab: "submitted", filter: "awaiting_payer" },
   { from: "/billing/transmission-failures", tab: "submitted" },
   // ── Denials ──────────────────────────────────────────────────────
-  { from: "/billing/denials-by-carc", tab: "denials" },
-  { from: "/billing/denials-by-rarc", tab: "denials" },
+  { from: "/billing/denials", tab: "denials" },
+  { from: "/billing/denials-by-carc", tab: "denials", filter: "by_carc" },
+  { from: "/billing/denials-by-rarc", tab: "denials", filter: "by_rarc" },
   { from: "/billing/claim-submission", tab: "denials" },
-  { from: "/billing/partial-denials", tab: "denials" },
-  { from: "/billing/medical-necessity", tab: "denials" },
-  { from: "/billing/medical-review", tab: "denials" },
+  { from: "/billing/partial-denials", tab: "denials", filter: "partial" },
+  { from: "/billing/medical-necessity", tab: "denials", filter: "medical_necessity" },
+  { from: "/billing/medical-review", tab: "denials", filter: "medical_necessity" },
   { from: "/billing/aging", tab: "denials" },
   { from: "/billing/payer-rejections", tab: "denials" },
-  { from: "/billing/underpayments", tab: "denials" },
+  { from: "/billing/underpayments", tab: "denials", filter: "underpayments" },
   // ── Follow-Up ────────────────────────────────────────────────────
-  { from: "/billing/appeals", tab: "follow_up" },
-  { from: "/billing/corrected-claims", tab: "follow_up" },
-  { from: "/billing/resubmissions", tab: "follow_up" },
-  { from: "/billing/cob-issues", tab: "follow_up" },
-  { from: "/billing/secondary-billing", tab: "follow_up" },
+  { from: "/billing/appeals", tab: "follow_up", filter: "appeals" },
+  { from: "/billing/corrected-claims", tab: "follow_up", filter: "corrected" },
+  { from: "/billing/resubmissions", tab: "follow_up", filter: "resubmissions" },
+  { from: "/billing/cob-issues", tab: "follow_up", filter: "cob" },
+  { from: "/billing/secondary-billing", tab: "follow_up", filter: "secondary" },
+  // ── Resolutions (patient-balance + write-off class) ──────────────
+  { from: "/billing/patient-responsibility", tab: "resolutions", filter: "patient_resp" },
+  { from: "/billing/patient-billing", tab: "resolutions", filter: "patient_resp" },
+  { from: "/billing/bad-debt-review", tab: "resolutions", filter: "bad_debt" },
+  { from: "/billing/write-offs", tab: "resolutions", filter: "write_offs" },
+  { from: "/billing/credit-balances", tab: "resolutions", filter: "credit_balance" },
+  { from: "/billing/recoupments", tab: "resolutions", filter: "recoupments" },
 ];
 
 const nextConfig: NextConfig = {
