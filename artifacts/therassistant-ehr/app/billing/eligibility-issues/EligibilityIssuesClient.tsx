@@ -106,6 +106,13 @@ export default function EligibilityIssuesClient() {
   const [activeTab, setActiveTab] = useState<EligibilityIssueType>("inactive_coverage");
   const [filterValues, setFilterValues] = useState<Record<string, string>>({});
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
+  // Deep-link target: when opened from My Inbox we receive `?appointmentId=…`
+  // and need to jump the user straight to that row (right tab, scrolled into
+  // view, detail drawer open) once rows arrive.
+  const [pendingAppointmentId, setPendingAppointmentId] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("appointmentId");
+  });
   const [actingId, setActingId] = useState<string | null>(null);
   const [insuranceEditRow, setInsuranceEditRow] = useState<EligibilityIssueRow | null>(null);
 
@@ -159,6 +166,37 @@ export default function EligibilityIssuesClient() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
   }, [load]);
+
+  // Deep-link handler: once rows arrive, jump to the row whose appointment
+  // matches `?appointmentId=` from My Inbox. Switches to the row's issue-type
+  // tab, clears any filter that would hide it, selects it (opens the detail
+  // drawer), and scrolls it into view. Runs once per inbound deep link.
+  useEffect(() => {
+    if (!pendingAppointmentId) return;
+    if (loading || rows.length === 0) return;
+    const match = rows.find((r) => r.appointmentId === pendingAppointmentId);
+    if (!match) {
+      setPendingAppointmentId(null);
+      return;
+    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setActiveTab(match.issueType);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setFilterValues((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSelectedRowId(match.id);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPendingAppointmentId(null);
+    // Wait for the tab/filter state to flush, then scroll.
+    const raf1 = requestAnimationFrame(() => {
+      const raf2 = requestAnimationFrame(() => {
+        const el = document.getElementById(`wqrow-${match.id}`);
+        el?.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+      return () => cancelAnimationFrame(raf2);
+    });
+    return () => cancelAnimationFrame(raf1);
+  }, [pendingAppointmentId, rows, loading]);
 
   // ── Filter rail ─────────────────────────────────────────────────────────
   const payerOptions = useMemo(() => {
