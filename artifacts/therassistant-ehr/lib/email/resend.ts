@@ -340,6 +340,11 @@ export type SendEligibilityRoutedEmailInput = {
   kind: "clinician" | "admin";
   note: string | null;
   inboxUrl: string;
+  // Task #702: scheduled re-ping for items still open past the threshold.
+  // Only affects the subject line so the assignee can spot it in their
+  // inbox; body + opt-out preference are identical to the first send.
+  isReminder?: boolean;
+  reminderNumber?: number;
 };
 
 export type SendEligibilityRoutedEmailResult =
@@ -379,10 +384,13 @@ export async function sendEligibilityRoutedEmail(
     : null;
   const noteLine = input.note?.trim() ? `Note: ${input.note.trim()}` : null;
 
-  const subject =
+  const baseSubject =
     input.kind === "clinician"
       ? "Action needed: verify patient insurance"
       : "Action needed: resolve eligibility issue";
+  const subject = input.isReminder
+    ? `Reminder${input.reminderNumber && input.reminderNumber > 1 ? ` (#${input.reminderNumber})` : ""}: ${baseSubject}`
+    : baseSubject;
 
   const lines = [
     `Hello ${safeAssignee},`,

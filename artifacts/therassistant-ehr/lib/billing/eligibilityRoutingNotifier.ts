@@ -60,6 +60,13 @@ export interface DeliverEligibilityRoutingNotificationArgs {
   patientName: string | null;
   appointmentAt: string | null;
   note: string;
+  // Task #702: when true, prefix the email subject with "Reminder" so the
+  // assignee can tell at a glance this is a follow-up nudge rather than the
+  // initial routing. The body + opt-out preference are identical to the
+  // initial send, on purpose — we don't want a second class of "you can't
+  // opt out of reminders" emails.
+  isReminder?: boolean;
+  reminderNumber?: number;
 }
 
 export async function deliverEligibilityRoutingNotification(
@@ -128,6 +135,8 @@ export async function deliverEligibilityRoutingNotification(
     kind: args.kind,
     note: args.note,
     inboxUrl: buildInboxUrl(),
+    isReminder: args.isReminder ?? false,
+    reminderNumber: args.reminderNumber,
   });
 
   if (result.ok) {
