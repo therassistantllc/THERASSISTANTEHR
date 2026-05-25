@@ -124,6 +124,7 @@ interface AttemptBody {
   number_dialed?: string | null;
   disposition?: string;
   payer_profile_id?: string | null;
+  comment?: string | null;
 }
 
 export async function POST(
@@ -156,6 +157,7 @@ export async function POST(
     }
 
     const numberDialed = body.number_dialed ? text(body.number_dialed) : null;
+    const comment = body.comment ? text(body.comment).slice(0, 240) : "";
 
     const supabase = createServerSupabaseAdminClient();
     if (!supabase) {
@@ -197,9 +199,10 @@ export async function POST(
       ? ` ${numberDialed} (${channelLabel})`
       : ` (${channelLabel})`;
     const dialedishVerbs = new Set(["dialed", "sent_fax"]);
-    const noteBody = dialedishVerbs.has(disposition)
+    const baseNoteBody = dialedishVerbs.has(disposition)
       ? `${verb}${numberPart}`
       : `${verb} — ${channelLabel}${numberDialed ? ` ${numberDialed}` : ""}`;
+    const noteBody = comment ? `${baseNoteBody} — ${comment}` : baseNoteBody;
 
     const { data: insertedNote, error: noteError } = await insertClaimNote(
       supabase,

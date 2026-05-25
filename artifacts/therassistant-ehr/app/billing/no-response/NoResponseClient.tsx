@@ -407,11 +407,13 @@ function CallPayerModal({
     kind: "phone" | "fax";
   } | null>(null);
   const [callLogged, setCallLogged] = useState(false);
+  const [comment, setComment] = useState("");
 
   async function postAttempt(args: {
     channel: CallChannel;
     number: string | null;
     disposition: CallDisposition;
+    comment?: string;
   }): Promise<boolean> {
     setLogging(true);
     setError(null);
@@ -425,6 +427,7 @@ function CallPayerModal({
           number_dialed: args.number,
           disposition: args.disposition,
           payer_profile_id: row.payer_profile_id,
+          comment: args.comment ?? null,
         }),
       });
       const json = await res.json().catch(() => ({}));
@@ -465,11 +468,14 @@ function CallPayerModal({
   }
 
   async function handleDisposition(disp: CallDisposition) {
-    await postAttempt({
+    const trimmed = comment.trim();
+    const ok = await postAttempt({
       channel: lastContact?.channel ?? "other",
       number: lastContact?.number ?? null,
       disposition: disp,
+      comment: trimmed || undefined,
     });
+    if (ok) setComment("");
   }
 
   function ContactLink({
@@ -578,6 +584,25 @@ function CallPayerModal({
             >
               Log disposition
             </div>
+            <input
+              type="text"
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              placeholder="Optional comment (rep name, ref #, what they said)"
+              maxLength={240}
+              disabled={logging}
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                border: "1px solid #CBD5E1",
+                borderRadius: 6,
+                padding: "6px 10px",
+                fontSize: 12,
+                marginBottom: 8,
+                background: "#FFFFFF",
+                color: "#0F172A",
+              }}
+            />
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {DISPOSITION_OPTIONS.map((d) => (
                 <button
