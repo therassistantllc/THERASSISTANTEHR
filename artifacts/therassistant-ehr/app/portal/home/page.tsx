@@ -70,6 +70,16 @@ type PortalData = {
       amount: number;
       paid: number;
       balance: number;
+      /**
+       * Set when a recent autopay attempt failed (card declined, 3DS
+       * required, etc.) so the UI can surface a "Fix payment" banner
+       * and short-circuit the partial-amount picker.
+       */
+      autopayFailure: {
+        reason: "authentication_required" | "card_declined" | "other";
+        message: string;
+        failedAt: string | null;
+      } | null;
     }>;
   };
   documents: Array<{
@@ -166,14 +176,60 @@ async function loadPortalData(
   }));
 
   const invoiceRows = (invoicesRes.data ?? []) as Row[];
-  const invoices = invoiceRows.map((r) => ({
-    id: value(r.id),
-    number: value(r.invoice_number) || value(r.id).slice(0, 8),
-    status: value(r.invoice_status),
-    amount: Number(r.patient_responsibility_amount ?? 0) || 0,
-    paid: Number(r.paid_amount ?? 0) || 0,
-    balance: Number(r.balance_amount ?? 0) || 0,
-  }));
+  const invoiceIds = invoiceRows.map((r) => value(r.id)).filter(Boolean);
+
+  // Task #674: surface recent autopay-charge failures so the patient
+  // can self-serve. Source-of-truth = open `autopay_charge_failed` rows
+  // filed by attemptAutopayForInvoice; we also look at the most recent
+  // failed payment_invoice_payments row for the human-readable reason.
+  type FailureInfo = {
+    reason: "authentication_required" | "card_declined" | "other";
+    message: string;
+    failedAt: string | null;
+  };
+  const failuresByInvoice = new Map<string, FailureInfo>();
+  if (invoiceIds.length > 0) {
+    const { data: wqRows } = await supabase
+      .from("workqueue_items")
+      .select("context_payload, created_at, status")
+      .eq("organization_id", organizationId)
+      .eq("work_type", "autopay_charge_failed")
+      .in("status", ["open", "in_progress", "blocked"])
+      .is("archived_at", null)
+      .order("created_at", { ascending: false })
+      .limit(100);
+    for (const row of (wqRows ?? []) as Row[]) {
+      const ctx = (row.context_payload ?? {}) as Record<string, unknown>;
+      const invId = String(ctx.patient_invoice_id ?? "");
+      if (!invId || !invoiceIds.includes(invId)) continue;
+      if (failuresByInvoice.has(invId)) continue; // newest wins (ordered desc)
+      const code = String(ctx.error_code ?? "");
+      const reason: FailureInfo["reason"] =
+        code === "authentication_required"
+          ? "authentication_required"
+          : code === "card_declined"
+            ? "card_declined"
+            : "other";
+      failuresByInvoice.set(invId, {
+        reason,
+        message: String(ctx.error_message ?? "Your card was declined."),
+        failedAt: (row.created_at as string | null) ?? null,
+      });
+    }
+  }
+
+  const invoices = invoiceRows.map((r) => {
+    const id = value(r.id);
+    return {
+      id,
+      number: value(r.invoice_number) || id.slice(0, 8),
+      status: value(r.invoice_status),
+      amount: Number(r.patient_responsibility_amount ?? 0) || 0,
+      paid: Number(r.paid_amount ?? 0) || 0,
+      balance: Number(r.balance_amount ?? 0) || 0,
+      autopayFailure: failuresByInvoice.get(id) ?? null,
+    };
+  });
   const total = invoices.reduce((sum, inv) => sum + inv.balance, 0);
 
   const documents = ((docsRes.data ?? []) as Row[]).map((r) => ({
@@ -222,11 +278,13 @@ async function payInvoiceAction(formData: FormData) {
     amountDollars = parsed;
   }
   const baseUrl = await resolveAppBaseUrl();
+  const isRecovery = String(formData.get("isRecovery") ?? "").trim() === "1";
   const result = await startInvoiceCheckout({
     session: session!,
     invoiceId,
     baseUrl,
     amountDollars,
+    isRecovery,
   });
   if (!result.ok) {
     redirect(
@@ -326,53 +384,129 @@ export default async function PatientPortalHomePage() {
             ? "You have no open invoices."
             : `${balance.invoices.length} open invoice${balance.invoices.length === 1 ? "" : "s"}.`}
         </div>
-        {balance.invoices.map((inv) => (
-          <div key={inv.id} className="portal-item-row">
-            <div>
-              <div className="portal-item-title">Invoice #{inv.number}</div>
-              <div className="muted" style={{ fontSize: 13 }}>
-                {formatMoney(inv.amount)} billed · {formatMoney(inv.paid)} paid
-              </div>
-            </div>
-            <div className="portal-item-right">
-              <div className="portal-item-title" style={{ fontVariantNumeric: "tabular-nums" }}>
-                {formatMoney(inv.balance)}
-              </div>
-              {inv.balance > 0 ? (
-                <details className="portal-pay-details">
-                  <summary
-                    className="button portal-pay-summary"
-                    style={{ listStyle: "none", userSelect: "none" }}
+        {balance.invoices.map((inv) => {
+          const fail = inv.autopayFailure;
+          const bannerHeadline = fail
+            ? fail.reason === "authentication_required"
+              ? "Your bank asked us to verify this payment"
+              : "Your card on file was declined"
+            : null;
+          const bannerBody = fail
+            ? fail.reason === "authentication_required"
+              ? "Tap Fix payment to confirm this charge with your bank. We'll re-bill your invoice as soon as you finish."
+              : "Tap Fix payment to update the card on file (or use a different card). We'll charge the new card right away."
+            : null;
+          return (
+            <div
+              key={inv.id}
+              className="portal-item-row"
+              style={
+                fail
+                  ? {
+                      background: "rgba(220, 38, 38, 0.06)",
+                      borderRadius: 8,
+                      padding: 12,
+                      marginBottom: 8,
+                      borderLeft: "3px solid #dc2626",
+                    }
+                  : undefined
+              }
+            >
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="portal-item-title">Invoice #{inv.number}</div>
+                <div className="muted" style={{ fontSize: 13 }}>
+                  {formatMoney(inv.amount)} billed · {formatMoney(inv.paid)} paid
+                </div>
+                {fail ? (
+                  <div
+                    role="alert"
+                    style={{
+                      marginTop: 8,
+                      fontSize: 13,
+                      color: "#7f1d1d",
+                      lineHeight: 1.45,
+                    }}
                   >
-                    Pay
-                  </summary>
-                  <form action={payInvoiceAction} className="portal-pay-picker">
-                    <input type="hidden" name="invoiceId" value={inv.id} />
-                    <label htmlFor={`pay-amount-${inv.id}`}>
-                      Amount to pay (max {formatMoney(inv.balance)})
-                    </label>
-                    <div className="portal-pay-amount-row">
-                      <span>$</span>
+                    <div style={{ fontWeight: 600 }}>{bannerHeadline}</div>
+                    <div>{bannerBody}</div>
+                    {fail.failedAt ? (
+                      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                        Last attempt {formatDateTime(fail.failedAt)}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+              <div className="portal-item-right">
+                <div className="portal-item-title" style={{ fontVariantNumeric: "tabular-nums" }}>
+                  {formatMoney(inv.balance)}
+                </div>
+                {inv.balance > 0 ? (
+                  fail ? (
+                    <form action={payInvoiceAction} style={{ marginTop: 6 }}>
+                      <input type="hidden" name="invoiceId" value={inv.id} />
                       <input
-                        id={`pay-amount-${inv.id}`}
-                        type="number"
+                        type="hidden"
                         name="amount"
-                        min="0.50"
-                        max={inv.balance.toFixed(2)}
-                        step="0.01"
-                        defaultValue={inv.balance.toFixed(2)}
-                        required
+                        value={inv.balance.toFixed(2)}
                       />
-                    </div>
-                    <button type="submit" className="button">
-                      Continue to checkout
-                    </button>
-                  </form>
-                </details>
-              ) : null}
+                      {/* Task #674: tells the server action to bind the
+                          Checkout to the patient's Stripe Customer with
+                          setup_future_usage='off_session' so the card
+                          the patient pays with also becomes the new
+                          saved card on file. Without this flag the next
+                          autopay cycle would re-use the stale card. */}
+                      <input type="hidden" name="isRecovery" value="1" />
+                      <button
+                        type="submit"
+                        className="button"
+                        style={{
+                          background: "#dc2626",
+                          borderColor: "#dc2626",
+                          color: "white",
+                        }}
+                        aria-label={`Fix payment for invoice ${inv.number}`}
+                      >
+                        Fix payment
+                      </button>
+                    </form>
+                  ) : (
+                    <details className="portal-pay-details">
+                      <summary
+                        className="button portal-pay-summary"
+                        style={{ listStyle: "none", userSelect: "none" }}
+                      >
+                        Pay
+                      </summary>
+                      <form action={payInvoiceAction} className="portal-pay-picker">
+                        <input type="hidden" name="invoiceId" value={inv.id} />
+                        <label htmlFor={`pay-amount-${inv.id}`}>
+                          Amount to pay (max {formatMoney(inv.balance)})
+                        </label>
+                        <div className="portal-pay-amount-row">
+                          <span>$</span>
+                          <input
+                            id={`pay-amount-${inv.id}`}
+                            type="number"
+                            name="amount"
+                            min="0.50"
+                            max={inv.balance.toFixed(2)}
+                            step="0.01"
+                            defaultValue={inv.balance.toFixed(2)}
+                            required
+                          />
+                        </div>
+                        <button type="submit" className="button">
+                          Continue to checkout
+                        </button>
+                      </form>
+                    </details>
+                  )
+                ) : null}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </section>
 
       {/* Documents */}

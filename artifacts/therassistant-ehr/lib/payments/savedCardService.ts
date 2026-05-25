@@ -25,6 +25,7 @@ import {
   detachConnectPaymentMethod,
   getStripePublishableKey,
   getStripeSecretKey,
+  retrieveConnectPaymentIntent,
   retrieveConnectPaymentMethod,
   retrieveConnectSetupIntent,
   StripeRequestError,
@@ -349,6 +350,144 @@ export async function confirmSavedCard(
   } catch (err) {
     return mapStripeError(err);
   }
+}
+
+/**
+ * Refresh `clients.stripe_payment_method_*` from a successful
+ * Checkout PaymentIntent (Task #674 — patient "Fix payment" recovery).
+ *
+ * Called from the Stripe webhook when `metadata.is_recovery === 'true'`
+ * AND `metadata.save_card_on_success === 'true'`. The Checkout Session
+ * was bound to the client's customer with `setup_future_usage='off_session'`,
+ * so the PI has a reusable payment_method attached to that customer.
+ * We mirror it onto the client row so the next autopay cycle uses it
+ * instead of the stale card.
+ *
+ * Best-effort: returns a status string but never throws. Failures are
+ * logged and surfaced to the caller (the webhook) so they can decide
+ * what to do (we just log + continue — the WQ row for the biller is
+ * still safety-net).
+ */
+export async function persistRecoveredSavedCardFromPaymentIntent(input: {
+  organizationId: string;
+  clientId: string;
+  paymentIntentId: string;
+  supabase?: SupabaseAdmin | null;
+  /** Injection seam for tests — defaults to the real Stripe helpers. */
+  deps?: {
+    retrievePaymentIntent?: typeof retrieveConnectPaymentIntent;
+    retrievePaymentMethod?: typeof retrieveConnectPaymentMethod;
+    detachPaymentMethod?: typeof detachConnectPaymentMethod;
+  };
+}): Promise<{
+  ok: boolean;
+  status:
+    | "saved"
+    | "no_change"
+    | "no_payment_intent"
+    | "no_payment_method"
+    | "client_not_found"
+    | "no_connect_account"
+    | "stripe_error"
+    | "db_error";
+  message?: string;
+  paymentMethodId?: string | null;
+}> {
+  const supabase = input.supabase ?? createServerSupabaseAdminClient();
+  if (!supabase) {
+    return { ok: false, status: "db_error", message: "Database unavailable." };
+  }
+  const retrievePI = input.deps?.retrievePaymentIntent ?? retrieveConnectPaymentIntent;
+  const retrievePM = input.deps?.retrievePaymentMethod ?? retrieveConnectPaymentMethod;
+  const detachPM = input.deps?.detachPaymentMethod ?? detachConnectPaymentMethod;
+
+  const client = await loadClient(supabase, input.organizationId, input.clientId);
+  if (!client) return { ok: false, status: "client_not_found", message: "Patient not found." };
+  if (!client.stripe_connect_account_id) {
+    return {
+      ok: false,
+      status: "no_connect_account",
+      message: "Client is not pinned to a connected Stripe account.",
+    };
+  }
+
+  let paymentMethodId: string | null = null;
+  try {
+    const pi = await retrievePI({
+      connectedAccountId: client.stripe_connect_account_id,
+      paymentIntentId: input.paymentIntentId,
+    });
+    if (!pi) return { ok: false, status: "no_payment_intent" };
+    paymentMethodId = (pi.payment_method ?? "").trim() || null;
+  } catch (err) {
+    return {
+      ok: false,
+      status: "stripe_error",
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+  if (!paymentMethodId) {
+    return { ok: false, status: "no_payment_method" };
+  }
+  if (client.stripe_payment_method_id === paymentMethodId) {
+    return { ok: true, status: "no_change", paymentMethodId };
+  }
+
+  let brand: string | null = null;
+  let last4: string | null = null;
+  let expMonth: number | null = null;
+  let expYear: number | null = null;
+  try {
+    const pm = await retrievePM({
+      connectedAccountId: client.stripe_connect_account_id,
+      paymentMethodId,
+    });
+    brand = pm.card?.brand ?? null;
+    last4 = pm.card?.last4 ?? null;
+    expMonth = pm.card?.exp_month ?? null;
+    expYear = pm.card?.exp_year ?? null;
+  } catch (err) {
+    return {
+      ok: false,
+      status: "stripe_error",
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  // Detach the prior PM best-effort so we don't accrue orphans.
+  if (
+    client.stripe_payment_method_id &&
+    client.stripe_payment_method_id !== paymentMethodId
+  ) {
+    try {
+      await detachPM({
+        connectedAccountId: client.stripe_connect_account_id,
+        paymentMethodId: client.stripe_payment_method_id,
+      });
+    } catch {
+      // ignore — already detached / unknown
+    }
+  }
+
+  const nowIso = new Date().toISOString();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sb = supabase as unknown as { from: (t: string) => any };
+  const { error: upErr } = await sb
+    .from("clients")
+    .update({
+      stripe_payment_method_id: paymentMethodId,
+      stripe_payment_method_brand: brand,
+      stripe_payment_method_last4: last4,
+      stripe_payment_method_exp_month: expMonth,
+      stripe_payment_method_exp_year: expYear,
+      stripe_payment_method_saved_at: nowIso,
+    })
+    .eq("organization_id", input.organizationId)
+    .eq("id", client.id);
+  if (upErr) {
+    return { ok: false, status: "db_error", message: upErr.message };
+  }
+  return { ok: true, status: "saved", paymentMethodId };
 }
 
 export async function removeSavedCard(input: {

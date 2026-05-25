@@ -234,6 +234,39 @@ test("autopay on + Stripe declined → failed payment row + failure audit", asyn
   assert.ok(auditRow);
   const md = auditRow!.row.event_metadata as Record<string, unknown>;
   assert.equal(md.error_code, "card_declined");
+
+  // Task #674: filing an autopay_charge_failed WQ row so the portal can
+  // surface the "Fix payment" banner and a biller can chase it.
+  const wqRow = inserted.find((i) => i.table === "workqueue_items");
+  assert.ok(wqRow, "expected an autopay_charge_failed workqueue_items row");
+  assert.equal(wqRow!.row.work_type, "autopay_charge_failed");
+  assert.equal(wqRow!.row.status, "open");
+  assert.equal(wqRow!.row.source_object_id, "inv-1");
+  const ctx = wqRow!.row.context_payload as Record<string, unknown>;
+  assert.equal(ctx.patient_invoice_id, "inv-1");
+  assert.equal(ctx.error_code, "card_declined");
+});
+
+test("dedupes the autopay_charge_failed WQ row across repeat failures", async () => {
+  seedInvoiceAndClient({ autopay: true });
+  chargeOutcome = {
+    ok: false,
+    code: "card_declined",
+    message: "Your card was declined.",
+  };
+  await attemptAutopayForInvoice({
+    organizationId: "org-1",
+    patientInvoiceId: "inv-1",
+  });
+  // A second failure for the SAME invoice should not stack another WQ
+  // row (the open one is enough; biller / portal would just see "still
+  // failing" and act once).
+  await attemptAutopayForInvoice({
+    organizationId: "org-1",
+    patientInvoiceId: "inv-1",
+  });
+  const wqRows = inserted.filter((i) => i.table === "workqueue_items");
+  assert.equal(wqRows.length, 1, "expected exactly one open WQ row per invoice");
 });
 
 test("invoice already paid → skipped_no_balance, no side effects", async () => {

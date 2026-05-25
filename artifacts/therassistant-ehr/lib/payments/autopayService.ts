@@ -72,6 +72,185 @@ interface InvoiceAutopayRow {
 const AUTOPAY_SUCCESS_EVT = "patient_billing_autopay_succeeded";
 const AUTOPAY_FAILURE_EVT = "patient_billing_autopay_failed";
 
+/** Work-type for the WQ row a failed autopay attempt files. */
+export const AUTOPAY_CHARGE_FAILED_WORK_TYPE = "autopay_charge_failed";
+
+/**
+ * Find an existing open `autopay_charge_failed` workqueue row for an
+ * invoice. Used both to dedupe filings and to close on self-service
+ * recovery (Task #674).
+ *
+ * Lookup is by org + work_type + open status + context_payload.patient_invoice_id.
+ * We can't put `patient_invoice` into the source_object_type enum, so the
+ * invoice id lives in context_payload — see workqueue-items-schema notes.
+ */
+async function findOpenAutopayFailureWqItem(
+  supabase: SupabaseAdmin,
+  organizationId: string,
+  patientInvoiceId: string,
+): Promise<{ id: string } | null> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sb = supabase as unknown as { from: (t: string) => any };
+  const { data } = await sb
+    .from("workqueue_items")
+    .select("id, context_payload, status")
+    .eq("organization_id", organizationId)
+    .eq("work_type", AUTOPAY_CHARGE_FAILED_WORK_TYPE)
+    .in("status", ["open", "in_progress", "blocked"])
+    .is("archived_at", null)
+    .order("created_at", { ascending: false })
+    .limit(50);
+  const rows = (data ?? []) as Array<{
+    id: string;
+    context_payload?: Record<string, unknown> | null;
+  }>;
+  for (const r of rows) {
+    const ctx = (r.context_payload ?? {}) as Record<string, unknown>;
+    if (String(ctx.patient_invoice_id ?? "") === patientInvoiceId) {
+      return { id: r.id };
+    }
+  }
+  return null;
+}
+
+/**
+ * File a workqueue_items row that asks a biller to chase a failed
+ * autopay charge. Idempotent — a no-op if one is already open for the
+ * same invoice. Returns the row id, or null on failure (failures are
+ * logged, never thrown).
+ */
+async function fileAutopayFailureWqItem(
+  supabase: SupabaseAdmin,
+  args: {
+    organizationId: string;
+    clientId: string;
+    invoiceId: string;
+    amount: number;
+    brand: string;
+    last4: string;
+    errorCode: string;
+    errorMessage: string;
+  },
+): Promise<string | null> {
+  try {
+    const existing = await findOpenAutopayFailureWqItem(
+      supabase,
+      args.organizationId,
+      args.invoiceId,
+    );
+    if (existing) return existing.id;
+
+    const isAuth = args.errorCode === "authentication_required";
+    const headline = isAuth
+      ? "Autopay needs patient 3DS confirmation"
+      : `Autopay card declined (${args.brand} •••• ${args.last4})`;
+    const description = `Auto-charge of $${args.amount.toFixed(2)} failed: ${args.errorMessage}. ` +
+      `Patient can fix it from the portal, or you can update the card and retry from the Patient Billing queue.`;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (supabase as any)
+      .from("workqueue_items")
+      .insert({
+        organization_id: args.organizationId,
+        client_id: args.clientId,
+        work_type: AUTOPAY_CHARGE_FAILED_WORK_TYPE,
+        status: "open",
+        priority: isAuth ? "normal" : "high",
+        title: headline,
+        description,
+        // source_object_type enum has no "patient_invoice" — use the
+        // closest valid value and stash the invoice id in context.
+        source_object_type: "payment_posting",
+        source_object_id: args.invoiceId,
+        context_payload: {
+          origin: "autopay_charge_failure",
+          patient_invoice_id: args.invoiceId,
+          client_id: args.clientId,
+          amount_dollars: args.amount,
+          brand: args.brand,
+          last4: args.last4,
+          error_code: args.errorCode,
+          error_message: args.errorMessage,
+        },
+      })
+      .select("id")
+      .single();
+    if (error) {
+      console.warn("[autopay] failed to file autopay_charge_failed WQ item", error.message);
+      return null;
+    }
+    return ((data ?? null) as { id?: string } | null)?.id ?? null;
+  } catch (err) {
+    console.warn(
+      "[autopay] file autopay_charge_failed WQ item threw",
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
+}
+
+/**
+ * Close any open `autopay_charge_failed` workqueue rows for an invoice.
+ * Called when the patient self-serves a successful charge from the
+ * portal, when the biller manually charges from the queue, or when the
+ * stripe webhook posts a payment to the invoice. Best-effort, swallows
+ * its own errors. Returns the number of rows closed.
+ */
+export async function closeAutopayFailureWorkqueueItem(input: {
+  organizationId: string;
+  patientInvoiceId: string;
+  reason: string;
+  closedByUserId?: string | null;
+  supabase?: SupabaseAdmin | null;
+}): Promise<number> {
+  const supabase = input.supabase ?? createServerSupabaseAdminClient();
+  if (!supabase) return 0;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sb = supabase as unknown as { from: (t: string) => any };
+    const { data: rows } = await sb
+      .from("workqueue_items")
+      .select("id, context_payload")
+      .eq("organization_id", input.organizationId)
+      .eq("work_type", AUTOPAY_CHARGE_FAILED_WORK_TYPE)
+      .in("status", ["open", "in_progress", "blocked"])
+      .is("archived_at", null)
+      .limit(50);
+    const matches = ((rows ?? []) as Array<{
+      id: string;
+      context_payload?: Record<string, unknown> | null;
+    }>).filter((r) => {
+      const ctx = (r.context_payload ?? {}) as Record<string, unknown>;
+      return String(ctx.patient_invoice_id ?? "") === input.patientInvoiceId;
+    });
+    if (matches.length === 0) return 0;
+    const nowIso = new Date().toISOString();
+    const ids = matches.map((m) => m.id);
+    const { error } = await sb
+      .from("workqueue_items")
+      .update({
+        status: "resolved",
+        resolved_at: nowIso,
+        resolved_by_user_id: input.closedByUserId ?? null,
+        closed_at: nowIso,
+        closed_by_user_id: input.closedByUserId ?? null,
+        description: input.reason,
+      })
+      .in("id", ids);
+    if (error) {
+      console.warn("[autopay] closeAutopayFailureWorkqueueItem update error", error.message);
+      return 0;
+    }
+    return ids.length;
+  } catch (err) {
+    console.warn(
+      "[autopay] closeAutopayFailureWorkqueueItem threw",
+      err instanceof Error ? err.message : err,
+    );
+    return 0;
+  }
+}
+
 async function writeAutopayAudit(
   supabase: SupabaseAdmin,
   args: {
@@ -325,6 +504,19 @@ export async function attemptAutopayForInvoice(input: {
       brand,
       last4,
     },
+  });
+  // Task #602/#674: file a workqueue row so a biller can chase it, and
+  // so the portal can detect the failure and prompt the patient to fix
+  // their card / complete 3DS without anyone in the office having to act.
+  await fileAutopayFailureWqItem(supabase, {
+    organizationId: input.organizationId,
+    clientId: client.id,
+    invoiceId: invoice.id,
+    amount: balance,
+    brand,
+    last4,
+    errorCode: outcome.code,
+    errorMessage: outcome.message,
   });
   return {
     attempted: true,

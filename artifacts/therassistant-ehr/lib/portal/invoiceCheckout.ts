@@ -19,6 +19,7 @@ import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import type { PortalSession } from "@/lib/portal/session";
 import {
   createConnectCheckoutSession,
+  createConnectCustomer,
   getStripeSecretKey,
   StripeRequestError,
 } from "@/lib/stripe/connect";
@@ -54,6 +55,17 @@ export async function startInvoiceCheckout(input: {
    * remaining balance is charged. Must be > 0 and <= remaining balance.
    */
   amountDollars?: number;
+  /**
+   * Task #674: "Fix payment" recovery flow. When true, the Checkout
+   * Session is bound to the client's Stripe Customer and uses
+   * `setup_future_usage='off_session'` so the card the patient pays
+   * with becomes the new saved card on file. The webhook then refreshes
+   * `clients.stripe_payment_method_*` from the resulting PaymentIntent
+   * (see metadata.is_recovery). Without this, fixing a 3DS / declined
+   * autopay would leave the stale card on file and the next autopay
+   * cycle would fail the same way.
+   */
+  isRecovery?: boolean;
 }): Promise<StartInvoiceCheckoutResult> {
   if (!getStripeSecretKey()) {
     return { ok: false, code: "stripe_not_configured", message: "Online payment is not set up yet." };
@@ -148,14 +160,68 @@ export async function startInvoiceCheckout(input: {
 
   const { data: clientRow } = await supabase
     .from("clients")
-    .select("first_name, last_name, email")
+    .select(
+      "first_name, last_name, email, stripe_customer_id, stripe_connect_account_id",
+    )
     .eq("organization_id", organizationId)
     .eq("id", clientId)
     .maybeSingle();
-  const client = (clientRow ?? {}) as { first_name?: string; last_name?: string; email?: string | null };
+  const client = (clientRow ?? {}) as {
+    first_name?: string;
+    last_name?: string;
+    email?: string | null;
+    stripe_customer_id?: string | null;
+    stripe_connect_account_id?: string | null;
+  };
   const customerEmail = (client.email ?? "").trim() || null;
   const patientLabel =
     [client.first_name, client.last_name].filter(Boolean).join(" ").trim() || "patient";
+
+  // In recovery mode we need a Stripe Customer pinned to this connected
+  // account so the resulting PaymentMethod attaches there and can be
+  // reused off-session. If the client already has a customer on a
+  // DIFFERENT connected account, we just fall through to the
+  // customer_email path — saved-card recovery only kicks in when the
+  // existing card lives on the practice's currently-active account.
+  let recoveryCustomerId: string | null = null;
+  if (input.isRecovery) {
+    const existingAcct = (client.stripe_connect_account_id ?? "").trim() || null;
+    if (!existingAcct || existingAcct === profile.stripe_connect_account_id) {
+      if (client.stripe_customer_id) {
+        recoveryCustomerId = client.stripe_customer_id;
+      } else {
+        try {
+          const fullName = [client.first_name, client.last_name].filter(Boolean).join(" ").trim();
+          const created = await createConnectCustomer({
+            connectedAccountId: profile.stripe_connect_account_id,
+            email: customerEmail,
+            name: fullName || undefined,
+            metadata: { organization_id: organizationId, client_id: clientId },
+            idempotencyKey: `client-customer-${clientId}`,
+          });
+          recoveryCustomerId = created.id;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const sb = supabase as unknown as { from: (t: string) => any };
+          await sb
+            .from("clients")
+            .update({
+              stripe_connect_account_id: profile.stripe_connect_account_id,
+              stripe_customer_id: created.id,
+            })
+            .eq("organization_id", organizationId)
+            .eq("id", clientId);
+        } catch (err) {
+          // Not fatal — fall back to non-saving Checkout (the patient
+          // still pays this invoice, the WQ row will surface the stale
+          // card for the biller to follow up on).
+          console.warn(
+            "[portal] recovery createConnectCustomer failed",
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
+    }
+  }
 
   const origin = input.baseUrl.replace(/\/$/, "");
   const successUrl = `${origin}/portal/payments/return?status=success&invoice=${encodeURIComponent(
@@ -163,6 +229,7 @@ export async function startInvoiceCheckout(input: {
   )}&session_id={CHECKOUT_SESSION_ID}`;
   const cancelUrl = `${origin}/portal/payments/return?status=cancelled&invoice=${encodeURIComponent(invoice.id)}`;
 
+  const isRecoverySaving = !!(input.isRecovery && recoveryCustomerId);
   const metadata: Record<string, string> = {
     origin: "portal_invoice_pay",
     organization_id: organizationId,
@@ -171,6 +238,8 @@ export async function startInvoiceCheckout(input: {
     requested_amount_cents: String(amountCents),
     invoice_balance_cents: String(balanceCents),
     is_partial_payment: isPartial ? "true" : "false",
+    is_recovery: input.isRecovery ? "true" : "false",
+    save_card_on_success: isRecoverySaving ? "true" : "false",
   };
 
   try {
@@ -178,7 +247,11 @@ export async function startInvoiceCheckout(input: {
     // retries within the same state collapse to one Stripe session;
     // once the balance changes (partial payment) or the patient picks
     // a different amount the key changes and they get a fresh session.
-    const idempotencyKey = `portal-invoice-${invoice.id}-${balanceCents}-${amountCents}`;
+    // Recovery sessions get their own key so they don't collide with
+    // a prior non-saving session for the same invoice.
+    const idempotencyKey =
+      `portal-invoice-${invoice.id}-${balanceCents}-${amountCents}` +
+      (input.isRecovery ? "-rec" : "");
     const checkout = await createConnectCheckoutSession({
       amountCents,
       currency: "usd",
@@ -189,6 +262,8 @@ export async function startInvoiceCheckout(input: {
       productDescription: `Patient balance for ${patientLabel}`,
       metadata,
       customerEmail,
+      customerId: recoveryCustomerId,
+      setupFutureUsage: isRecoverySaving ? "off_session" : null,
       idempotencyKey,
     });
     if (!checkout.url) {

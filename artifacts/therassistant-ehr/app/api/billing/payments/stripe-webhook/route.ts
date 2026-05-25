@@ -509,6 +509,68 @@ async function handlePaymentSucceeded(
     });
 
     if (result.ok) {
+      // Task #674: if this Stripe payment cleared an invoice that had
+      // an open autopay_charge_failed WQ row (filed by attemptAutopay),
+      // close it. Covers the patient-portal self-serve "Fix payment"
+      // flow (Checkout) and any other path that lands a payment on the
+      // invoice (e.g. biller-triggered Checkout link).
+      if (invoiceId && supabase) {
+        try {
+          const { closeAutopayFailureWorkqueueItem } = await import(
+            "@/lib/payments/autopayService"
+          );
+          await closeAutopayFailureWorkqueueItem({
+            organizationId,
+            patientInvoiceId: invoiceId,
+            reason: `Resolved by patient payment (Stripe ${details.chargeId ?? details.paymentIntentId ?? "?"}).`,
+            supabase,
+          });
+        } catch (err) {
+          console.warn(
+            "[stripe-webhook] closeAutopayFailureWorkqueueItem failed (non-fatal)",
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
+
+      // Task #674: when the patient just resolved a declined autopay via
+      // the "Fix payment" Checkout flow, the Checkout Session was bound
+      // to their Stripe Customer with setup_future_usage='off_session'.
+      // Mirror the resulting payment_method onto clients.stripe_payment_method_*
+      // so the NEXT autopay cycle uses the fresh card instead of the
+      // stale one that triggered this whole loop in the first place.
+      const isRecovery = (details.metadata.is_recovery ?? "") === "true";
+      const saveCard = (details.metadata.save_card_on_success ?? "") === "true";
+      if (
+        isRecovery &&
+        saveCard &&
+        details.paymentIntentId &&
+        supabase
+      ) {
+        try {
+          const { persistRecoveredSavedCardFromPaymentIntent } = await import(
+            "@/lib/payments/savedCardService"
+          );
+          const persisted = await persistRecoveredSavedCardFromPaymentIntent({
+            organizationId,
+            clientId,
+            paymentIntentId: details.paymentIntentId,
+            supabase,
+          });
+          if (!persisted.ok) {
+            console.warn(
+              "[stripe-webhook] saved-card recovery skipped",
+              persisted.status,
+              persisted.message ?? "",
+            );
+          }
+        } catch (err) {
+          console.warn(
+            "[stripe-webhook] persistRecoveredSavedCardFromPaymentIntent failed (non-fatal)",
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
       return NextResponse.json({
         success: true,
         alreadyPosted: result.alreadyPosted,

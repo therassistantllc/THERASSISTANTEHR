@@ -227,7 +227,25 @@ export async function createConnectCheckoutSession(input: {
   metadata: Record<string, string>;
   customerEmail?: string | null;
   idempotencyKey?: string;
+  /**
+   * When set, pins the Checkout Session to an existing Stripe Customer
+   * on the connected account so the resulting PaymentMethod attaches
+   * to that customer (required to reuse the card off-session later).
+   */
+  customerId?: string | null;
+  /**
+   * When `'off_session'`, asks Stripe to save the resulting payment
+   * method to the bound customer for future off-session use. Used by
+   * the patient-portal "Fix payment" recovery flow (Task #674) so a
+   * declined autopay can both pay this invoice AND refresh the saved
+   * card on file in a single Checkout.
+   */
+  setupFutureUsage?: "off_session" | "on_session" | null;
 }): Promise<StripeCheckoutSession> {
+  const piData: Record<string, unknown> = { metadata: input.metadata };
+  if (input.setupFutureUsage) {
+    piData.setup_future_usage = input.setupFutureUsage;
+  }
   const params: Record<string, unknown> = {
     mode: "payment",
     success_url: input.successUrl,
@@ -246,9 +264,13 @@ export async function createConnectCheckoutSession(input: {
       },
     ],
     metadata: input.metadata,
-    payment_intent_data: { metadata: input.metadata },
+    payment_intent_data: piData,
   };
-  if (input.customerEmail) params.customer_email = input.customerEmail;
+  if (input.customerId) {
+    params.customer = input.customerId;
+  } else if (input.customerEmail) {
+    params.customer_email = input.customerEmail;
+  }
 
   return stripeRequest<StripeCheckoutSession>("/checkout/sessions", {
     stripeAccount: input.connectedAccountId,
@@ -351,6 +373,30 @@ export async function retrieveConnectSetupIntent(input: {
 }): Promise<StripeSetupIntent> {
   return stripeRequest<StripeSetupIntent>(
     `/setup_intents/${encodeURIComponent(input.setupIntentId)}`,
+    { method: "GET", stripeAccount: input.connectedAccountId },
+  );
+}
+
+export interface StripePaymentIntentLite {
+  id: string;
+  status?: string | null;
+  customer?: string | null;
+  payment_method?: string | null;
+  metadata?: Record<string, string>;
+}
+
+/**
+ * Read a PaymentIntent off a connected Express account. Used by the
+ * Task #674 "Fix payment" webhook path so we can pull the
+ * payment_method off a successful Checkout PaymentIntent and refresh
+ * the patient's saved card on file.
+ */
+export async function retrieveConnectPaymentIntent(input: {
+  connectedAccountId: string;
+  paymentIntentId: string;
+}): Promise<StripePaymentIntentLite> {
+  return stripeRequest<StripePaymentIntentLite>(
+    `/payment_intents/${encodeURIComponent(input.paymentIntentId)}`,
     { method: "GET", stripeAccount: input.connectedAccountId },
   );
 }
