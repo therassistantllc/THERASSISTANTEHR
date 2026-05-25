@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import LatestPayerStatusResponse from "@/components/billing/LatestPayerStatusResponse";
 import Claim277caAckSummary from "@/components/billing/Claim277caAckSummary";
+import StatusCheckHistory from "@/components/billing/StatusCheckHistory";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 
 type Claim = {
@@ -211,6 +212,16 @@ export default function ClaimDetailClient({ claimId }: { claimId: string }) {
               organizationId={orgId}
               claimStatus={claim.claim_status}
               patientId={claim.patient_id}
+            />
+          </section>
+
+          <section className="panel" style={{ marginTop: "1rem", padding: "1rem" }}>
+            <h3 style={{ margin: "0 0 0.75rem", fontSize: 14 }}>
+              Status check history
+            </h3>
+            <StatusCheckHistory
+              claimId={claim.id ?? claimId}
+              organizationId={orgId}
             />
           </section>
         </>
