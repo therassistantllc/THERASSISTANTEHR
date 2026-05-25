@@ -267,6 +267,21 @@ function claimStatusForOutcome(outcome: Edi277CAOutcome) {
   return "submitted";
 }
 
+// Derive a single outcome from one 2200D claim ref's STC entries. Mirrors
+// the batch-level aggregator in parse277CA but scoped to one claim so a
+// mixed-rejection batch (one claim accepted, one rejected) can tag each
+// claim with its own status instead of collapsing both to the batch
+// outcome. Returns "unknown" when the ref carries no acc/rej STC so the
+// caller can fall back to the batch outcome.
+function outcomeForClaimRef(ref: Parsed277CaClaimRef): Edi277CAOutcome {
+  const hasReject = ref.stcStatuses.some(isRejectStc);
+  const hasAccept = ref.stcStatuses.some(isAcceptStc);
+  if (hasReject && hasAccept) return "partial";
+  if (hasReject) return "rejected";
+  if (hasAccept) return "accepted";
+  return "unknown";
+}
+
 export async function intake277CAAcknowledgement(
   input: Intake277CAAcknowledgementInput
 ): Promise<Intake277CAAcknowledgementResult> {
@@ -352,22 +367,57 @@ export async function intake277CAAcknowledgement(
     };
   }
 
-  if (linkedClaimIds.length > 0) {
-    const { error: claimUpdateError } = await supabase
-      .from("professional_claims")
-      .update({ claim_status: claimStatusForOutcome(parsed.outcome), updated_at: new Date().toISOString() })
-      .in("id", linkedClaimIds)
-      .eq("organization_id", input.organizationId);
+  // Per-claim status: each linked claim is tagged from its OWN matching
+  // 2200D STC entries (TRN ↔ patient_account_number / claim_number / id).
+  // Claims with no matching ref fall back to the batch-level outcome so
+  // older acks that don't slice per claim still flip everything as one.
+  // We load contexts once here and reuse them below for the medical-review
+  // seed pass — both need the same patient_account_number lookup.
+  const claimContexts =
+    linkedClaimIds.length > 0
+      ? await loadClaimContexts(input.organizationId, linkedClaimIds)
+      : new Map<string, ClaimContextRow>();
 
-    if (claimUpdateError) {
-      return {
-        ok: false,
-        acknowledgementId,
-        batchId,
-        outcome: parsed.outcome,
-        linkedClaimIds,
-        errors: [{ field: "professional_claims", message: claimUpdateError.message }],
-      };
+  if (linkedClaimIds.length > 0) {
+    const batchStatus = claimStatusForOutcome(parsed.outcome);
+    const perClaimStatus = new Map<string, string>();
+    for (const claimId of linkedClaimIds) {
+      perClaimStatus.set(claimId, batchStatus);
+    }
+    for (const ref of parsed.claimRefs) {
+      const refOutcome = outcomeForClaimRef(ref);
+      if (refOutcome === "unknown") continue;
+      const matched = matchClaimsForTrn(ref.trn, linkedClaimIds, claimContexts);
+      if (matched.length === 0) continue;
+      const status = claimStatusForOutcome(refOutcome);
+      for (const claimId of matched) perClaimStatus.set(claimId, status);
+    }
+
+    const idsByStatus = new Map<string, string[]>();
+    for (const [claimId, status] of perClaimStatus) {
+      const bucket = idsByStatus.get(status);
+      if (bucket) bucket.push(claimId);
+      else idsByStatus.set(status, [claimId]);
+    }
+
+    const updatedAt = new Date().toISOString();
+    for (const [status, ids] of idsByStatus) {
+      const { error: claimUpdateError } = await supabase
+        .from("professional_claims")
+        .update({ claim_status: status, updated_at: updatedAt })
+        .in("id", ids)
+        .eq("organization_id", input.organizationId);
+
+      if (claimUpdateError) {
+        return {
+          ok: false,
+          acknowledgementId,
+          batchId,
+          outcome: parsed.outcome,
+          linkedClaimIds,
+          errors: [{ field: "professional_claims", message: claimUpdateError.message }],
+        };
+      }
     }
   }
 
@@ -405,7 +455,7 @@ export async function intake277CAAcknowledgement(
   // write is idempotent on (claim, origin, acknowledgement id) so
   // re-ingesting the same 277CA does not flood the queue.
   if (linkedClaimIds.length > 0 && parsed.claimRefs.length > 0) {
-    const contexts = await loadClaimContexts(input.organizationId, linkedClaimIds);
+    const contexts = claimContexts;
     const seededClaimIds = new Set<string>();
 
     for (const claimRef of parsed.claimRefs) {
