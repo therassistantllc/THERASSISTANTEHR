@@ -209,6 +209,8 @@ export default function ClaimDetailClient({ claimId }: { claimId: string }) {
             <LatestPayerStatusResponse
               claimId={claim.id ?? claimId}
               organizationId={orgId}
+              claimStatus={claim.claim_status}
+              patientId={claim.patient_id}
             />
           </section>
         </>

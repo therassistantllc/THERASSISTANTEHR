@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import PayerStatusResponseModal from "./PayerStatusResponseModal";
 
 type InquirySummary = {
@@ -35,6 +35,15 @@ function formatCurrency(value: number) {
   }).format(value || 0);
 }
 
+// Claim statuses where a fresh 276/277 makes sense: the claim is out the door
+// and we're waiting on (or want to refresh) the payer's word on it. Mirrors
+// the same set the No-Response workqueue runs against.
+const STATUS_CHECK_ELIGIBLE_STATUSES = new Set([
+  "submitted",
+  "accepted_oa",
+  "accepted_payer",
+]);
+
 /**
  * LatestPayerStatusResponse
  *
@@ -42,74 +51,118 @@ function formatCurrency(value: number) {
  * single claim — the headline status, paid/billed, and check/EFT pulled from
  * the first STC line — with a "View full response" button that opens the
  * same modal used by the No-Response workqueue.
+ *
+ * When the claim is in a state that supports a status check and we know the
+ * patient/client, the card also exposes a "Check status now" action that
+ * fires a fresh 276 inquiry through the same Availity endpoint the
+ * No-Response workqueue uses and then re-fetches the latest response so the
+ * card refreshes inline.
  */
 export default function LatestPayerStatusResponse({
   claimId,
   organizationId,
+  claimStatus,
+  patientId,
 }: {
   claimId: string;
   organizationId: string;
+  claimStatus?: string | null;
+  patientId?: string | null;
 }) {
   const [inquiry, setInquiry] = useState<InquirySummary | null>(null);
   const [line, setLine] = useState<LineSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState<string | null>(null);
+  const [checkInfo, setCheckInfo] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (!claimId || !organizationId) return;
-    let cancelled = false;
     setLoading(true);
     setError(null);
-    fetch(
-      `/api/billing/claims/${claimId}/status-inquiries?organizationId=${encodeURIComponent(organizationId)}`,
-      { cache: "no-store" },
-    )
-      .then((r) => r.json())
-      .then(async (j) => {
-        if (cancelled) return;
-        if (j?.success === false) {
-          setError(j.error || "Failed to load payer status");
-          setInquiry(null);
-          setLine(null);
-          setLoading(false);
-          return;
-        }
-        const inquiries = (j?.inquiries ?? []) as InquirySummary[];
-        // The list endpoint sorts by created_at desc, so the latest with
-        // an id is the freshest inquiry the biller has run.
-        const latest = inquiries.find((i) => i.id) ?? null;
-        setInquiry(latest);
-        if (latest?.id) {
-          try {
-            const dr = await fetch(
-              `/api/billing/claims/${claimId}/status-inquiries/${latest.id}?organizationId=${encodeURIComponent(organizationId)}`,
-              { cache: "no-store" },
-            );
-            const dj = await dr.json();
-            if (cancelled) return;
-            if (dj?.success !== false) {
-              const lines = (dj?.lines ?? []) as LineSummary[];
-              setLine(lines[0] ?? null);
-            }
-          } catch {
-            // The headline card still works without parsed line detail;
-            // the user can open the modal for the full breakdown.
+    try {
+      const r = await fetch(
+        `/api/billing/claims/${claimId}/status-inquiries?organizationId=${encodeURIComponent(organizationId)}`,
+        { cache: "no-store" },
+      );
+      const j = await r.json();
+      if (j?.success === false) {
+        setError(j.error || "Failed to load payer status");
+        setInquiry(null);
+        setLine(null);
+        return;
+      }
+      const inquiries = (j?.inquiries ?? []) as InquirySummary[];
+      // The list endpoint sorts by created_at desc, so the latest with
+      // an id is the freshest inquiry the biller has run.
+      const latest = inquiries.find((i) => i.id) ?? null;
+      setInquiry(latest);
+      if (latest?.id) {
+        try {
+          const dr = await fetch(
+            `/api/billing/claims/${claimId}/status-inquiries/${latest.id}?organizationId=${encodeURIComponent(organizationId)}`,
+            { cache: "no-store" },
+          );
+          const dj = await dr.json();
+          if (dj?.success !== false) {
+            const lines = (dj?.lines ?? []) as LineSummary[];
+            setLine(lines[0] ?? null);
           }
-        } else {
-          setLine(null);
+        } catch {
+          // The headline card still works without parsed line detail;
+          // the user can open the modal for the full breakdown.
         }
-        setLoading(false);
-      })
-      .catch((e) => {
-        if (cancelled) return;
-        setError(e instanceof Error ? e.message : "Failed");
-        setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+      } else {
+        setLine(null);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed");
+    } finally {
+      setLoading(false);
+    }
   }, [claimId, organizationId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const canCheck = Boolean(
+    patientId &&
+      claimStatus &&
+      STATUS_CHECK_ELIGIBLE_STATUSES.has(String(claimStatus).toLowerCase()),
+  );
+
+  const runCheckNow = useCallback(async () => {
+    if (!canCheck || !patientId) return;
+    setChecking(true);
+    setCheckError(null);
+    setCheckInfo(null);
+    try {
+      const res = await fetch("/api/clearinghouse/availity/claim-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          organizationId,
+          clientId: patientId,
+          claimId,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json?.success === false) {
+        setCheckError(json?.error || `Request failed (${res.status})`);
+        return;
+      }
+      setCheckInfo("Status check sent — refreshing latest response…");
+      await load();
+      setCheckInfo("Latest payer status response updated.");
+    } catch (e) {
+      setCheckError(e instanceof Error ? e.message : "Failed to run check");
+    } finally {
+      setChecking(false);
+    }
+  }, [canCheck, patientId, organizationId, claimId, load]);
 
   const cardStyle: React.CSSProperties = {
     border: "1px solid #E5E7EB",
@@ -118,13 +171,80 @@ export default function LatestPayerStatusResponse({
     background: "#fff",
   };
 
+  const checkButton = canCheck ? (
+    <button
+      type="button"
+      onClick={runCheckNow}
+      disabled={checking}
+      style={{
+        background: checking ? "#E2E8F0" : "#1D4ED8",
+        color: checking ? "#475569" : "#fff",
+        border: "none",
+        borderRadius: 6,
+        padding: "6px 12px",
+        fontSize: 12,
+        fontWeight: 600,
+        cursor: checking ? "wait" : "pointer",
+      }}
+    >
+      {checking ? "Checking…" : "Check status now"}
+    </button>
+  ) : null;
+
+  const headerRight = (
+    <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+      {inquiry?.id ? (
+        <button
+          type="button"
+          onClick={() => setOpenId(inquiry.id)}
+          style={{
+            background: "transparent",
+            border: "none",
+            color: "#1D4ED8",
+            fontWeight: 600,
+            fontSize: 13,
+            cursor: "pointer",
+            padding: 0,
+          }}
+        >
+          View full response →
+        </button>
+      ) : null}
+      {checkButton}
+    </div>
+  );
+
+  const checkMessages = (
+    <>
+      {checkError ? (
+        <div style={{ color: "#B91C1C", fontSize: 12, marginTop: 8 }}>
+          {checkError}
+        </div>
+      ) : null}
+      {checkInfo && !checkError ? (
+        <div style={{ color: "#047857", fontSize: 12, marginTop: 8 }}>
+          {checkInfo}
+        </div>
+      ) : null}
+    </>
+  );
+
   if (loading) {
     return (
       <section style={cardStyle}>
-        <header style={{ marginBottom: 8 }}>
+        <header
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: 8,
+          }}
+        >
           <strong style={{ fontSize: 14 }}>Latest payer status response</strong>
+          {checkButton}
         </header>
         <div style={{ color: "#94A3B8", fontSize: 13 }}>Loading…</div>
+        {checkMessages}
       </section>
     );
   }
@@ -132,10 +252,19 @@ export default function LatestPayerStatusResponse({
   if (error) {
     return (
       <section style={cardStyle}>
-        <header style={{ marginBottom: 8 }}>
+        <header
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: 8,
+          }}
+        >
           <strong style={{ fontSize: 14 }}>Latest payer status response</strong>
+          {checkButton}
         </header>
         <div style={{ color: "#B91C1C", fontSize: 13 }}>{error}</div>
+        {checkMessages}
       </section>
     );
   }
@@ -143,12 +272,21 @@ export default function LatestPayerStatusResponse({
   if (!inquiry) {
     return (
       <section style={cardStyle}>
-        <header style={{ marginBottom: 8 }}>
+        <header
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: 8,
+          }}
+        >
           <strong style={{ fontSize: 14 }}>Latest payer status response</strong>
+          {checkButton}
         </header>
         <div style={{ color: "#94A3B8", fontSize: 13 }}>
           No payer status inquiries have been run for this claim yet.
         </div>
+        {checkMessages}
       </section>
     );
   }
@@ -169,23 +307,7 @@ export default function LatestPayerStatusResponse({
         }}
       >
         <strong style={{ fontSize: 14 }}>Latest payer status response</strong>
-        {inquiry.id ? (
-          <button
-            type="button"
-            onClick={() => setOpenId(inquiry.id)}
-            style={{
-              background: "transparent",
-              border: "none",
-              color: "#1D4ED8",
-              fontWeight: 600,
-              fontSize: 13,
-              cursor: "pointer",
-              padding: 0,
-            }}
-          >
-            View full response →
-          </button>
-        ) : null}
+        {headerRight}
       </header>
       <div
         style={{
@@ -249,6 +371,7 @@ export default function LatestPayerStatusResponse({
           ) : null}
         </div>
       ) : null}
+      {checkMessages}
       {openId ? (
         <PayerStatusResponseModal
           claimId={claimId}
