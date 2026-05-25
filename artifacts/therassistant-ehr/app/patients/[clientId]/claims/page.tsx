@@ -203,7 +203,18 @@ export default function ClaimsPage() {
             <tbody>
               {claims.map((claim) => (
                 <tr key={claim.id}>
-                  <td><strong>{claim.claimNumber ?? claim.id.slice(0, 8)}</strong></td>
+                  <td>
+                    {claim.isPending ? (
+                      <strong>{claim.claimNumber ?? claim.id.slice(0, 8)}</strong>
+                    ) : (
+                      <Link
+                        className="inline-link"
+                        href={`/billing/claims/${encodeURIComponent(claim.id)}${orgQ}`}
+                      >
+                        <strong>{claim.claimNumber ?? claim.id.slice(0, 8)}</strong>
+                      </Link>
+                    )}
+                  </td>
                   <td><span className={statusClass(claim.status)}>{claim.status ?? "—"}</span></td>
                   <td>{claim.payerName ?? <span className="muted">—</span>}</td>
                   <td>{formatMoney(claim.totalCharge)}</td>
