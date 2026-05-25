@@ -624,6 +624,17 @@ export default function CobIssuesClient() {
         ),
       },
       {
+        id: "card_suggestion",
+        label: "Card photo suggestion",
+        render: () => (
+          <CardSuggestionPanel
+            claimId={row.id}
+            organizationId={organizationId}
+            onChanged={() => void load()}
+          />
+        ),
+      },
+      {
         id: "client_history",
         label: "Client insurance history",
         render: () => (
@@ -634,7 +645,7 @@ export default function CobIssuesClient() {
         ),
       },
     ];
-  }, [selectedRow, organizationId, promptInsuranceOrder]);
+  }, [selectedRow, organizationId, promptInsuranceOrder, load]);
 
   const detailActions: PrimaryAction[] = useMemo(() => {
     if (!selectedRow) return [];
@@ -1184,6 +1195,384 @@ function CobEvidencePanel({
           </div>
         )}
       </section>
+    </div>
+  );
+}
+
+type CardSuggestionPayload = {
+  success: boolean;
+  error?: string;
+  found?: {
+    audit_id: string;
+    created_at: string | null;
+    link_id: string | null;
+    status: string | null;
+    suggestion: {
+      payer_name: string | null;
+      member_id: string | null;
+      group_number: string | null;
+      plan_name: string | null;
+      subscriber_name: string | null;
+      rx_bin: string | null;
+      rx_pcn: string | null;
+      payer_phone: string | null;
+      notes: string | null;
+      confidence: {
+        payer_name: number;
+        member_id: number;
+        group_number: number;
+        plan_name: number;
+        overall: number;
+      };
+      raw_text: string | null;
+    } | null;
+    card_photo_front: { bucket: string; path: string } | null;
+    card_photo_back: { bucket: string; path: string } | null;
+    other_coverage_note: string | null;
+    decision: {
+      type: "accepted" | "discarded";
+      at: string | null;
+      user_id: string | null;
+      new_policy_id: string | null;
+    } | null;
+  } | null;
+};
+
+function confidenceBadge(score: number): ReactNode {
+  if (score >= 0.8) return pill(`High ${Math.round(score * 100)}%`, "#dcfce7", "#166534");
+  if (score >= 0.55) return pill(`Med ${Math.round(score * 100)}%`, "#fef9c3", "#854d0e");
+  return pill(`Low ${Math.round(score * 100)}%`, "#fee2e2", "#991b1b");
+}
+
+function CardSuggestionPanel({
+  claimId,
+  organizationId,
+  onChanged,
+}: {
+  claimId: string;
+  organizationId: string;
+  onChanged: () => void;
+}) {
+  const [data, setData] = useState<CardSuggestionPayload | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const [payerName, setPayerName] = useState("");
+  const [memberId, setMemberId] = useState("");
+  const [groupNumber, setGroupNumber] = useState("");
+  const [planName, setPlanName] = useState("");
+  const [priority, setPriority] = useState<"primary" | "secondary" | "tertiary">(
+    "secondary",
+  );
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const params = new URLSearchParams({ organizationId });
+      const res = await fetch(
+        `/api/billing/cob-issues/${encodeURIComponent(claimId)}/card-suggestion?${params.toString()}`,
+        { cache: "no-store" },
+      );
+      const json = (await res.json().catch(() => ({}))) as CardSuggestionPayload;
+      if (!res.ok || !json.success) throw new Error(json.error ?? "Failed to load");
+      setData(json);
+      const sug = json.found?.suggestion;
+      if (sug) {
+        setPayerName(sug.payer_name ?? "");
+        setMemberId(sug.member_id ?? "");
+        setGroupNumber(sug.group_number ?? "");
+        setPlanName(sug.plan_name ?? "");
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Failed to load");
+    } finally {
+      setLoading(false);
+    }
+  }, [claimId, organizationId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const submit = useCallback(
+    async (action: "accept" | "discard") => {
+      setBusy(true);
+      setErr(null);
+      try {
+        const body =
+          action === "accept"
+            ? {
+                action,
+                organizationId,
+                link_id: data?.found?.link_id ?? null,
+                fields: {
+                  payer_name: payerName.trim() || null,
+                  member_id: memberId.trim() || null,
+                  group_number: groupNumber.trim() || null,
+                  plan_name: planName.trim() || null,
+                  priority,
+                },
+              }
+            : { action, organizationId, link_id: data?.found?.link_id ?? null };
+        const res = await fetch(
+          `/api/billing/cob-issues/${encodeURIComponent(claimId)}/card-suggestion`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          },
+        );
+        const json = (await res.json().catch(() => ({}))) as {
+          success?: boolean;
+          error?: string;
+        };
+        if (!res.ok || !json.success) throw new Error(json.error ?? "Failed");
+        await load();
+        onChanged();
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "Failed");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [
+      claimId,
+      organizationId,
+      payerName,
+      memberId,
+      groupNumber,
+      planName,
+      priority,
+      data,
+      load,
+      onChanged,
+    ],
+  );
+
+  if (loading) return <p style={{ fontSize: 13 }}>Loading…</p>;
+  if (err) return <p style={{ fontSize: 13, color: "#991b1b" }}>{err}</p>;
+
+  const found = data?.found ?? null;
+  if (!found) {
+    return (
+      <p style={{ fontSize: 13, color: "#64748b" }}>
+        No insurance-card update has been received from the client yet. After
+        the client submits the secure update link with a card photo, an
+        auto-parsed draft policy will appear here for review.
+      </p>
+    );
+  }
+
+  if (found.status === "no_card") {
+    return (
+      <p style={{ fontSize: 13, color: "#64748b" }}>
+        The client submitted the update form without a new insurance card
+        photo, so there is nothing to auto-fill.
+      </p>
+    );
+  }
+
+  if (found.decision) {
+    return (
+      <div style={{ fontSize: 13 }}>
+        <p style={{ margin: "0 0 8px" }}>
+          {found.decision.type === "accepted"
+            ? "Suggestion accepted — a new insurance policy was created."
+            : "Suggestion discarded."}
+          {found.decision.at
+            ? ` (${new Date(found.decision.at).toLocaleString()})`
+            : ""}
+        </p>
+        {found.decision.new_policy_id ? (
+          <p style={{ color: "#64748b", fontSize: 12 }}>
+            New policy id: {found.decision.new_policy_id.slice(0, 8)}…
+          </p>
+        ) : null}
+      </div>
+    );
+  }
+
+  const sug = found.suggestion;
+  if (!sug || found.status === "ai_unavailable") {
+    return (
+      <div style={{ fontSize: 13 }}>
+        <p style={{ color: "#854d0e" }}>
+          We received the card photo but couldn&apos;t auto-parse it. Open the
+          photo from the patient chart and key the new policy in manually.
+        </p>
+        {found.other_coverage_note ? (
+          <p style={{ color: "#475569", marginTop: 8 }}>
+            Client note: <em>{found.other_coverage_note}</em>
+          </p>
+        ) : null}
+      </div>
+    );
+  }
+
+  const isLowConfidence = found.status === "low_confidence";
+  const inputStyle = {
+    width: "100%",
+    padding: "6px 8px",
+    fontSize: 13,
+    border: "1px solid #cbd5e1",
+    borderRadius: 4,
+  };
+  const labelStyle = {
+    display: "block",
+    fontSize: 11,
+    color: "#475569",
+    marginBottom: 2,
+    textTransform: "uppercase" as const,
+    letterSpacing: 0.4,
+  };
+
+  return (
+    <div style={{ fontSize: 13, display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <strong>Card photo parsed automatically</strong>
+        {confidenceBadge(sug.confidence.overall)}
+        {isLowConfidence
+          ? pill("Review carefully", "#fef3c7", "#92400e")
+          : null}
+      </div>
+      {isLowConfidence ? (
+        <p style={{ color: "#854d0e", margin: 0, fontSize: 12 }}>
+          The parser wasn&apos;t confident in some fields. Compare against the
+          card photo before accepting.
+        </p>
+      ) : null}
+      {found.other_coverage_note ? (
+        <p style={{ color: "#475569", margin: 0, fontSize: 12 }}>
+          Client note: <em>{found.other_coverage_note}</em>
+        </p>
+      ) : null}
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: 12,
+        }}
+      >
+        <div>
+          <label style={labelStyle}>
+            Payer name {confidenceBadge(sug.confidence.payer_name)}
+          </label>
+          <input
+            style={inputStyle}
+            value={payerName}
+            onChange={(e) => setPayerName(e.target.value)}
+            disabled={busy}
+          />
+        </div>
+        <div>
+          <label style={labelStyle}>
+            Member ID {confidenceBadge(sug.confidence.member_id)}
+          </label>
+          <input
+            style={inputStyle}
+            value={memberId}
+            onChange={(e) => setMemberId(e.target.value)}
+            disabled={busy}
+          />
+        </div>
+        <div>
+          <label style={labelStyle}>
+            Group # {confidenceBadge(sug.confidence.group_number)}
+          </label>
+          <input
+            style={inputStyle}
+            value={groupNumber}
+            onChange={(e) => setGroupNumber(e.target.value)}
+            disabled={busy}
+          />
+        </div>
+        <div>
+          <label style={labelStyle}>
+            Plan name {confidenceBadge(sug.confidence.plan_name)}
+          </label>
+          <input
+            style={inputStyle}
+            value={planName}
+            onChange={(e) => setPlanName(e.target.value)}
+            disabled={busy}
+          />
+        </div>
+        <div>
+          <label style={labelStyle}>Priority slot</label>
+          <select
+            style={inputStyle}
+            value={priority}
+            onChange={(e) =>
+              setPriority(e.target.value as "primary" | "secondary" | "tertiary")
+            }
+            disabled={busy}
+          >
+            <option value="primary">Primary</option>
+            <option value="secondary">Secondary</option>
+            <option value="tertiary">Tertiary</option>
+          </select>
+        </div>
+        {sug.subscriber_name ? (
+          <div>
+            <label style={labelStyle}>Subscriber name (read-only)</label>
+            <input style={inputStyle} value={sug.subscriber_name} readOnly />
+          </div>
+        ) : null}
+      </div>
+
+      {sug.raw_text ? (
+        <details style={{ fontSize: 12, color: "#475569" }}>
+          <summary>Other text on the card</summary>
+          <pre
+            style={{
+              whiteSpace: "pre-wrap",
+              background: "#f8fafc",
+              padding: 6,
+              borderRadius: 4,
+            }}
+          >
+            {sug.raw_text}
+          </pre>
+        </details>
+      ) : null}
+
+      <div style={{ display: "flex", gap: 8 }}>
+        <button
+          type="button"
+          onClick={() => void submit("accept")}
+          disabled={busy || !memberId.trim()}
+          style={{
+            padding: "6px 14px",
+            fontSize: 13,
+            background: "#2563eb",
+            color: "white",
+            border: 0,
+            borderRadius: 6,
+            cursor: busy ? "not-allowed" : "pointer",
+          }}
+        >
+          {busy ? "Saving…" : "Accept & create policy"}
+        </button>
+        <button
+          type="button"
+          onClick={() => void submit("discard")}
+          disabled={busy}
+          style={{
+            padding: "6px 14px",
+            fontSize: 13,
+            background: "white",
+            color: "#475569",
+            border: "1px solid #cbd5e1",
+            borderRadius: 6,
+            cursor: busy ? "not-allowed" : "pointer",
+          }}
+        >
+          Discard
+        </button>
+      </div>
     </div>
   );
 }

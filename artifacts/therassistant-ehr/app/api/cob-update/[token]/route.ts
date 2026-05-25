@@ -22,6 +22,11 @@
  */
 import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
+import {
+  parseInsuranceCard,
+  suggestionIsConfident,
+  type CardSuggestion,
+} from "@/lib/insurance/parseCardImage";
 
 type Row = Record<string, unknown>;
 
@@ -419,6 +424,50 @@ export async function POST(
     // patient chart don't lose data.
     const storedCard = storedCardFront ?? storedCardBack;
 
+    // If the client said "yes, I have other coverage" AND we have at
+    // least one card photo, run the image through a vision parser so a
+    // biller doesn't have to hand-key the payer/member/group from the
+    // photo. The suggestion lives on the audit row (status =
+    // 'pending') — billers accept/edit/discard it from the COB review
+    // UI. Parsing failures and low-confidence parses fall through to
+    // the existing "biller eyeballs the photo" flow.
+    let cardSuggestion: CardSuggestion | null = null;
+    let cardSuggestionStatus:
+      | "pending"
+      | "low_confidence"
+      | "not_attempted"
+      | "no_card"
+      | "ai_unavailable" = "not_attempted";
+    const frontForParse = cardFrontSanitized
+      ? { bytes: cardFrontSanitized.bytes, contentType: cardFrontSanitized.contentType }
+      : null;
+    const backForParse = cardBackSanitized
+      ? { bytes: cardBackSanitized.bytes, contentType: cardBackSanitized.contentType }
+      : null;
+    if (!hasOtherCoverage || (!frontForParse && !backForParse)) {
+      cardSuggestionStatus = "no_card";
+    } else {
+      const parseInput = frontForParse
+        ? { front: frontForParse, back: backForParse }
+        : { front: backForParse!, back: null };
+      try {
+        cardSuggestion = await parseInsuranceCard(parseInput);
+      } catch (err) {
+        console.warn(
+          "COB update card parse failed:",
+          err instanceof Error ? err.message : err,
+        );
+        cardSuggestion = null;
+      }
+      if (!cardSuggestion) {
+        cardSuggestionStatus = "ai_unavailable";
+      } else if (suggestionIsConfident(cardSuggestion)) {
+        cardSuggestionStatus = "pending";
+      } else {
+        cardSuggestionStatus = "low_confidence";
+      }
+    }
+
     // Audit row → COB queue reducer flips claim state to "resolved".
     const { data: claimRow } = await (supabase as any)
       .from("professional_claims")
@@ -443,6 +492,8 @@ export async function POST(
           card_photo: storedCard,
           card_photo_front: storedCardFront,
           card_photo_back: storedCardBack,
+          card_suggestion: cardSuggestion,
+          card_suggestion_status: cardSuggestionStatus,
         },
         user_id: null,
         action: "cob_client_update_received",
