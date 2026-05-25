@@ -15,7 +15,7 @@ import {
   PROVIDER_ENROLLMENT_ISSUE_TABS,
   type ProviderEnrollmentIssueRow,
   type ProviderEnrollmentIssueType,
-} from "@/lib/billing/providerEnrollmentIssuesService";
+} from "@/lib/billing/providerEnrollmentIssuesTypes";
 
 type ListPayload = {
   success: boolean;
