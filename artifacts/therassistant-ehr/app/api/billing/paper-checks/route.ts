@@ -120,7 +120,9 @@ export async function GET(request: Request) {
       checkIds.length
         ? (supabase as any)
             .from("paper_check_claim_matches")
-            .select("paper_check_id, claim_id, applied_amount")
+            .select(
+              "paper_check_id, claim_id, applied_amount, adjustment_amount, patient_responsibility_amount",
+            )
             .eq("organization_id", organizationId)
             .in("paper_check_id", checkIds)
         : Promise.resolve({ data: [] as DbRow[] }),
@@ -231,6 +233,8 @@ export async function GET(request: Request) {
           claim_status: claim ? text(claim.claim_status) || null : null,
           total_charge: claim ? money(claim.total_charge) : 0,
           applied_amount: money(m.applied_amount),
+          adjustment_amount: money(m.adjustment_amount),
+          patient_responsibility_amount: money(m.patient_responsibility_amount),
           rendering_provider_npi: claim ? text(claim.rendering_provider_npi) || null : null,
           rendering_provider_name: claim
             ? text(claim.rendering_provider_last_name_or_org) || null

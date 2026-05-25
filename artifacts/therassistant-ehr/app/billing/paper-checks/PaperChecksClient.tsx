@@ -23,6 +23,8 @@ type MatchedClaim = {
   claim_status: string | null;
   total_charge: number;
   applied_amount: number;
+  adjustment_amount: number;
+  patient_responsibility_amount: number;
 };
 
 type Row = {
@@ -666,6 +668,8 @@ type ClaimSearchResult = {
 type MatchEntry = {
   claim_id: string;
   amount: string;
+  adjustment: string;
+  patient_resp: string;
   claim?: ClaimSearchResult;
 };
 
@@ -756,6 +760,8 @@ function MatchClaimsModal({
         {
           claim_id: claim.id,
           amount: claim.balance > 0 ? String(claim.balance) : "",
+          adjustment: "",
+          patient_resp: "",
           claim,
         },
       ];
@@ -764,6 +770,12 @@ function MatchClaimsModal({
 
   function updateAmount(idx: number, amount: string) {
     setEntries((prev) => prev.map((e, i) => (i === idx ? { ...e, amount } : e)));
+  }
+  function updateAdjustment(idx: number, adjustment: string) {
+    setEntries((prev) => prev.map((e, i) => (i === idx ? { ...e, adjustment } : e)));
+  }
+  function updatePatientResp(idx: number, patient_resp: string) {
+    setEntries((prev) => prev.map((e, i) => (i === idx ? { ...e, patient_resp } : e)));
   }
   function removeEntry(idx: number) {
     setEntries((prev) => prev.filter((_, i) => i !== idx));
@@ -780,7 +792,10 @@ function MatchClaimsModal({
       return;
     }
     setError(null);
-    setEntries((prev) => [...prev, { claim_id: id, amount: manualAmount.trim() }]);
+    setEntries((prev) => [
+      ...prev,
+      { claim_id: id, amount: manualAmount.trim(), adjustment: "", patient_resp: "" },
+    ]);
     setManualUuid("");
     setManualAmount("");
   }
@@ -795,7 +810,12 @@ function MatchClaimsModal({
 
   async function save() {
     const clean = entries
-      .map((e) => ({ claim_id: e.claim_id.trim(), amount: Number(e.amount || "0") }))
+      .map((e) => ({
+        claim_id: e.claim_id.trim(),
+        amount: Number(e.amount || "0"),
+        adjustment: Number(e.adjustment || "0"),
+        patient_resp: Number(e.patient_resp || "0"),
+      }))
       .filter((e) => e.claim_id);
     if (clean.length === 0) {
       setError("Pick at least one claim");
@@ -811,6 +831,8 @@ function MatchClaimsModal({
         action: "match_claims",
         claim_ids: clean.map((c) => c.claim_id),
         applied_amounts: clean.map((c) => c.amount),
+        adjustment_amounts: clean.map((c) => c.adjustment),
+        patient_responsibility_amounts: clean.map((c) => c.patient_resp),
       }),
     });
     const json = await res.json().catch(() => ({}));
@@ -828,6 +850,8 @@ function MatchClaimsModal({
         claim_status: existing?.claim_status ?? null,
         total_charge: existing?.total_charge ?? 0,
         applied_amount: Number(m.applied_amount) || 0,
+        adjustment_amount: Number(m.adjustment_amount) || 0,
+        patient_responsibility_amount: Number(m.patient_responsibility_amount) || 0,
       };
     });
     onSaved(
@@ -941,8 +965,15 @@ function MatchClaimsModal({
       <div style={{ marginTop: 14, fontWeight: 600, fontSize: 13 }}>
         Selected ({entries.length})
         <span style={{ float: "right", color: remaining === 0 ? "#065F46" : remaining < 0 ? "#B91C1C" : "#64748B" }}>
-          Applied {formatCurrency(selectedTotal)} of {formatCurrency(row.amount)}
+          Paid {formatCurrency(selectedTotal)} of {formatCurrency(row.amount)}
         </span>
+      </div>
+      <div style={{ fontSize: 11, color: "#64748B", marginTop: 2 }}>
+        Enter each line's split: <strong>Paid</strong> is the money applied from
+        this check (sums to the check total), <strong>Adj</strong> is the
+        contractual write-off, and <strong>PR</strong> is patient
+        responsibility — any PR &gt; 0 spawns an open patient invoice when you
+        post the payment.
       </div>
       {entries.length === 0 ? (
         <div
@@ -974,7 +1005,7 @@ function MatchClaimsModal({
                 key={`${e.claim_id}-${idx}`}
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "1fr 140px auto",
+                  gridTemplateColumns: "1fr 110px 110px 110px auto",
                   gap: 8,
                   alignItems: "center",
                   background: "#F8FAFC",
@@ -1005,8 +1036,29 @@ function MatchClaimsModal({
                   step="0.01"
                   min="0"
                   value={e.amount}
-                  placeholder="amount"
+                  placeholder="Paid"
+                  title="Insurance payment (money from this check)"
                   onChange={(ev) => updateAmount(idx, ev.target.value)}
+                  style={fieldInput}
+                />
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={e.adjustment}
+                  placeholder="Adj"
+                  title="Contractual adjustment / write-off"
+                  onChange={(ev) => updateAdjustment(idx, ev.target.value)}
+                  style={fieldInput}
+                />
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={e.patient_resp}
+                  placeholder="PR"
+                  title="Patient responsibility (creates a patient invoice when posted)"
+                  onChange={(ev) => updatePatientResp(idx, ev.target.value)}
                   style={fieldInput}
                 />
                 <button
@@ -1607,8 +1659,13 @@ export default function PaperChecksClient() {
                       Claim {m.claim_number ?? m.claim_id.slice(0, 8)} · {m.claim_status ?? "—"}
                     </div>
                     <div style={{ fontSize: 13, marginTop: 4 }}>
-                      Applied {formatCurrency(m.applied_amount)} / charge{" "}
-                      {formatCurrency(m.total_charge)}
+                      Paid {formatCurrency(m.applied_amount)} · Adj{" "}
+                      {formatCurrency(m.adjustment_amount)} · PR{" "}
+                      {formatCurrency(m.patient_responsibility_amount)}
+                      <span style={{ color: "#64748B" }}>
+                        {" "}
+                        / charge {formatCurrency(m.total_charge)}
+                      </span>
                     </div>
                   </div>
                 ))}

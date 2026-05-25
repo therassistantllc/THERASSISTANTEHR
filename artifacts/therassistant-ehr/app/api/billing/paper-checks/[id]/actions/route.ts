@@ -115,7 +115,9 @@ export async function POST(
         // flip, patient_invoices for residual PR, and applyWorkqueueRules.
         const { data: matchRows, error: matchErr } = await (supabase as any)
           .from("paper_check_claim_matches")
-          .select("claim_id, applied_amount")
+          .select(
+            "claim_id, applied_amount, adjustment_amount, patient_responsibility_amount",
+          )
           .eq("organization_id", organizationId)
           .eq("paper_check_id", checkId);
         if (matchErr) throw matchErr;
@@ -204,9 +206,13 @@ export async function POST(
         const failedClaimIds: string[] = [];
         const failureMessages: string[] = [];
 
+        const invoicedClaimIds: string[] = [];
+
         for (const m of matchList) {
           const claimId = text(m.claim_id);
           const appliedAmount = money(m.applied_amount);
+          const adjustmentAmount = money(m.adjustment_amount);
+          const patientRespAmount = money(m.patient_responsibility_amount);
 
           if (postedClaimSet.has(claimId)) {
             skippedClaimIds.push(claimId);
@@ -221,14 +227,17 @@ export async function POST(
               professionalClaimId: claimId,
               clientId: clientByClaim.get(claimId) ?? null,
               payerPaymentAmount: appliedAmount,
-              patientResponsibilityAmount: 0,
-              contractualAdjustmentAmount: 0,
-              // Paper-check posting captures only the applied amount —
-              // there is no adj/PR breakdown at intake. Tell the engine
-              // the recognised charge IS the applied amount so its
-              // balance check (paid + adj + pr == charge) passes when the
-              // claim's billed total is larger (partial-payment case).
-              totalChargeAmount: appliedAmount,
+              patientResponsibilityAmount: patientRespAmount,
+              contractualAdjustmentAmount: adjustmentAmount,
+              // Billers split each matched line into Paid + Adj + PR at
+              // match time. Hand all three to the engine so its balance
+              // check (paid + adj + pr == charge) passes and the engine
+              // can spawn the PR invoice for residual patient
+              // responsibility itself — same behaviour as the manual-EOB
+              // posting form. The recognised charge is the sum so a
+              // partial payment on a larger claim still balances.
+              totalChargeAmount:
+                appliedAmount + adjustmentAmount + patientRespAmount,
               checkOrEftNumber: (existing.check_number as string | null) ?? null,
               paymentDate: (existing.check_date as string | null) ?? today,
               eobReference: eobMarker,
@@ -243,6 +252,13 @@ export async function POST(
               ...result.errors.map((e) => `${claimId}: ${e.message}`),
             );
             continue;
+          }
+          // PR > 0 means the engine spawned a patient_invoices row for
+          // this claim (manualInsurance posting path). Track it on the
+          // audit event so billers can see which claims produced an
+          // invoice.
+          if (patientRespAmount > 0) {
+            invoicedClaimIds.push(claimId);
           }
           postedClaimIds.push(claimId);
         }
@@ -274,6 +290,9 @@ export async function POST(
         if (skippedClaimIds.length > 0) {
           eventPayload.skipped_claim_ids = skippedClaimIds;
         }
+        if (invoicedClaimIds.length > 0) {
+          eventPayload.invoiced_claim_ids = invoicedClaimIds;
+        }
         break;
       }
       case "match_claims": {
@@ -289,6 +308,12 @@ export async function POST(
         const amounts = Array.isArray(body.applied_amounts)
           ? (body.applied_amounts as unknown[]).map(money)
           : [];
+        const adjustments = Array.isArray(body.adjustment_amounts)
+          ? (body.adjustment_amounts as unknown[]).map(money)
+          : [];
+        const patientResps = Array.isArray(body.patient_responsibility_amounts)
+          ? (body.patient_responsibility_amounts as unknown[]).map(money)
+          : [];
 
         // Confirm claims belong to org.
         const { data: claimCheck, error: ccErr } = await (supabase as any)
@@ -300,13 +325,21 @@ export async function POST(
         const validIds = new Set(((claimCheck ?? []) as DbRow[]).map((c) => text(c.id)));
         const rows = claimIds
           .filter((id) => validIds.has(id))
-          .map((id, idx) => ({
-            organization_id: organizationId,
-            paper_check_id: checkId,
-            claim_id: id,
-            applied_amount: amounts[idx] ?? 0,
-            matched_by_user_id: guard.userId,
-          }));
+          .map((id, idx) => {
+            // Position-aligned: each claim id has matching applied/adj/PR
+            // entries in the parallel arrays. Missing entries default to 0
+            // so legacy callers (pre-split) keep working.
+            const originalIdx = claimIds.indexOf(id);
+            return {
+              organization_id: organizationId,
+              paper_check_id: checkId,
+              claim_id: id,
+              applied_amount: amounts[originalIdx] ?? 0,
+              adjustment_amount: adjustments[originalIdx] ?? 0,
+              patient_responsibility_amount: patientResps[originalIdx] ?? 0,
+              matched_by_user_id: guard.userId,
+            };
+          });
         if (rows.length === 0) {
           return NextResponse.json(
             { success: false, error: "No valid claims to match" },
@@ -378,7 +411,9 @@ export async function POST(
         .single(),
       (supabase as any)
         .from("paper_check_claim_matches")
-        .select("paper_check_id, claim_id, applied_amount")
+        .select(
+          "paper_check_id, claim_id, applied_amount, adjustment_amount, patient_responsibility_amount",
+        )
         .eq("organization_id", organizationId)
         .eq("paper_check_id", checkId),
     ]);
