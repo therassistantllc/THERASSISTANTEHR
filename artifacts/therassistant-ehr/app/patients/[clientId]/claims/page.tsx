@@ -38,8 +38,8 @@ function statusClass(v: string | null | undefined) {
 }
 
 export default function ClaimsPage() {
-  const params = useParams<{ clientId: string }>();
-  const clientId = params?.clientId ?? "";
+  const params = useParams<{ clientId?: string; id?: string }>();
+  const clientId = params?.clientId ?? params?.id ?? "";
   const searchParams = useSearchParams();
   const orgId = searchParams.get("organizationId") ?? process.env.NEXT_PUBLIC_ORGANIZATION_ID ?? "";
 
