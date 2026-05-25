@@ -19,15 +19,33 @@ export interface SummaryMetric {
   tone?: "default" | "amber" | "red" | "green";
 }
 
-export type FilterKind = "text" | "select" | "date" | "number";
+export type FilterKind = "text" | "select" | "date" | "number" | "combobox";
 
 export interface FilterDef {
   id: string;
   label: string;
   kind: FilterKind;
   placeholder?: string;
+  /**
+   * For `select` and `combobox` kinds.
+   *   - `select` renders a dropdown limited to these options.
+   *   - `combobox` renders a text input backed by a <datalist>; the user can
+   *     pick a suggestion or free-type. Selecting a suggestion fills the
+   *     input with the canonical `value` so downstream filtering is exact.
+   */
   options?: Array<{ value: string; label: string }>;
   width?: number;
+  /**
+   * Escape hatch: when set, the rail renders this in place of the
+   * kind-based input. The page owns its own picker UI and can wire up
+   * extra state (e.g. a stable identifier alongside the visible name).
+   * The provided `value` is still the shell's stored filter value; calling
+   * `setValue(next)` updates it through the usual `onFilterChange` path.
+   */
+  render?: (
+    value: string,
+    setValue: (next: string) => void,
+  ) => ReactNode;
 }
 
 export interface ColumnDef<TRow> {
@@ -447,7 +465,9 @@ export default function WorkqueueShell<TRow>(props: WorkqueueShellProps<TRow>) {
             return (
               <div key={f.id} className={styles.filterGroup}>
                 <span className={styles.filterLabel}>{f.label}</span>
-                {f.kind === "select" ? (
+                {f.render ? (
+                  f.render(value, (next) => setFilter(f.id, next))
+                ) : f.kind === "select" ? (
                   <select
                     {...common}
                     className={styles.filterSelect}
@@ -461,6 +481,26 @@ export default function WorkqueueShell<TRow>(props: WorkqueueShellProps<TRow>) {
                       </option>
                     ))}
                   </select>
+                ) : f.kind === "combobox" ? (
+                  <>
+                    <input
+                      {...common}
+                      className={styles.filterInput}
+                      type="text"
+                      list={`wqshell-combobox-${f.id}`}
+                      placeholder={f.placeholder}
+                      value={value}
+                      onChange={(e) => setFilter(f.id, e.target.value)}
+                      autoComplete="off"
+                    />
+                    <datalist id={`wqshell-combobox-${f.id}`}>
+                      {(f.options ?? []).map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </datalist>
+                  </>
                 ) : (
                   <input
                     {...common}

@@ -110,12 +110,18 @@ export async function GET(request: Request) {
     // batches query, so paging/limit honors the filter rather than truncating
     // pre-filter.
     const patientFilter = searchParams.get("patient")?.trim() || null;
+    // Typeahead picker sends the canonical client UUID instead of (or in
+    // addition to) the partial name. When set we restrict era_claim_payments
+    // by client_id directly — no ilike fuzziness — so a selected suggestion
+    // always lands on a stable identifier.
+    const clientIdFilter = searchParams.get("clientId")?.trim() || null;
     const clinicianFilter = searchParams.get("clinician")?.trim() || null;
     const practiceFilter = searchParams.get("practice")?.trim() || null;
     const dosFromFilter = searchParams.get("dosFrom") || null;
     const dosToFilter = searchParams.get("dosTo") || null;
     const hasJoinFilter = !!(
       patientFilter ||
+      clientIdFilter ||
       clinicianFilter ||
       practiceFilter ||
       dosFromFilter ||
@@ -144,25 +150,77 @@ export async function GET(request: Request) {
       }
 
       if (clinicianFilter) {
-        const needle = clinicianFilter.replace(/[%_]/g, "");
-        const { data, error: partyErr } = await supabase
+        // Typeahead suggestions emit the canonical full name ("First Last"
+        // for a person, or just "Acme Behavioral Health" for an org-style
+        // rendering provider). The snapshot stores first/last in separate
+        // columns, so a single ilike on either field can't match a
+        // concatenated person name. We OR together three matchers per
+        // claim:
+        //   1. last_name_or_org ilike "<full string>"  — handles org-only
+        //      providers whose first_name is null.
+        //   2. first_name ilike "<full string>"        — defensive.
+        //   3. first_name + last_name_or_org combined  — fetched in JS for
+        //      whitespace-split person names, since supabase-js can't do
+        //      `concat(first, ' ', last) ILIKE …` in PostgREST.
+        // The Postgres-side OR keeps the candidate set small; the JS-side
+        // refinement only matters when tokens.length >= 2.
+        const raw = clinicianFilter.replace(/[%_]/g, "");
+        const tokens = raw.split(/\s+/).filter(Boolean);
+        const orParts = [
+          `rendering_provider_last_name_or_org.ilike.%${raw}%`,
+          `rendering_provider_first_name.ilike.%${raw}%`,
+        ];
+        if (tokens.length >= 2) {
+          const first = tokens[0];
+          const rest = tokens.slice(1).join(" ");
+          // Fetch wider, then trim in JS — cheaper than emulating concat()
+          // in PostgREST and keeps the Postgres-side predicate sargable.
+          orParts.push(`rendering_provider_first_name.ilike.%${first}%`);
+          orParts.push(`rendering_provider_last_name_or_org.ilike.%${rest}%`);
+        }
+        const partyQuery = supabase
           .from("claim_parties_snapshot")
-          .select("claim_id")
-          .or(
-            `rendering_provider_first_name.ilike.%${needle}%,rendering_provider_last_name_or_org.ilike.%${needle}%`,
+          .select(
+            "claim_id, rendering_provider_first_name, rendering_provider_last_name_or_org",
           )
-          .limit(10000);
+          .or(orParts.join(","));
+        const { data, error: partyErr } = await partyQuery.limit(10000);
         if (partyErr) {
           return NextResponse.json({ success: false, error: partyErr.message }, { status: 500 });
         }
-        const ids = new Set(((data ?? []) as Array<{ claim_id: string }>).map((r) => r.claim_id));
+        // The Postgres-side OR intentionally over-fetches (e.g. anyone with
+        // a first name "Jane" plus anyone with last name "Doe"). Trim down
+        // to rows whose first+last actually match the requested clinician.
+        const rawLc = raw.toLowerCase();
+        const firstLc = tokens[0]?.toLowerCase() ?? "";
+        const restLc = tokens.slice(1).join(" ").toLowerCase();
+        type PartyHit = {
+          claim_id: string;
+          rendering_provider_first_name: string | null;
+          rendering_provider_last_name_or_org: string | null;
+        };
+        const hits = ((data ?? []) as PartyHit[]).filter((row) => {
+          const f = (row.rendering_provider_first_name ?? "").toLowerCase();
+          const l = (row.rendering_provider_last_name_or_org ?? "").toLowerCase();
+          if (l.includes(rawLc)) return true;
+          if (f.includes(rawLc)) return true;
+          if (tokens.length >= 2 && firstLc && restLc) {
+            if (f.includes(firstLc) && l.includes(restLc)) return true;
+          }
+          return false;
+        });
+        const ids = new Set(hits.map((r) => r.claim_id));
         claimIdSet = claimIdSet
           ? new Set([...claimIdSet].filter((id) => ids.has(id)))
           : ids;
       }
 
       let clientIdSet: Set<string> | null = null;
-      if (patientFilter) {
+      if (clientIdFilter) {
+        // A typeahead-picked patient already resolves to a single UUID, so we
+        // skip the name search entirely and constrain directly.
+        clientIdSet = new Set([clientIdFilter]);
+      } else if (patientFilter) {
         const needle = patientFilter.replace(/[%_]/g, "");
         const { data, error: clientErr } = await supabase
           .from("clients")

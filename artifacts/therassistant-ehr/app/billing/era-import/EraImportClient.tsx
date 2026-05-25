@@ -318,11 +318,75 @@ export default function EraImportClient() {
   const dosFromFilter = filterValues.dosFrom ?? "";
   const dosToFilter = filterValues.dosTo ?? "";
 
+  // Typeahead options fetched once per org. Patients carry an id so we can
+  // send a canonical client UUID when the biller picks a suggestion; the
+  // clinician/practice typeaheads are name- and code-based respectively.
+  const [patientOptions, setPatientOptions] = useState<Array<{ id: string; name: string }>>([]);
+  const [clinicianOptions, setClinicianOptions] = useState<string[]>([]);
+  const [practiceOptions, setPracticeOptions] = useState<string[]>([]);
+
+  useEffect(() => {
+    const qs = new URLSearchParams({ organizationId });
+    fetch(`/api/billing/era-batches/filter-options?${qs.toString()}`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((json) => {
+        if (!json?.success) return;
+        setPatientOptions(Array.isArray(json.patients) ? json.patients : []);
+        setClinicianOptions(
+          Array.isArray(json.clinicians)
+            ? json.clinicians.map((c: { name: string }) => c.name).filter(Boolean)
+            : [],
+        );
+        setPracticeOptions(
+          Array.isArray(json.practices)
+            ? json.practices.map((p: { code: string }) => p.code).filter(Boolean)
+            : [],
+        );
+      })
+      .catch(() => {
+        /* typeahead options are best-effort; fall back to free-text */
+      });
+  }, [organizationId]);
+
+  // The patient filter binds to two pieces of state: the visible text
+  // (mirrored into `filterValues.client` so URL persistence keeps working)
+  // and an explicit `selectedClientId` set only when the biller clicks a
+  // suggestion in the picker. Typing into the input clears the id, so a
+  // selection always carries an unambiguous identifier — two clients with
+  // the same display name can't collide because the picker captures the
+  // actual UUID at click time. Free-typed text falls back to the legacy
+  // `patient` ilike search.
+  const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+  const [patientPickerOpen, setPatientPickerOpen] = useState(false);
+
+  // Keep the explicit UUID in lockstep with the visible filter value: if the
+  // text is empty (because the user cleared it or clicked "Clear filters" on
+  // the rail) we must drop the id too, otherwise the API keeps filtering by
+  // clientId while the rail shows no patient selected. Same goes for any
+  // external mutation (URL nav, etc.) that changes the value out from under
+  // the picker.
+  useEffect(() => {
+    if (!patientFilter) {
+      if (selectedClientId) setSelectedClientId(null);
+      return;
+    }
+    if (selectedClientId) {
+      const match = patientOptions.find((p) => p.id === selectedClientId);
+      if (!match || match.name.toLowerCase() !== patientFilter.toLowerCase()) {
+        setSelectedClientId(null);
+      }
+    }
+  }, [patientFilter, selectedClientId, patientOptions]);
+
   // ── Load list (always include archived so the Duplicate tab is populated)
   useEffect(() => {
     setLoading(true);
     const qs = new URLSearchParams({ organizationId, includeArchived: "1" });
-    if (patientFilter.trim()) qs.set("patient", patientFilter.trim());
+    if (selectedClientId) {
+      qs.set("clientId", selectedClientId);
+    } else if (patientFilter.trim()) {
+      qs.set("patient", patientFilter.trim());
+    }
     if (clinicianFilter.trim()) qs.set("clinician", clinicianFilter.trim());
     if (practiceFilter.trim()) qs.set("practice", practiceFilter.trim());
     if (dosFromFilter) qs.set("dosFrom", dosFromFilter);
@@ -345,6 +409,7 @@ export default function EraImportClient() {
     organizationId,
     reloadKey,
     patientFilter,
+    selectedClientId,
     clinicianFilter,
     practiceFilter,
     dosFromFilter,
@@ -386,10 +451,136 @@ export default function EraImportClient() {
   // ── Filter rail (universal)
   const filters: FilterDef[] = useMemo(
     () => [
-      { id: "practice", label: "Practice", kind: "text", placeholder: "Service location…" },
-      { id: "clinician", label: "Clinician", kind: "text", placeholder: "Rendering provider…" },
+      {
+        id: "practice",
+        label: "Practice",
+        kind: "combobox",
+        placeholder: "POS code…",
+        options: practiceOptions.map((code) => ({ value: code, label: code })),
+      },
+      {
+        id: "clinician",
+        label: "Clinician",
+        kind: "combobox",
+        placeholder: "Rendering provider…",
+        options: clinicianOptions.map((name) => ({ value: name, label: name })),
+      },
       { id: "payer", label: "Payer", kind: "select", options: payerOptions },
-      { id: "client", label: "Client", kind: "text", placeholder: "Patient name…" },
+      {
+        id: "client",
+        label: "Client",
+        kind: "text",
+        placeholder: "Patient name…",
+        // Custom picker: explicit selection captures the client's UUID so
+        // duplicate display names can't collide. Free-typing clears the id
+        // and falls back to the legacy ilike `patient` search.
+        render: (value, setValue) => {
+          const needle = value.trim().toLowerCase();
+          const suggestions = needle
+            ? patientOptions
+                .filter((p) => p.name.toLowerCase().includes(needle))
+                .slice(0, 12)
+            : patientOptions.slice(0, 12);
+          return (
+            <div style={{ position: "relative" }}>
+              <input
+                aria-label="Client"
+                type="text"
+                className="wq-filter-input"
+                placeholder="Patient name…"
+                value={value}
+                onChange={(e) => {
+                  setValue(e.target.value);
+                  setSelectedClientId(null);
+                }}
+                onFocus={() => setPatientPickerOpen(true)}
+                onBlur={() => {
+                  // Defer so a mousedown on a suggestion can fire first.
+                  setTimeout(() => setPatientPickerOpen(false), 150);
+                }}
+                autoComplete="off"
+                style={{
+                  height: 28,
+                  padding: "0 8px",
+                  fontSize: 13,
+                  border: "1px solid #cbd5e1",
+                  borderRadius: 6,
+                  minWidth: 160,
+                }}
+              />
+              {selectedClientId ? (
+                <span
+                  title={`Filtering by client id ${selectedClientId}`}
+                  style={{
+                    position: "absolute",
+                    right: 6,
+                    top: 6,
+                    fontSize: 10,
+                    color: "#0F766E",
+                    fontWeight: 700,
+                  }}
+                >
+                  ID
+                </span>
+              ) : null}
+              {patientPickerOpen && suggestions.length > 0 ? (
+                <ul
+                  role="listbox"
+                  style={{
+                    position: "absolute",
+                    top: "100%",
+                    left: 0,
+                    right: 0,
+                    margin: 0,
+                    padding: 4,
+                    listStyle: "none",
+                    background: "white",
+                    border: "1px solid #cbd5e1",
+                    borderRadius: 6,
+                    boxShadow: "0 4px 12px rgba(15,23,42,0.08)",
+                    zIndex: 20,
+                    maxHeight: 240,
+                    overflowY: "auto",
+                    minWidth: 200,
+                  }}
+                >
+                  {suggestions.map((p) => (
+                    <li key={p.id}>
+                      <button
+                        type="button"
+                        role="option"
+                        onMouseDown={(e) => {
+                          // Prevent the input's onBlur from firing before
+                          // the click handler resolves.
+                          e.preventDefault();
+                        }}
+                        onClick={() => {
+                          setValue(p.name);
+                          setSelectedClientId(p.id);
+                          setPatientPickerOpen(false);
+                        }}
+                        style={{
+                          display: "block",
+                          width: "100%",
+                          textAlign: "left",
+                          padding: "4px 8px",
+                          fontSize: 13,
+                          background: "transparent",
+                          border: "none",
+                          borderRadius: 4,
+                          cursor: "pointer",
+                        }}
+                      >
+                        {p.name}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          );
+        },
+      },
       { id: "dosFrom", label: "DOS from", kind: "date" },
       { id: "dosTo", label: "DOS to", kind: "date" },
       {
@@ -431,7 +622,7 @@ export default function EraImportClient() {
       },
       { id: "followUpDue", label: "Follow-up due", kind: "date" },
     ],
-    [payerOptions],
+    [payerOptions, patientOptions, clinicianOptions, practiceOptions, selectedClientId, patientPickerOpen],
   );
 
   // ── Narrow to tab, then apply universal filter pass
@@ -481,7 +672,12 @@ export default function EraImportClient() {
         const r = b.receivedAt ? b.receivedAt.slice(0, 10) : null;
         if (r !== v.followUpDue) return false;
       }
-      if (v.client) {
+      if (v.client && !selectedClientId) {
+        // When a typeahead suggestion is selected we trust the server's
+        // clientId-based filter and skip the local name-match. Otherwise
+        // the displayed label (which may carry extra disambiguators) can
+        // diverge from the bare "first last" string stored on each row
+        // and silently filter all matching batches out.
         const needle = v.client.trim().toLowerCase();
         if (!b.patients.some((p) => p.toLowerCase().includes(needle))) return false;
       }
@@ -504,7 +700,7 @@ export default function EraImportClient() {
       }
       return true;
     });
-  }, [tabRows, filterValues]);
+  }, [tabRows, filterValues, selectedClientId]);
 
   // ── Summary strip
   const summary: SummaryMetric[] = useMemo(() => {
