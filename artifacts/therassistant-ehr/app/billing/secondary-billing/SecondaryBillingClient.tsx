@@ -15,6 +15,7 @@ import WorkqueueShell, {
   type RowAction,
   type SummaryMetric,
 } from "@/components/billing/WorkqueueShell";
+import { ClaimDocumentsPanel } from "@/components/billing/ClaimDocumentsPanel";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 
 type Tab =
@@ -754,8 +755,19 @@ export default function SecondaryBillingClient() {
           </div>
         ),
       },
+      {
+        id: "documents",
+        label: "Related documents",
+        render: () =>
+          selectedRow ? (
+            <ClaimDocumentsPanel
+              claimId={selectedRow.id}
+              organizationId={organizationId}
+            />
+          ) : null,
+      },
     ];
-  }, [selectedRow, promptUpdateInsurance]);
+  }, [selectedRow, organizationId, promptUpdateInsurance]);
 
   const detailActions: PrimaryAction[] = useMemo(() => {
     if (!selectedRow) return [];

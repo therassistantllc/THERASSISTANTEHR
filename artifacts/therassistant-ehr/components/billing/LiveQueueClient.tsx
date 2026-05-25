@@ -43,6 +43,7 @@ import WorkqueueShell, {
 } from "@/components/billing/WorkqueueShell";
 import { getWorkqueue } from "@/lib/billing/workqueues";
 import { DEFAULT_ORG_ID } from "@/lib/config";
+import { ClaimDocumentsPanel } from "@/components/billing/ClaimDocumentsPanel";
 
 export type LiveRow = Record<string, unknown> & {
   id: string;
@@ -109,6 +110,12 @@ export interface LiveQueueConfig {
   /** Field list rendered inside the right-side detail panel. */
   detailFields?: LiveDetailFieldDef[];
   emptyMessage?: string;
+  /**
+   * When set, appends a "Related documents" tab to the detail panel that
+   * mounts ClaimDocumentsPanel for the claim id returned by this resolver.
+   * Return null/empty when the selected row isn't tied to a single claim.
+   */
+  getClaimId?: (row: LiveRow) => string | null | undefined;
 }
 
 function getOrganizationId() {
@@ -171,6 +178,7 @@ export default function LiveQueueClient(props: LiveQueueConfig) {
     summaryLabels,
     detailFields,
     emptyMessage,
+    getClaimId,
   } = props;
 
   const def = getWorkqueue(queueId);
@@ -316,7 +324,7 @@ export default function LiveQueueClient(props: LiveQueueConfig) {
   const detailTabs: DetailTab[] = useMemo(() => {
     if (!selectedRow) return [];
     const fields = detailFields ?? [];
-    return [
+    const list: DetailTab[] = [
       {
         id: "details",
         label: "Details",
@@ -348,7 +356,23 @@ export default function LiveQueueClient(props: LiveQueueConfig) {
         ),
       },
     ];
-  }, [selectedRow, detailFields]);
+    if (getClaimId) {
+      const claimId = getClaimId(selectedRow);
+      if (claimId) {
+        list.push({
+          id: "documents",
+          label: "Related documents",
+          render: () => (
+            <ClaimDocumentsPanel
+              claimId={claimId}
+              organizationId={organizationId}
+            />
+          ),
+        });
+      }
+    }
+    return list;
+  }, [selectedRow, detailFields, getClaimId, organizationId]);
 
   const detailActions: PrimaryAction[] = useMemo(() => {
     if (!selectedRow || !actions) return [];

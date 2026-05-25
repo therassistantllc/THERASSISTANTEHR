@@ -11,6 +11,7 @@ import WorkqueueShell, {
   type SummaryMetric,
 } from "@/components/billing/WorkqueueShell";
 import { getWorkqueue } from "@/lib/billing/workqueues";
+import { ClaimDocumentsPanel } from "@/components/billing/ClaimDocumentsPanel";
 
 type Tab =
   | "commercial"
@@ -1029,8 +1030,24 @@ export default function UnderpaymentsClient() {
             </DetailSection>
           ) : null,
       },
+      {
+        id: "documents",
+        label: "Related documents",
+        render: () =>
+          selectedRow?.professionalClaimId ? (
+            <ClaimDocumentsPanel
+              claimId={selectedRow.professionalClaimId}
+              organizationId={organizationId}
+            />
+          ) : (
+            <p style={{ fontSize: 13, color: "#64748b", margin: 0 }}>
+              This ERA payment isn&apos;t matched to a claim yet, so there&apos;s
+              nothing to attach.
+            </p>
+          ),
+      },
     ],
-    [selectedRow],
+    [selectedRow, organizationId],
   );
 
   const detailActions: PrimaryAction[] = useMemo(() => {

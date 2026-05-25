@@ -47,6 +47,7 @@ export default function ComplianceHoldsPage() {
         { label: "Reason", value: (r) => String(r.reason ?? "—") },
         { label: "Placed", value: (r) => formatDate(r.placed) },
       ]}
+      getClaimId={(r) => String(r.id)}
     />
   );
 }

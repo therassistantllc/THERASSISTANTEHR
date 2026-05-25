@@ -80,6 +80,7 @@ export default function PartialDenialsPage() {
         { label: "CARC", value: (r) => String(r.carc ?? "—") },
         { label: "RARC", value: (r) => String(r.rarc ?? "—") },
       ]}
+      getClaimId={(r) => (r.claim_id ? String(r.claim_id) : null)}
     />
   );
 }

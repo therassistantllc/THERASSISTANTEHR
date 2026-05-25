@@ -50,6 +50,7 @@ export default function MedicalNecessityPage() {
         { label: "Denial code", value: (r) => String(r.denial_code ?? "—") },
         { label: "Charge", value: (r) => formatMoney(r.charge_amount) },
       ]}
+      getClaimId={(r) => (r.claim_id ? String(r.claim_id) : null)}
     />
   );
 }

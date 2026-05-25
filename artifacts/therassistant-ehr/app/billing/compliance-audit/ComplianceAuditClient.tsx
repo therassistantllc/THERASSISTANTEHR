@@ -9,6 +9,7 @@ import WorkqueueShell, {
   type RowAction,
   type SummaryMetric,
 } from "@/components/billing/WorkqueueShell";
+import { ClaimDocumentsPanel } from "@/components/billing/ClaimDocumentsPanel";
 import { getWorkqueue } from "@/lib/billing/workqueues";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -925,6 +926,17 @@ export default function ComplianceAuditClient() {
               claimId={selectedRow.claimId}
               organizationId={organizationId}
               bumpKey={bumpKey}
+            />
+          ) : null,
+      },
+      {
+        id: "documents",
+        label: "Related documents",
+        render: () =>
+          selectedRow?.claimId ? (
+            <ClaimDocumentsPanel
+              claimId={selectedRow.claimId}
+              organizationId={organizationId}
             />
           ) : null,
       },

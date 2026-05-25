@@ -43,6 +43,7 @@ export default function AuditQueuePage() {
         { label: "Audit type", value: (r) => String(r.audit_type ?? "—") },
         { label: "Charge", value: (r) => formatMoney(r.charge_amount) },
       ]}
+      getClaimId={(r) => (r.claim_id ? String(r.claim_id) : null)}
     />
   );
 }

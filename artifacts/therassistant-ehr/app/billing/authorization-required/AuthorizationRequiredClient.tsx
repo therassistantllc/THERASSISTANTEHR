@@ -10,6 +10,7 @@ import WorkqueueShell, {
   type DetailTab,
   type PrimaryAction,
 } from "@/components/billing/WorkqueueShell";
+import { ClaimDocumentsPanel } from "@/components/billing/ClaimDocumentsPanel";
 import { getWorkqueue } from "@/lib/billing/workqueues";
 
 type AuthTab =
@@ -906,8 +907,23 @@ export default function AuthorizationRequiredClient() {
           );
         },
       },
+      {
+        id: "claim_documents",
+        label: "Related documents",
+        render: () =>
+          selectedRow?.claimId ? (
+            <ClaimDocumentsPanel
+              claimId={selectedRow.claimId}
+              organizationId={organizationId}
+            />
+          ) : (
+            <p style={{ fontSize: 13, color: "#94A3B8", margin: 0 }}>
+              No claim is attached yet, so there&apos;s nothing to upload.
+            </p>
+          ),
+      },
     ],
-    [selectedRow, selectedAppointments, selectedDocuments],
+    [selectedRow, selectedAppointments, selectedDocuments, organizationId],
   );
 
   const detailActions: PrimaryAction[] = useMemo(() => {

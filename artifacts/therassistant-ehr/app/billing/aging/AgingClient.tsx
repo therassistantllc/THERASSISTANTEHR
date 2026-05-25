@@ -9,6 +9,7 @@ import WorkqueueShell, {
   type RowAction,
   type SummaryMetric,
 } from "@/components/billing/WorkqueueShell";
+import { ClaimDocumentsPanel } from "@/components/billing/ClaimDocumentsPanel";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1538,6 +1539,17 @@ export default function AgingClient() {
               claimId={selectedRow.id}
               organizationId={organizationId}
               bumpKey={bumpKey}
+            />
+          ) : null,
+      },
+      {
+        id: "documents",
+        label: "Related documents",
+        render: () =>
+          selectedRow ? (
+            <ClaimDocumentsPanel
+              claimId={selectedRow.id}
+              organizationId={organizationId}
             />
           ) : null,
       },

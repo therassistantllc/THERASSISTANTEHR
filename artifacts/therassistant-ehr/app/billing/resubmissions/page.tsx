@@ -59,6 +59,7 @@ export default function ResubmissionsPage() {
         { label: "Charge", value: (r) => formatMoney(r.charge_amount) },
         { label: "DOS", value: (r) => formatDate(r.date_of_service) },
       ]}
+      getClaimId={(r) => String(r.id)}
     />
   );
 }

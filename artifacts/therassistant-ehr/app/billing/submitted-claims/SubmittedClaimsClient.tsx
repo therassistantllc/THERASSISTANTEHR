@@ -10,6 +10,7 @@ import WorkqueueShell, {
   type RowAction,
   type SummaryMetric,
 } from "@/components/billing/WorkqueueShell";
+import { ClaimDocumentsPanel } from "@/components/billing/ClaimDocumentsPanel";
 import { getWorkqueue } from "@/lib/billing/workqueues";
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -906,6 +907,17 @@ export default function SubmittedClaimsClient() {
             </ul>
           );
         },
+      },
+      {
+        id: "documents",
+        label: "Related documents",
+        render: () =>
+          selectedRow ? (
+            <ClaimDocumentsPanel
+              claimId={selectedRow.id}
+              organizationId={organizationId}
+            />
+          ) : null,
       },
     ];
   }, [selectedRow, detailLoading, statusHistory, acks999, acks277, organizationId]);

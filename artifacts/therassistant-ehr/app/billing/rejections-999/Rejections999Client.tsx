@@ -11,6 +11,7 @@ import WorkqueueShell, {
   type SummaryMetric,
 } from "@/components/billing/WorkqueueShell";
 import { getWorkqueue } from "@/lib/billing/workqueues";
+import { ClaimDocumentsPanel } from "@/components/billing/ClaimDocumentsPanel";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -835,8 +836,24 @@ export default function Rejections999Client() {
           );
         },
       },
+      {
+        id: "documents",
+        label: "Related documents",
+        render: () =>
+          selectedRow?.claimId ? (
+            <ClaimDocumentsPanel
+              claimId={selectedRow.claimId}
+              organizationId={organizationId}
+            />
+          ) : (
+            <p style={{ fontSize: 13, color: "#64748b", margin: 0 }}>
+              No claim has been built for this rejection yet, so there&apos;s
+              nothing to attach.
+            </p>
+          ),
+      },
     ];
-  }, [selectedRow]);
+  }, [selectedRow, organizationId]);
 
   const detailActions: PrimaryAction[] = selectedRow
     ? [

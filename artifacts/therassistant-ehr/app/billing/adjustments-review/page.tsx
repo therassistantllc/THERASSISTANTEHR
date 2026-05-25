@@ -51,6 +51,7 @@ export default function AdjustmentsReviewPage() {
         { label: "Posted by", value: (r) => String(r.posted_by ?? "—") },
         { label: "Posted at", value: (r) => formatDate(r.posted_at) },
       ]}
+      getClaimId={(r) => (r.claim_id ? String(r.claim_id) : null)}
     />
   );
 }

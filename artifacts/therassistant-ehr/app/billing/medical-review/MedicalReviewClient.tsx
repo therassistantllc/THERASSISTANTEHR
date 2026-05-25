@@ -10,6 +10,7 @@ import WorkqueueShell, {
   type RowAction,
   type SummaryMetric,
 } from "@/components/billing/WorkqueueShell";
+import { ClaimDocumentsPanel } from "@/components/billing/ClaimDocumentsPanel";
 import { getWorkqueue } from "@/lib/billing/workqueues";
 import { MEDICAL_REVIEW_TABS, type MedicalReviewTab } from "@/lib/medical-review/tabs";
 import type { MedicalReviewRow } from "@/lib/medical-review/types";
@@ -1237,6 +1238,17 @@ export default function MedicalReviewClient() {
             </div>
           );
         },
+      },
+      {
+        id: "documents",
+        label: "Related documents",
+        render: () =>
+          selectedRow?.claimId ? (
+            <ClaimDocumentsPanel
+              claimId={selectedRow.claimId}
+              organizationId={organizationId}
+            />
+          ) : null,
       },
     ],
     [

@@ -15,6 +15,7 @@ import WorkqueueShell, {
   type RowAction,
   type SummaryMetric,
 } from "@/components/billing/WorkqueueShell";
+import { ClaimDocumentsPanel } from "@/components/billing/ClaimDocumentsPanel";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 
 type Tab =
@@ -642,6 +643,13 @@ export default function CobIssuesClient() {
             clientId={row.client_id}
             organizationId={organizationId}
           />
+        ),
+      },
+      {
+        id: "documents",
+        label: "Related documents",
+        render: () => (
+          <ClaimDocumentsPanel claimId={row.id} organizationId={organizationId} />
         ),
       },
     ];

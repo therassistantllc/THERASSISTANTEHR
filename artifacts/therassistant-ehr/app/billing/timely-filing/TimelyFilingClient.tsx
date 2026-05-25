@@ -10,6 +10,7 @@ import WorkqueueShell, {
   type RowAction,
   type SummaryMetric,
 } from "@/components/billing/WorkqueueShell";
+import { ClaimDocumentsPanel } from "@/components/billing/ClaimDocumentsPanel";
 import {
   TIMELY_FILING_TABS,
   type TimelyFilingTab,
@@ -1309,6 +1310,17 @@ export default function TimelyFilingClient() {
                 />
               </div>
             </div>
+          ) : null,
+      },
+      {
+        id: "documents",
+        label: "Related documents",
+        render: () =>
+          selectedRow ? (
+            <ClaimDocumentsPanel
+              claimId={selectedRow.id}
+              organizationId={organizationId}
+            />
           ) : null,
       },
     ],

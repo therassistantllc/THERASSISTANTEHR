@@ -10,6 +10,7 @@ import WorkqueueShell, {
   type RowAction,
   type SummaryMetric,
 } from "@/components/billing/WorkqueueShell";
+import { ClaimDocumentsPanel } from "@/components/billing/ClaimDocumentsPanel";
 import { getWorkqueue } from "@/lib/billing/workqueues";
 
 type Tab =
@@ -738,8 +739,19 @@ export default function DuplicateClaimReviewClient() {
             "Explain why these claims are distinct.",
           ),
       },
+      {
+        id: "documents",
+        label: "Related documents",
+        render: () =>
+          selectedRowId ? (
+            <ClaimDocumentsPanel
+              claimId={selectedRowId}
+              organizationId={organizationId}
+            />
+          ) : null,
+      },
     ];
-  }, [selectedRow, promptThen]);
+  }, [selectedRow, selectedRowId, organizationId, promptThen]);
 
   // ── Header (tabs as primary actions) + message ───────────────────────────
   const headerActions: PrimaryAction[] = useMemo(

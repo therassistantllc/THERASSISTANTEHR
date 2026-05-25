@@ -13,6 +13,7 @@ import WorkqueueShell, {
   type SummaryMetric,
 } from "@/components/billing/WorkqueueShell";
 import { getWorkqueue } from "@/lib/billing/workqueues";
+import { ClaimDocumentsPanel } from "@/components/billing/ClaimDocumentsPanel";
 import {
   TRANSMISSION_FAILURE_TABS,
   describeFailureTab,
@@ -1051,6 +1052,50 @@ export default function TransmissionFailuresClient() {
               >
                 Open in 837P Batches →
               </Link>
+            </div>
+          );
+        },
+      },
+      {
+        id: "documents",
+        label: "Related documents",
+        render: () => {
+          if (!selectedRow) return null;
+          const claims = selectedRow.claims ?? [];
+          if (claims.length === 0) {
+            return (
+              <p style={{ fontSize: 13, color: "#64748b", margin: 0 }}>
+                No claims are attached to this batch yet.
+              </p>
+            );
+          }
+          return (
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              {claims.map((c) => (
+                <section
+                  key={c.id}
+                  style={{
+                    border: "1px solid #e2e8f0",
+                    borderRadius: 6,
+                    padding: 12,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: "#475569",
+                      marginBottom: 8,
+                      fontWeight: 600,
+                    }}
+                  >
+                    Claim {c.claimNumber ?? c.id}
+                  </div>
+                  <ClaimDocumentsPanel
+                    claimId={c.id}
+                    organizationId={organizationId}
+                  />
+                </section>
+              ))}
             </div>
           );
         },

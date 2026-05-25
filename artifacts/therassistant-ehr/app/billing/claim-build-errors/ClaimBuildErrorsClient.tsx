@@ -11,6 +11,7 @@ import WorkqueueShell, {
   type PrimaryAction,
   type DetailTab,
 } from "@/components/billing/WorkqueueShell";
+import { ClaimDocumentsPanel } from "@/components/billing/ClaimDocumentsPanel";
 import PlaceClaimOnHoldModal from "@/components/billing/PlaceClaimOnHoldModal";
 import ClaimSubmissionReadinessPanel from "@/components/claim/ClaimSubmissionReadinessPanel";
 import {
@@ -703,6 +704,17 @@ export default function ClaimBuildErrorsClient() {
             claimLabel={selectedRow.claimNumber ?? undefined}
           />
         ),
+      },
+      {
+        id: "documents",
+        label: "Related documents",
+        render: () =>
+          selectedRow?.claimId ? (
+            <ClaimDocumentsPanel
+              claimId={selectedRow.claimId}
+              organizationId={organizationId}
+            />
+          ) : null,
       },
     ];
     // eslint-disable-next-line react-hooks/exhaustive-deps

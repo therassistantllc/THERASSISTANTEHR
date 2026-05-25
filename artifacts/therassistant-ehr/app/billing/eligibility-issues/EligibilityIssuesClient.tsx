@@ -10,6 +10,7 @@ import WorkqueueShell, {
   type RowAction,
   type SummaryMetric,
 } from "@/components/billing/WorkqueueShell";
+import { ClaimDocumentsPanel } from "@/components/billing/ClaimDocumentsPanel";
 import { getWorkqueue } from "@/lib/billing/workqueues";
 import {
   ELIGIBILITY_ISSUE_TABS,
@@ -959,8 +960,24 @@ export default function EligibilityIssuesClient() {
           </div>
         ) : null,
       },
+      {
+        id: "documents",
+        label: "Related documents",
+        render: () =>
+          selectedRow?.relatedClaimId ? (
+            <ClaimDocumentsPanel
+              claimId={selectedRow.relatedClaimId}
+              organizationId={organizationId}
+            />
+          ) : (
+            <p style={{ color: "#94A3B8", fontSize: 13 }}>
+              No claim is attached to this appointment yet, so there&apos;s
+              nothing to upload.
+            </p>
+          ),
+      },
     ],
-    [selectedRow, inboxCommentsById, loadInboxComments],
+    [selectedRow, organizationId, inboxCommentsById, loadInboxComments],
   );
 
   const detailActions: PrimaryAction[] = useMemo(() => {
