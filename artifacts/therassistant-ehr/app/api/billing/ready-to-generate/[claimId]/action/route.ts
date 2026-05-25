@@ -212,6 +212,13 @@ export async function POST(
         organizationId,
       });
       if (!rebuildResult.ok) {
+        // The validator pinpoints the failing field; the structured
+        // errorDetail lets the Ready-to-Generate UI map it onto the
+        // 837P field checklist tab instead of forcing the biller to
+        // parse the prose error string.
+        const detail = rebuildResult.errorDetail
+          ? { ...rebuildResult.errorDetail, claimId: rebuildResult.errorDetail.claimId ?? claimId }
+          : undefined;
         return NextResponse.json(
           {
             success: false,
@@ -219,6 +226,7 @@ export async function POST(
             batchId: result.batch_id,
             batchNumber: result.batch_number,
             status: "ready_to_generate",
+            errorDetail: detail,
             claim: { id: claimId, claim_status: "batched" },
           },
           { status: 422 },

@@ -75,6 +75,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
           error: result.error ?? "Failed to rebuild 837P file",
           batchId: id,
           status: "ready_to_generate",
+          errorDetail: result.errorDetail,
         },
         { status: 422 },
       );

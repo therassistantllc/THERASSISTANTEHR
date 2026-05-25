@@ -336,6 +336,7 @@ export async function POST(request: Request) {
       status: "generated" | "ready_to_generate";
       fileName?: string;
       error?: string;
+      errorDetail?: import("@/lib/claims/rebuild837PBatchFile").Rebuild837PBatchErrorDetail;
     }> = [];
     for (const b of created) {
       const r = await rebuild837PBatchFile({ batchId: b.batchId, organizationId });
@@ -345,6 +346,7 @@ export async function POST(request: Request) {
         status: r.ok ? "generated" : "ready_to_generate",
         fileName: r.ok ? r.fileName : undefined,
         error: r.ok ? undefined : r.error ?? "Failed to generate 837P file",
+        errorDetail: r.ok ? undefined : r.errorDetail,
       });
     }
     const failed = generated.filter((g) => g.status !== "generated");
@@ -369,6 +371,7 @@ export async function POST(request: Request) {
             status: generated[i].status,
             fileName: generated[i].fileName,
             error: generated[i].error,
+            errorDetail: generated[i].errorDetail,
           })),
         },
         { status: 422 },

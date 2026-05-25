@@ -127,6 +127,18 @@ function applyTab(items: Item[], tab: TabId): Item[] {
 
 const queueDef = getWorkqueue("ready_to_generate");
 
+// Mirrors Rebuild837PBatchErrorDetail in @/lib/claims/rebuild837PBatchFile
+// so the client can highlight the validator's pointer to the failing
+// field on the 837P field checklist tab.
+type GenerationErrorFieldDetail = {
+  code: "validation_failed" | "infrastructure_error";
+  message: string;
+  claimId?: string;
+  loop?: string;
+  segment?: string;
+  field?: string;
+};
+
 type GenerationErrorBatch = {
   batchId: string;
   batchNumber: string;
@@ -137,6 +149,7 @@ type GenerationErrorBatch = {
   status: "generated" | "ready_to_generate";
   fileName?: string;
   error?: string;
+  errorDetail?: GenerationErrorFieldDetail;
 };
 
 type GenerationErrorDetail =
@@ -147,12 +160,49 @@ type GenerationErrorDetail =
       claimLabel: string;
       batchId?: string;
       batchNumber?: string;
+      errorDetail?: GenerationErrorFieldDetail;
     }
   | {
       kind: "bulk";
       message: string;
       batches: GenerationErrorBatch[];
     };
+
+// Checklist row ids rendered by renderChecklistTab below. Keep in sync.
+type ChecklistRowId = "ref" | "amt" | "pos" | "dx" | "lines" | "billing" | "rendering" | "payer";
+
+/**
+ * Map a validator `field` path (e.g. "parties.billing_provider_npi",
+ * "serviceLines[0].procedure_code") onto the checklist row that displays
+ * the same constraint. Falls back to a loop/segment-based match so newer
+ * validator fields still light up the closest row instead of nothing.
+ */
+function checklistRowFor(detail: GenerationErrorFieldDetail | undefined): ChecklistRowId | null {
+  if (!detail) return null;
+  const field = detail.field ?? "";
+  if (field.startsWith("parties.billing_provider")) return "billing";
+  if (
+    field.startsWith("parties.rendering_provider") ||
+    field.includes("rendering_provider_npi")
+  ) {
+    return "rendering";
+  }
+  if (field.startsWith("payerProfile.") || field.startsWith("parties.payer_")) return "payer";
+  if (field === "claim.diagnosis_codes" || field.includes("diagnosis_pointers")) return "dx";
+  if (field === "claim.place_of_service") return "pos";
+  if (field === "claim.total_charge" || field.includes(".charge_amount")) return "amt";
+  if (field === "claim.patient_account_number" || field === "claim.claim_number") return "ref";
+  if (field === "serviceLines" || field.includes(".procedure_code") || field.includes(".units")) {
+    return "lines";
+  }
+  // Loop-based fallback so we still focus *something* useful.
+  const loop = detail.loop ?? "";
+  if (loop.startsWith("2010AA")) return "billing";
+  if (loop.startsWith("2010BB")) return "payer";
+  if (loop.startsWith("2310B")) return "rendering";
+  if (loop.startsWith("2400")) return "lines";
+  return null;
+}
 
 export default function ReadyToGenerateClient() {
   const organizationId = useMemo(() => getOrganizationId(), []);
@@ -181,6 +231,16 @@ export default function ReadyToGenerateClient() {
   const [bulkHoldOpen, setBulkHoldOpen] = useState(false);
   const [generationError, setGenerationError] = useState<GenerationErrorDetail | null>(null);
   const [retryingBatchId, setRetryingBatchId] = useState<string | null>(null);
+  // Controls the WorkqueueShell's detail tab so "Fix claim" can jump
+  // straight to the 837P field checklist. null = let the shell pick.
+  const [activeDetailTabId, setActiveDetailTabId] = useState<string | null>(null);
+  // Checklist row to flag as the validator's first failure, keyed by
+  // claim id. Cleared when the user picks a different claim or dismisses
+  // the error panel so the highlight doesn't linger on unrelated rows.
+  const [highlightedChecklistRow, setHighlightedChecklistRow] = useState<{
+    claimId: string;
+    rowId: ChecklistRowId;
+  } | null>(null);
 
   // ── Initial load + URL tab sync ─────────────────────────────────────────
   useEffect(() => {
@@ -577,6 +637,10 @@ export default function ReadyToGenerateClient() {
             typeof json.batchId === "string"
           ) {
             const claimRow = items.find((i) => i.id === claimId);
+            const errorDetail =
+              json.errorDetail && typeof json.errorDetail === "object"
+                ? (json.errorDetail as GenerationErrorFieldDetail)
+                : undefined;
             setGenerationError({
               kind: "single",
               message: json.error ?? "Generation failed",
@@ -587,8 +651,13 @@ export default function ReadyToGenerateClient() {
                 claimId,
               batchId: json.batchId,
               batchNumber: typeof json.batchNumber === "string" ? json.batchNumber : undefined,
+              errorDetail,
             });
-            setItems((prev) => prev.filter((i) => i.id !== claimId));
+            // Keep the claim visible (do NOT drop from items) so the
+            // 837P field checklist tab can still render its data when
+            // the operator clicks "Fix claim". The claim is technically
+            // 'batched' server-side, but it stays in this worklist
+            // until the next manual refresh.
             setSelectedIds((prev) => prev.filter((id) => id !== claimId));
             setMessage(null);
             return;
@@ -1039,7 +1108,7 @@ export default function ReadyToGenerateClient() {
 
   const renderChecklistTab = useCallback(() => {
     if (!selected) return null;
-    const checks: Array<{ id: string; ok: boolean; label: string }> = [
+    const checks: Array<{ id: ChecklistRowId; ok: boolean; label: string }> = [
       { id: "ref", ok: !!selected.claim_number, label: "CLM01 — Patient account / claim ref" },
       { id: "amt", ok: selected.charge_amount > 0, label: "CLM02 — Total charge > 0" },
       { id: "pos", ok: !!selected.place_of_service, label: "CLM05 — Place of service" },
@@ -1049,36 +1118,65 @@ export default function ReadyToGenerateClient() {
       { id: "rendering", ok: !!selected.rendering_provider_npi, label: "2310B NM1*82 — Rendering provider NPI" },
       { id: "payer", ok: !!selected.payer_id_value, label: "2010BB NM1*PR — Payer ID" },
     ];
+    // Only highlight when the highlight points at the *currently
+    // selected* claim — otherwise switching claims would leave the row
+    // glowing on the wrong record.
+    const highlightId =
+      highlightedChecklistRow && highlightedChecklistRow.claimId === selected.id
+        ? highlightedChecklistRow.rowId
+        : null;
     return (
       <ul style={{ margin: 0, paddingLeft: 0, listStyle: "none" }}>
-        {checks.map((c) => (
-          <li
-            key={c.id}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              padding: "6px 0",
-              borderBottom: "1px solid #F1F5F9",
-              fontSize: 13,
-            }}
-          >
-            <span
-              aria-hidden
+        {checks.map((c) => {
+          const isHighlight = highlightId === c.id;
+          return (
+            <li
+              key={c.id}
+              data-checklist-row={c.id}
+              aria-current={isHighlight ? "true" : undefined}
               style={{
-                width: 16,
-                color: c.ok ? "#15803D" : "#C53030",
-                fontWeight: 700,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: isHighlight ? "8px 10px" : "6px 0",
+                borderBottom: "1px solid #F1F5F9",
+                fontSize: 13,
+                background: isHighlight ? "#FEF3C7" : "transparent",
+                borderLeft: isHighlight ? "3px solid #D97706" : "3px solid transparent",
+                borderRadius: isHighlight ? 4 : 0,
               }}
             >
-              {c.ok ? "✓" : "✗"}
-            </span>
-            <span style={{ color: c.ok ? "#0F172A" : "#7F1D1D" }}>{c.label}</span>
-          </li>
-        ))}
+              <span
+                aria-hidden
+                style={{
+                  width: 16,
+                  color: c.ok ? "#15803D" : "#C53030",
+                  fontWeight: 700,
+                }}
+              >
+                {c.ok ? "✓" : "✗"}
+              </span>
+              <span style={{ color: c.ok ? "#0F172A" : "#7F1D1D" }}>{c.label}</span>
+              {isHighlight ? (
+                <span
+                  style={{
+                    marginLeft: "auto",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: "#92400E",
+                    textTransform: "uppercase",
+                    letterSpacing: 0.3,
+                  }}
+                >
+                  Failing
+                </span>
+              ) : null}
+            </li>
+          );
+        })}
       </ul>
     );
-  }, [selected]);
+  }, [selected, highlightedChecklistRow]);
 
   const renderValidationTab = useCallback(() => {
     if (!selected) return null;
@@ -1328,7 +1426,33 @@ export default function ReadyToGenerateClient() {
           detail={generationError}
           retryingBatchId={retryingBatchId}
           onRetry={(batchId) => void retryRebuild(batchId)}
-          onDismiss={() => setGenerationError(null)}
+          onDismiss={() => {
+            setGenerationError(null);
+            setHighlightedChecklistRow(null);
+          }}
+          onFixClaim={(claimId, fieldDetail) => {
+            // The validator hands us a field path; map it to a checklist
+            // row so the user sees *which* required field tripped the
+            // 837P generator. Falls through to the batch page when the
+            // failing claim isn't in this worklist (e.g. a bulk batch
+            // that ran across pages) or when no field pointer is set.
+            if (!claimId) return false;
+            const exists = items.some((i) => i.id === claimId);
+            if (!exists) return false;
+            setSelectedId(claimId);
+            const rowId = checklistRowFor(fieldDetail);
+            if (rowId) {
+              setHighlightedChecklistRow({ claimId, rowId });
+              setActiveDetailTabId("checklist");
+            } else {
+              // No checklist row matched — the validator pointer
+              // belongs on the provider/payer validation tab instead
+              // (e.g. subscriber, connection, billing address).
+              setHighlightedChecklistRow(null);
+              setActiveDetailTabId("validation");
+            }
+            return true;
+          }}
         />
       ) : null}
       <WorkqueueShell<Item>
@@ -1346,11 +1470,23 @@ export default function ReadyToGenerateClient() {
         loading={loading}
         emptyMessage="No claims in this view."
         selectedRowId={selectedId}
-        onSelectRow={setSelectedId}
+        onSelectRow={(id) => {
+          setSelectedId(id);
+          // Switching claims clears the failure highlight so it doesn't
+          // bleed onto an unrelated record's checklist.
+          if (highlightedChecklistRow && highlightedChecklistRow.claimId !== id) {
+            setHighlightedChecklistRow(null);
+          }
+          // Release the controlled tab so the shell falls back to its
+          // own default after the user navigates.
+          setActiveDetailTabId(null);
+        }}
         selectedRowIds={selectedIds}
         onSelectionChange={setSelectedIds}
         rowActions={rowActions}
         detailTabs={detailTabs}
+        activeDetailTabId={activeDetailTabId ?? undefined}
+        onDetailTabChange={(id) => setActiveDetailTabId(id)}
         detailActions={detailActions}
         message={message}
       />
@@ -1580,11 +1716,19 @@ function GenerationErrorPanel({
   retryingBatchId,
   onRetry,
   onDismiss,
+  onFixClaim,
 }: {
   detail: GenerationErrorDetail;
   retryingBatchId: string | null;
   onRetry: (batchId: string) => void;
   onDismiss: () => void;
+  /**
+   * Returns false when the panel should fall back to its default
+   * link-to-batch behaviour (e.g. the failing claim is not in the
+   * current worklist). When it returns true, the caller has handled
+   * focusing the claim + checklist row in-page.
+   */
+  onFixClaim: (claimId: string | undefined, detail: GenerationErrorFieldDetail | undefined) => boolean;
 }) {
   const baseWrap: React.CSSProperties = {
     margin: "0 0 12px",
@@ -1599,6 +1743,12 @@ function GenerationErrorPanel({
     const fixHref = detail.batchId
       ? `/billing/batches/${encodeURIComponent(detail.batchId)}`
       : undefined;
+    const fieldPointer = detail.errorDetail;
+    const pointerBits = [
+      fieldPointer?.loop,
+      fieldPointer?.segment,
+      fieldPointer?.field,
+    ].filter(Boolean);
     return (
       <div role="alert" style={baseWrap}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
@@ -1626,10 +1776,30 @@ function GenerationErrorPanel({
         <div style={{ marginTop: 6, color: "#991B1B", whiteSpace: "pre-wrap" }}>
           {detail.message}
         </div>
+        {pointerBits.length > 0 ? (
+          <div
+            style={{
+              marginTop: 6,
+              fontSize: 11.5,
+              color: "#7F1D1D",
+              fontFamily: "ui-monospace, monospace",
+            }}
+          >
+            {pointerBits.join(" · ")}
+          </div>
+        ) : null}
         <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
           {fixHref ? (
             <a
               href={fixHref}
+              onClick={(e) => {
+                // Prefer in-page focus (claim + checklist row) when the
+                // claim is still in this worklist. Only fall back to the
+                // batch page when the parent says it can't handle it.
+                if (onFixClaim(detail.claimId, fieldPointer)) {
+                  e.preventDefault();
+                }
+              }}
               style={{
                 padding: "6px 12px",
                 background: "white",
@@ -1740,12 +1910,31 @@ function GenerationErrorPanel({
                 </td>
                 <td style={{ padding: "6px 8px", color: ok ? "#0F172A" : "#991B1B" }}>
                   {ok ? b.fileName ?? "—" : b.error ?? "Validation failed"}
+                  {!ok && b.errorDetail && (b.errorDetail.loop || b.errorDetail.segment || b.errorDetail.field) ? (
+                    <div
+                      style={{
+                        marginTop: 2,
+                        fontSize: 11,
+                        color: "#7F1D1D",
+                        fontFamily: "ui-monospace, monospace",
+                      }}
+                    >
+                      {[b.errorDetail.loop, b.errorDetail.segment, b.errorDetail.field]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </div>
+                  ) : null}
                 </td>
                 <td style={{ padding: "6px 8px" }}>
                   {ok ? null : (
                     <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                       <a
                         href={`/billing/batches/${encodeURIComponent(b.batchId)}`}
+                        onClick={(e) => {
+                          if (onFixClaim(b.errorDetail?.claimId, b.errorDetail)) {
+                            e.preventDefault();
+                          }
+                        }}
                         style={{
                           padding: "4px 8px",
                           background: "white",

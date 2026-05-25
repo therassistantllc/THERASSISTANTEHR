@@ -1,5 +1,6 @@
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import {
+  Availity837PValidationFailedError,
   generateAvaility837PMultiClaimBatch,
   type MultiClaimBatchClaimInput,
 } from "@/lib/edi/availity837p/generate837pMultiClaimBatch";
@@ -180,12 +181,28 @@ function normalizeConnection(row: Row): AvailityConnection {
   };
 }
 
+/**
+ * Structured pointer to the first failing field reported by the per-claim
+ * 837P validator. The Ready-to-Generate UI maps `field` onto its
+ * "837P field checklist" detail tab so the operator can jump directly to
+ * the broken row instead of parsing the prose `message`.
+ */
+export interface Rebuild837PBatchErrorDetail {
+  code: "validation_failed" | "infrastructure_error";
+  message: string;
+  claimId?: string;
+  loop?: string;
+  segment?: string;
+  field?: string;
+}
+
 export interface Rebuild837PBatchResult {
   ok: boolean;
   batchId: string;
   fileName?: string;
   claimCount?: number;
   error?: string;
+  errorDetail?: Rebuild837PBatchErrorDetail;
 }
 
 /**
@@ -363,10 +380,33 @@ export async function rebuild837PBatchFile(args: {
       claims: claimInputs,
     });
   } catch (e) {
+    if (e instanceof Availity837PValidationFailedError) {
+      // Pick the first claim with errors, then its first error, as the
+      // pointer for the UI to highlight. Multiple errors still flow
+      // through the prose `error` string; the UI uses errorDetail only
+      // as a focus hint.
+      const firstFailing = e.perClaimErrors.find((p) => p.errors.length > 0);
+      const firstError = firstFailing?.errors[0];
+      return {
+        ok: false,
+        batchId,
+        error: e.message,
+        errorDetail: {
+          code: "validation_failed",
+          message: firstError?.message ?? e.message,
+          claimId: firstFailing?.claimId,
+          loop: firstError?.loop,
+          segment: firstError?.segment,
+          field: firstError?.field,
+        },
+      };
+    }
+    const msg = e instanceof Error ? e.message : "Failed to build 837P content";
     return {
       ok: false,
       batchId,
-      error: e instanceof Error ? e.message : "Failed to build 837P content",
+      error: msg,
+      errorDetail: { code: "infrastructure_error", message: msg },
     };
   }
 

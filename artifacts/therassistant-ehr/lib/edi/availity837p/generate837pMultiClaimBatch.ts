@@ -349,6 +349,32 @@ function emitClaimSegments(ctx: BuildClaimContext): string[] {
   return segments;
 }
 
+/**
+ * Thrown by generateAvaility837PMultiClaimBatch when the per-claim validator
+ * rejects one or more claims. Carries the per-claim error breakdown so
+ * callers (rebuild837PBatchFile, /api routes) can surface a structured
+ * { claimId, loop, segment, field } shape to the UI — letting the
+ * Ready-to-Generate error panel highlight the failing checklist row
+ * instead of just dumping prose.
+ */
+export class Availity837PValidationFailedError extends Error {
+  readonly perClaimErrors: Array<{
+    claimId: string;
+    errors: import("./types").Availity837PValidationError[];
+  }>;
+  constructor(
+    message: string,
+    perClaimErrors: Array<{
+      claimId: string;
+      errors: import("./types").Availity837PValidationError[];
+    }>,
+  ) {
+    super(message);
+    this.name = "Availity837PValidationFailedError";
+    this.perClaimErrors = perClaimErrors;
+  }
+}
+
 export function generateAvaility837PMultiClaimBatch(input: MultiClaimBatchInput): Generated837PBatch {
   if (!input.claims.length) {
     throw new Error("Availity 837P batch requires at least one claim");
@@ -367,7 +393,14 @@ export function generateAvaility837PMultiClaimBatch(input: MultiClaimBatchInput)
   const validation = mergeValidation(perClaimValidations);
   if (!validation.isValid) {
     const message = validation.errors.map((e) => `${e.field}: ${e.message}`).join("; ");
-    throw new Error(`Availity 837P validation failed: ${message}`);
+    const perClaimErrors = input.claims.map((entry, idx) => ({
+      claimId: entry.claim.id,
+      errors: perClaimValidations[idx].errors,
+    }));
+    throw new Availity837PValidationFailedError(
+      `Availity 837P validation failed: ${message}`,
+      perClaimErrors,
+    );
   }
 
   const { connection } = input;

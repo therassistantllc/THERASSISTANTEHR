@@ -119,6 +119,15 @@ export interface WorkqueueShellProps<TRow> {
   rowActions?: RowAction<TRow>[];
   /** Right-side detail panel */
   detailTabs?: DetailTab[];
+  /**
+   * Optional controlled detail-tab id. When set, the shell renders this
+   * tab instead of its internal default; pair with `onDetailTabChange`
+   * to keep both ends in sync. Pages use this to focus a specific tab
+   * in response to an external event (e.g. "Fix claim" jumping to the
+   * 837P field checklist).
+   */
+  activeDetailTabId?: string;
+  onDetailTabChange?: (tabId: string) => void;
   detailActions?: PrimaryAction[];
   /** Escape hatch: render the entire detail body instead of using tabs. */
   renderDetail?: (selectedRowId: string) => ReactNode;
@@ -269,6 +278,8 @@ export default function WorkqueueShell<TRow>(props: WorkqueueShellProps<TRow>) {
     onSelectionChange,
     rowActions,
     detailTabs,
+    activeDetailTabId,
+    onDetailTabChange,
     detailActions,
     renderDetail,
     hideDetailPane,
@@ -281,17 +292,31 @@ export default function WorkqueueShell<TRow>(props: WorkqueueShellProps<TRow>) {
 
   useUrlFilterSync(filterUrlNamespace, filterValues, onFilterChange);
 
-  const [activeTabId, setActiveTabId] = useState<string | null>(
+  const [internalActiveTabId, setInternalActiveTabId] = useState<string | null>(
     detailTabs && detailTabs.length > 0 ? detailTabs[0].id : null,
+  );
+
+  // Controlled when the page supplies activeDetailTabId; otherwise the
+  // shell falls back to its own internal selection. This lets pages
+  // programmatically jump the user to a specific tab (e.g. "Fix claim"
+  // focusing the 837P field checklist) without losing the default UX
+  // for queues that don't need that control.
+  const activeTabId = activeDetailTabId ?? internalActiveTabId;
+  const setActiveTabId = useCallback(
+    (id: string) => {
+      setInternalActiveTabId(id);
+      onDetailTabChange?.(id);
+    },
+    [onDetailTabChange],
   );
 
   useEffect(() => {
     if (!detailTabs || detailTabs.length === 0) {
-      setActiveTabId(null);
+      setInternalActiveTabId(null);
       return;
     }
     if (!activeTabId || !detailTabs.some((t) => t.id === activeTabId)) {
-      setActiveTabId(detailTabs[0].id);
+      setInternalActiveTabId(detailTabs[0].id);
     }
   }, [detailTabs, activeTabId]);
 
