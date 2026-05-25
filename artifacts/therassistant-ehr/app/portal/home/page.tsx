@@ -326,11 +326,16 @@ export default async function PatientPortalHomePage() {
           <div className="eyebrow">{practiceName}</div>
           <h1>Hi, {patientName}</h1>
         </div>
-        <form action={signOut}>
-          <button type="submit" className="button button-secondary">
-            Sign out
-          </button>
-        </form>
+        <div style={{ display: "flex", gap: 8 }}>
+          <a href="/portal/journal" className="button button-secondary">
+            Open journal
+          </a>
+          <form action={signOut}>
+            <button type="submit" className="button button-secondary">
+              Sign out
+            </button>
+          </form>
+        </div>
       </header>
 
       {/* Upcoming appointments */}

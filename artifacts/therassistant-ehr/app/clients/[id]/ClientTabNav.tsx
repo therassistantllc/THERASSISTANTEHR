@@ -9,6 +9,7 @@ const CLIENT_TABS = [
   { label: "Summary", slug: "" },
   { label: "Appointments", slug: "appointments" },
   { label: "Notes", slug: "notes" },
+  { label: "Journal", slug: "journal" },
   { label: "Eligibility", slug: "eligibility" },
   { label: "Claims", slug: "claims" },
   { label: "Balance", slug: "balance" },

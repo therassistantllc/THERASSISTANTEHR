@@ -7,6 +7,7 @@ import DiagnosisPicker, { Diagnosis } from "@/components/encounter/DiagnosisPick
 import CptCodePanel, { ServiceLine } from "@/components/encounter/CptCodePanel";
 import ClaimReadinessSidebar, { ClaimReadinessCheck } from "@/components/encounter/ClaimReadinessSidebar";
 import SignNoteModal from "@/components/encounter/SignNoteModal";
+import ClinicianJournalPanel, { ImportResult } from "@/components/encounter/ClinicianJournalPanel";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 import {
   CHECK_IN_SUBJECTIVE_MARKER,
@@ -91,6 +92,7 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
   const [mailroomDocs, setMailroomDocs] = useState<EncounterMailroomDocument[]>([]);
   const [savingPersonal, setSavingPersonal] = useState(false);
+  const [showJournalModal, setShowJournalModal] = useState(false);
 
   const personalTemplates = useMemo(
     () => templates.filter((t) => t.provider_id !== null),
@@ -436,6 +438,70 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
     }
   }
 
+  async function handleJournalImport({ entry, field, text }: ImportResult) {
+    // The import is a 2-step sequence (stamp → save text). We stamp first
+    // so that if anything fails the SOAP body isn't mutated; the stamp is
+    // idempotent for the same (note, field) so a retry is safe. If the
+    // stamp succeeds but the text save fails the user just re-saves, and
+    // the stamp call returns success again because it matches.
+    if (!summary?.clinicalNote?.id) {
+      // No draft yet — saving creates the encounter_clinical_notes row so
+      // we have a noteId to stamp onto the entry.
+      await saveNote();
+    }
+    let noteId = summary?.clinicalNote?.id ?? null;
+    if (!noteId) {
+      const res = await fetch(
+        `/api/encounters/${encounterId}/summary?organizationId=${encodeURIComponent(organizationId)}`,
+        { cache: "no-store" },
+      );
+      const json = (await res.json()) as EncounterSummary;
+      noteId = json.clinicalNote?.id ?? null;
+    }
+    if (!noteId) {
+      throw new Error("Could not create a draft note to import into. Try Save Draft first.");
+    }
+    const clientIdForEntry = summary?.patient?.id ?? "";
+    const importRes = await fetch(
+      `/api/clients/${encodeURIComponent(clientIdForEntry)}/journal/${entry.id}/import`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ organizationId, noteId, field }),
+      },
+    );
+    const importJson = (await importRes.json().catch(() => ({}))) as { success?: boolean; error?: string };
+    if (!importRes.ok || !importJson.success) {
+      throw new Error(importJson.error ?? "Failed to mark entry as imported");
+    }
+    const stamp = entry.createdAt ? new Date(entry.createdAt).toLocaleDateString() : "";
+    const attributed = `\n\n${text}\n— From patient journal${stamp ? ` — ${stamp}` : ""}`;
+    const current = soapNote[field] ?? "";
+    const nextValue = current ? `${current.trimEnd()}${attributed}` : attributed.trimStart();
+    const updated: SoapNoteData = { ...soapNote, [field]: nextValue };
+    setSoapNote(updated);
+    const saveRes = await fetch(`/api/encounters/${encounterId}/note`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        organizationId,
+        action: isSigned ? "amend" : "save",
+        subjective: updated.subjective ?? "",
+        objective: updated.objective ?? "",
+        assessment: updated.assessment ?? "",
+        plan: updated.plan ?? "",
+        userId: null,
+      }),
+    });
+    if (!saveRes.ok) {
+      throw new Error(
+        "Imported entry was marked, but saving the appended note text failed. Use Save Draft to retry.",
+      );
+    }
+    setMessage(`Imported journal entry into ${field}.`);
+    await loadEncounter();
+  }
+
   async function saveBillingDetails() {
     setSaving(true);
     setError(null);
@@ -648,6 +714,24 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
               </table>
             )}
           </article>
+          <article className="panel">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+              <div>
+                <h2 style={{ margin: 0 }}>Between-session journal</h2>
+                <p className="muted" style={{ margin: "4px 0 0 0", fontSize: 13 }}>
+                  Pull individual entries the patient logged between visits into a SOAP field.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="button button-secondary"
+                onClick={() => setShowJournalModal(true)}
+                disabled={!summary?.patient?.id}
+              >
+                Import from journal
+              </button>
+            </div>
+          </article>
           <SoapNoteEditor data={soapNote} onChange={setSoapNote} disabled={finalized} />
           <DiagnosisPicker diagnoses={diagnoses} onChange={setDiagnoses} disabled={finalized} />
           <CptCodePanel serviceLines={serviceLines} onChange={setServiceLines} disabled={finalized} serviceDate={encounter.service_date || undefined} />
@@ -655,6 +739,57 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
       </section>
 
       <SignNoteModal isOpen={showSignModal} onClose={() => setShowSignModal(false)} onConfirm={signNote} isLoading={saving} />
+
+      {showJournalModal && summary?.patient?.id ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Import from journal"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowJournalModal(false); }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.45)",
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "flex-start",
+            padding: "48px 16px",
+            zIndex: 1000,
+            overflowY: "auto",
+          }}
+        >
+          <div
+            className="panel"
+            style={{
+              background: "var(--surface-color, #fff)",
+              borderRadius: 8,
+              width: "min(900px, 100%)",
+              maxHeight: "calc(100vh - 96px)",
+              overflowY: "auto",
+              padding: 20,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <h2 style={{ margin: 0 }}>Import from patient journal</h2>
+              <button
+                type="button"
+                className="button button-secondary"
+                onClick={() => setShowJournalModal(false)}
+              >
+                Close
+              </button>
+            </div>
+            <ClinicianJournalPanel
+              clientId={summary.patient.id}
+              organizationId={organizationId}
+              mode="import"
+              windowSinceLastSigned
+              excludeEncounterId={encounterId}
+              onImport={handleJournalImport}
+            />
+          </div>
+        </div>
+      ) : null}
 
       <style jsx>{`
         .encounter-workspace {
