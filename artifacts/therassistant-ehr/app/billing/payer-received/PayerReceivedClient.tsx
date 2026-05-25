@@ -87,6 +87,41 @@ function Toast({ message, onClose }: { message: string; onClose: () => void }) {
   );
 }
 
+function TriggerSourceBadge({
+  triggerSource,
+}: {
+  triggerSource: "manual" | "auto" | null | undefined;
+}) {
+  if (triggerSource !== "manual" && triggerSource !== "auto") return null;
+  const isAuto = triggerSource === "auto";
+  const label = isAuto ? "Auto-checked" : "Manual";
+  const title = isAuto
+    ? "Triggered automatically by the scheduled payer status auto-check"
+    : "Triggered manually by a biller";
+  return (
+    <span
+      title={title}
+      aria-label={label}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        padding: "1px 6px",
+        borderRadius: 10,
+        fontSize: 10,
+        fontWeight: 600,
+        letterSpacing: 0.2,
+        textTransform: "uppercase",
+        background: isAuto ? "#E0F2FE" : "#F1F5F9",
+        color: isAuto ? "#075985" : "#334155",
+        border: isAuto ? "1px solid #BAE6FD" : "1px solid #E2E8F0",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
 function DetailKV({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div
@@ -305,10 +340,12 @@ export default function PayerReceivedClient() {
         id: "status",
         header: "Payer status",
         cell: (r) => {
+          const latest276 = r.statusHistory.find((h) => h.source === "276/277");
           const checkedAt =
             lastCheckedAt[r.id] ??
-            r.statusHistory.find((h) => h.source === "276/277")?.at ??
+            latest276?.at ??
             null;
+          const latestTrigger = latest276?.triggerSource ?? null;
           const errMsg = checkErrors[r.id];
           const code = r.payerStatusCode;
           const display = (r.payerStatus || "—").replace(/_/g, " ");
@@ -339,7 +376,10 @@ export default function PayerReceivedClient() {
                   </button>
                 </span>
               ) : checkedAt ? (
-                <span style={{ fontSize: 11, color: "#64748B" }}>Checked {fmtRelative(checkedAt)}</span>
+                <span style={{ fontSize: 11, color: "#64748B", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <span>Checked {fmtRelative(checkedAt)}</span>
+                  <TriggerSourceBadge triggerSource={latestTrigger} />
+                </span>
               ) : null}
             </div>
           );
@@ -450,6 +490,7 @@ export default function PayerReceivedClient() {
                   message: errMsg,
                   payerReferenceId: null,
                   at: failedAt,
+                  triggerSource: "manual",
                 },
                 ...r.statusHistory,
               ],
@@ -487,6 +528,7 @@ export default function PayerReceivedClient() {
                     message: text ?? `Payer responded (${inquiryStatus})`,
                     payerReferenceId: code,
                     at: respondedAt,
+                    triggerSource: "manual",
                   },
                   ...r.statusHistory,
                 ],
@@ -616,7 +658,10 @@ export default function PayerReceivedClient() {
                       <strong style={{ textTransform: "capitalize" }}>{h.status.replace(/_/g, " ")}</strong>
                       <span style={{ color: "#64748B" }}>{fmtDateTime(h.at)}</span>
                     </div>
-                    <div style={{ fontSize: 12, color: "#475569" }}>{h.source}</div>
+                    <div style={{ fontSize: 12, color: "#475569", display: "flex", alignItems: "center", gap: 6 }}>
+                      <span>{h.source}</span>
+                      <TriggerSourceBadge triggerSource={h.triggerSource} />
+                    </div>
                     {h.message ? <div style={{ fontSize: 12, color: "#0F172A", marginTop: 2 }}>{h.message}</div> : null}
                     {h.payerReferenceId ? (
                       <div style={{ fontSize: 11, color: "#64748B", fontFamily: "ui-monospace, monospace" }}>
