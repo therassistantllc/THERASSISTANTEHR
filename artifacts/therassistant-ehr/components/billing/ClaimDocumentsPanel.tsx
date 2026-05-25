@@ -1,6 +1,54 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+type UploadStatus = "uploading" | "success" | "error";
+type UploadItem = {
+  key: string;
+  name: string;
+  size: number;
+  progress: number;
+  status: UploadStatus;
+  error?: string;
+};
+
+function uploadFileWithProgress(
+  claimId: string,
+  organizationId: string,
+  file: File,
+  onProgress: (pct: number) => void,
+): Promise<{ ok: boolean; error?: string }> {
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `/api/billing/claims/${claimId}/documents`);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onerror = () => resolve({ ok: false, error: "Network error" });
+    xhr.onload = () => {
+      let body: { success?: boolean; error?: string } = {};
+      try {
+        body = JSON.parse(xhr.responseText || "{}");
+      } catch {
+        // ignore
+      }
+      if (xhr.status >= 200 && xhr.status < 300 && body.success !== false) {
+        resolve({ ok: true });
+      } else {
+        resolve({
+          ok: false,
+          error: body.error || `Upload failed (${xhr.status})`,
+        });
+      }
+    };
+    const form = new FormData();
+    form.set("file", file);
+    form.set("organizationId", organizationId);
+    xhr.send(form);
+  });
+}
 
 export type ClaimDocument = {
   id: string;
@@ -385,6 +433,110 @@ export function ClaimDocumentsPanel({
   const [bumpKey, setBumpKey] = useState(0);
   const [attachOpen, setAttachOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [uploads, setUploads] = useState<UploadItem[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragDepth = useRef(0);
+
+  const handleFiles = useCallback(
+    (files: File[]) => {
+      if (files.length === 0) return;
+      const queued: UploadItem[] = files.map((f) => ({
+        key: `${Date.now()}-${Math.random().toString(36).slice(2)}-${f.name}`,
+        name: f.name,
+        size: f.size,
+        progress: 0,
+        status: "uploading" as UploadStatus,
+      }));
+
+      setUploads((prev) => [...prev, ...queued]);
+
+      queued.forEach((item, i) => {
+        const file = files[i];
+        if (file.size > MAX_UPLOAD_BYTES) {
+          setUploads((prev) =>
+            prev.map((u) =>
+              u.key === item.key
+                ? {
+                    ...u,
+                    status: "error",
+                    error: `Exceeds ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB cap`,
+                  }
+                : u,
+            ),
+          );
+          return;
+        }
+        if (file.size <= 0) {
+          setUploads((prev) =>
+            prev.map((u) =>
+              u.key === item.key
+                ? { ...u, status: "error", error: "File is empty" }
+                : u,
+            ),
+          );
+          return;
+        }
+
+        void uploadFileWithProgress(claimId, organizationId, file, (pct) => {
+          setUploads((prev) =>
+            prev.map((u) => (u.key === item.key ? { ...u, progress: pct } : u)),
+          );
+        }).then((result) => {
+          if (result.ok) {
+            setUploads((prev) =>
+              prev.map((u) =>
+                u.key === item.key
+                  ? { ...u, progress: 100, status: "success" }
+                  : u,
+              ),
+            );
+            setBumpKey((k) => k + 1);
+            setToast(
+              files.length === 1
+                ? "Document attached to claim"
+                : `${files.length} documents attached`,
+            );
+            window.setTimeout(() => {
+              setUploads((prev) => prev.filter((u) => u.key !== item.key));
+            }, 2500);
+          } else {
+            setUploads((prev) =>
+              prev.map((u) =>
+                u.key === item.key
+                  ? { ...u, status: "error", error: result.error }
+                  : u,
+              ),
+            );
+          }
+        });
+      });
+    },
+    [claimId, organizationId],
+  );
+
+  const onDragEnter = (e: React.DragEvent) => {
+    if (!Array.from(e.dataTransfer?.types || []).includes("Files")) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setIsDragging(true);
+  };
+  const onDragOver = (e: React.DragEvent) => {
+    if (!Array.from(e.dataTransfer?.types || []).includes("Files")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  };
+  const onDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setIsDragging(false);
+  };
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragDepth.current = 0;
+    setIsDragging(false);
+    const files = Array.from(e.dataTransfer?.files ?? []);
+    if (files.length > 0) handleFiles(files);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -449,42 +601,134 @@ export function ClaimDocumentsPanel({
 
   const toastEl = toast ? <Toast message={toast} onClose={() => setToast(null)} /> : null;
 
-  if (error)
-    return (
-      <div>
-        {header}
-        <div style={{ color: "#B91C1C", fontSize: 13 }}>{error}</div>
-        {modal}
-        {toastEl}
+  const uploadsList =
+    uploads.length === 0 ? null : (
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+          marginBottom: 8,
+        }}
+        aria-live="polite"
+      >
+        {uploads.map((u) => {
+          const color =
+            u.status === "error"
+              ? "#B91C1C"
+              : u.status === "success"
+                ? "#15803D"
+                : "#1D4ED8";
+          return (
+            <div
+              key={u.key}
+              style={{
+                border: `1px solid ${u.status === "error" ? "#FCA5A5" : "#BFDBFE"}`,
+                borderRadius: 6,
+                padding: "8px 10px",
+                background: u.status === "error" ? "#FEF2F2" : "#EFF6FF",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 8,
+                  fontSize: 12,
+                }}
+              >
+                <span
+                  style={{
+                    fontWeight: 600,
+                    color: "#0F172A",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    flex: 1,
+                  }}
+                  title={u.name}
+                >
+                  {u.name}
+                </span>
+                <span style={{ color, fontWeight: 600 }}>
+                  {u.status === "error"
+                    ? "Failed"
+                    : u.status === "success"
+                      ? "Uploaded"
+                      : `${u.progress}%`}
+                </span>
+              </div>
+              {u.status === "uploading" ? (
+                <div
+                  style={{
+                    height: 4,
+                    background: "#DBEAFE",
+                    borderRadius: 2,
+                    marginTop: 6,
+                    overflow: "hidden",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: `${u.progress}%`,
+                      height: "100%",
+                      background: "#1D4ED8",
+                      transition: "width 0.15s ease",
+                    }}
+                  />
+                </div>
+              ) : null}
+              {u.status === "error" && u.error ? (
+                <div style={{ color: "#B91C1C", fontSize: 12, marginTop: 4 }}>
+                  {u.error}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
       </div>
     );
-  if (docs == null) {
-    return (
-      <div>
-        {header}
-        <div style={{ color: "#94A3B8", fontSize: 13 }}>Loading documents…</div>
-        {modal}
-        {toastEl}
-      </div>
-    );
-  }
-  if (docs.length === 0) {
-    return (
-      <div>
-        {header}
-        <div style={{ color: "#94A3B8", fontSize: 13 }}>
-          No documents linked to this claim yet. Use “Attach document” to upload
-          a file or file an existing mailroom item against this claim.
-        </div>
-        {modal}
-        {toastEl}
-      </div>
-    );
-  }
 
-  return (
-    <div>
-      {header}
+  const dropOverlay = isDragging ? (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        border: "2px dashed #1D4ED8",
+        background: "rgba(219, 234, 254, 0.7)",
+        borderRadius: 6,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        pointerEvents: "none",
+        color: "#1D4ED8",
+        fontSize: 14,
+        fontWeight: 600,
+        zIndex: 5,
+      }}
+    >
+      Drop files to attach to this claim
+    </div>
+  ) : null;
+
+  let body: React.ReactNode;
+  if (error) {
+    body = <div style={{ color: "#B91C1C", fontSize: 13 }}>{error}</div>;
+  } else if (docs == null) {
+    body = (
+      <div style={{ color: "#94A3B8", fontSize: 13 }}>Loading documents…</div>
+    );
+  } else if (docs.length === 0) {
+    body = (
+      <div style={{ color: "#94A3B8", fontSize: 13 }}>
+        No documents linked to this claim yet. Drag a file onto this panel, or
+        use “Attach document” to upload a file or file an existing mailroom
+        item against this claim.
+      </div>
+    );
+  } else {
+    body = (
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {docs.map((d) => {
           const href = `/api/billing/claims/${claimId}/documents/${d.id}/file?organizationId=${encodeURIComponent(organizationId)}`;
@@ -542,6 +786,27 @@ export function ClaimDocumentsPanel({
           );
         })}
       </div>
+    );
+  }
+
+  return (
+    <div
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      style={{
+        position: "relative",
+        borderRadius: 6,
+        padding: isDragging ? 8 : 0,
+        transition: "padding 0.15s ease",
+      }}
+      data-testid="claim-documents-panel"
+    >
+      {header}
+      {uploadsList}
+      {body}
+      {dropOverlay}
       {modal}
       {toastEl}
     </div>
