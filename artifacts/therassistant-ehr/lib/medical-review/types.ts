@@ -83,4 +83,16 @@ export interface MedicalReviewFilters {
   assignedBiller?: string;
   carcRarc?: string;
   followUpDue?: string;
+  /**
+   * Filter rows by their auto-seeding origin. "277CA" and "ERA" match
+   * `MedicalReviewRow.triggerOrigin`; "manual" matches rows with a null
+   * origin (manually-authored requests + denial-fallback rows).
+   */
+  triggerOrigin?: "277CA" | "ERA" | "manual";
+  /**
+   * Exact-match trigger code (CARC/RARC) populated from the loaded rows'
+   * `triggerCodes` arrays. Distinct from the free-text `carcRarc` filter,
+   * which substring-matches against `denialCode`.
+   */
+  triggerCode?: string;
 }

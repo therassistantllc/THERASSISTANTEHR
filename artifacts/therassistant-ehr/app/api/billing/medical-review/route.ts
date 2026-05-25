@@ -6,7 +6,7 @@ import {
   type MedicalReviewFilters,
 } from "@/lib/medical-review/medicalReviewService";
 
-const FILTER_KEYS: Array<keyof MedicalReviewFilters> = [
+const FILTER_KEYS = [
   "practice",
   "clinician",
   "client",
@@ -21,7 +21,10 @@ const FILTER_KEYS: Array<keyof MedicalReviewFilters> = [
   "assignedBiller",
   "carcRarc",
   "followUpDue",
-];
+  "triggerCode",
+] as const satisfies ReadonlyArray<keyof MedicalReviewFilters>;
+
+const TRIGGER_ORIGIN_VALUES = new Set(["277CA", "ERA", "manual"] as const);
 
 export async function GET(request: Request) {
   try {
@@ -42,6 +45,10 @@ export async function GET(request: Request) {
     for (const key of FILTER_KEYS) {
       const v = searchParams.get(key);
       if (v != null && v !== "") filters[key] = v;
+    }
+    const originRaw = searchParams.get("triggerOrigin");
+    if (originRaw && (TRIGGER_ORIGIN_VALUES as Set<string>).has(originRaw)) {
+      filters.triggerOrigin = originRaw as "277CA" | "ERA" | "manual";
     }
 
     const rows = await loadMedicalReview({

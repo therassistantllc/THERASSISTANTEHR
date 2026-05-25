@@ -143,6 +143,17 @@ function applyFilters(
     const q = f.carcRarc.toUpperCase();
     out = out.filter((r) => (r.denialCode ?? "").toUpperCase().includes(q));
   }
+  if (f.triggerOrigin) {
+    if (f.triggerOrigin === "manual") {
+      out = out.filter((r) => r.triggerOrigin === null);
+    } else {
+      out = out.filter((r) => r.triggerOrigin === f.triggerOrigin);
+    }
+  }
+  if (f.triggerCode) {
+    const q = f.triggerCode.toUpperCase();
+    out = out.filter((r) => r.triggerCodes.some((c) => c.toUpperCase() === q));
+  }
   if (f.followUpDue) {
     const cutoff = f.followUpDue + "T23:59:59";
     out = out.filter((r) => r.followUpDueAt != null && r.followUpDueAt <= cutoff);

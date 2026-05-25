@@ -221,6 +221,14 @@ export default function MedicalReviewClient() {
     for (const r of rows) if (r.providerId) m.set(r.providerId, `Clinician ${r.providerId.slice(0, 8)}`);
     return Array.from(m.entries()).map(([value, label]) => ({ value, label }));
   }, [rows]);
+  const triggerCodeOptions = useMemo(() => {
+    const s = new Set<string>();
+    for (const r of rows) for (const c of r.triggerCodes) {
+      const up = c.toUpperCase();
+      if (up) s.add(up);
+    }
+    return Array.from(s).sort().map((v) => ({ value: v, label: v }));
+  }, [rows]);
 
   const filters: FilterDef[] = useMemo(
     () => [
@@ -253,12 +261,21 @@ export default function MedicalReviewClient() {
       },
       { id: "carcRarc", label: "CARC/RARC", kind: "text", placeholder: "e.g. CO-50" },
       {
+        id: "triggerOrigin", label: "Origin", kind: "select",
+        options: [
+          { value: "277CA", label: "277CA" },
+          { value: "ERA", label: "ERA" },
+          { value: "manual", label: "Manual" },
+        ],
+      },
+      { id: "triggerCode", label: "Trigger code", kind: "select", options: triggerCodeOptions },
+      {
         id: "priority", label: "Priority", kind: "select",
         options: [{ value: "urgent", label: "Urgent / Overdue" }],
       },
       { id: "followUpDue", label: "Follow-up due by", kind: "date" },
     ],
-    [payerOptions, practiceOptions, clinicianOptions],
+    [payerOptions, practiceOptions, clinicianOptions, triggerCodeOptions],
   );
 
   // ── Tab-filtered rows ──────────────────────────────────────────────────
