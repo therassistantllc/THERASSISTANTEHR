@@ -33,6 +33,12 @@ type AutorouteChange = {
   actor_label: string | null;
 };
 
+type PayerStatusAutoCheck = {
+  enabled: boolean;
+  auto_check_age_days: number;
+  auto_recheck_interval_days: number;
+};
+
 const INITIAL: BillingDefaults = {
   claim_frequency_code: "1",
   default_pos: "11",
@@ -50,6 +56,12 @@ const INITIAL_AUTOROUTE: Rejections277CaAutoroute = {
   route_invalid_provider: true,
 };
 
+const INITIAL_PAYER_AUTOCHECK: PayerStatusAutoCheck = {
+  enabled: true,
+  auto_check_age_days: 3,
+  auto_recheck_interval_days: 2,
+};
+
 function getOrganizationId() {
   if (typeof window === "undefined") return DEFAULT_ORG_ID;
   const params = new URLSearchParams(window.location.search);
@@ -61,6 +73,7 @@ export default function BillingDefaultsClient() {
   const [form, setForm] = useState<BillingDefaults>(INITIAL);
   const [autoroute, setAutoroute] = useState<Rejections277CaAutoroute>(INITIAL_AUTOROUTE);
   const [recentChanges, setRecentChanges] = useState<AutorouteChange[]>([]);
+  const [payerAutoCheck, setPayerAutoCheck] = useState<PayerStatusAutoCheck>(INITIAL_PAYER_AUTOCHECK);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
@@ -74,10 +87,14 @@ export default function BillingDefaultsClient() {
       billing_defaults?: BillingDefaults;
       rejections_277ca_autoroute?: Rejections277CaAutoroute;
       recent_autoroute_changes?: AutorouteChange[];
+      payer_status_auto_check?: PayerStatusAutoCheck;
     };
     if (json.billing_defaults) setForm((prev) => ({ ...prev, ...json.billing_defaults }));
     if (json.rejections_277ca_autoroute) {
       setAutoroute((prev) => ({ ...prev, ...json.rejections_277ca_autoroute }));
+    }
+    if (json.payer_status_auto_check) {
+      setPayerAutoCheck((prev) => ({ ...prev, ...json.payer_status_auto_check }));
     }
     setRecentChanges(Array.isArray(json.recent_autoroute_changes) ? json.recent_autoroute_changes : []);
   }, [organizationId]);
@@ -99,7 +116,11 @@ export default function BillingDefaultsClient() {
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...form, rejections_277ca_autoroute: autoroute }),
+          body: JSON.stringify({
+            ...form,
+            rejections_277ca_autoroute: autoroute,
+            payer_status_auto_check: payerAutoCheck,
+          }),
         },
       );
       if (!res.ok) throw new Error((await res.json() as { error?: string }).error ?? "Save failed");
@@ -333,6 +354,77 @@ export default function BillingDefaultsClient() {
                   })}
                 </ol>
               )}
+            </div>
+          </section>
+
+          <section className="panel form-panel">
+            <h2>Payer Status Auto-Check</h2>
+            <p style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)", marginBottom: "var(--space-4)" }}>
+              Stored in <code>organization_settings</code> under keys{" "}
+              <code>payer_status.auto_check_enabled</code>,{" "}
+              <code>payer_status.auto_check_age_days</code>, and{" "}
+              <code>payer_status.auto_recheck_interval_days</code>. Controls
+              how aggressively the scheduled job re-checks claims sitting in
+              the Payer Received queue.
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={payerAutoCheck.enabled}
+                  onChange={(e) => setPayerAutoCheck((p) => ({ ...p, enabled: e.target.checked }))}
+                />
+                <span>
+                  Enable scheduled payer-status auto-checking
+                  <span style={{ display: "block", color: "var(--text-secondary)", fontSize: "var(--text-sm)" }}>
+                    Master switch. When off, the cron leaves every Payer Received
+                    claim alone — billers must use the manual &ldquo;Check payer status&rdquo;
+                    button. Useful for sandbox payers that don&apos;t answer 276 requests.
+                  </span>
+                </span>
+              </label>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-4)" }}>
+                <label className="field-label">
+                  Start auto-checking a claim after (days)
+                  <input
+                    type="number"
+                    min={1}
+                    max={365}
+                    disabled={!payerAutoCheck.enabled}
+                    value={payerAutoCheck.auto_check_age_days}
+                    onChange={(e) =>
+                      setPayerAutoCheck((p) => ({
+                        ...p,
+                        auto_check_age_days: Math.max(1, Number(e.target.value) || 1),
+                      }))
+                    }
+                  />
+                  <span style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)" }}>
+                    Claims aren&apos;t polled until they&apos;ve been in Payer
+                    Received this many days (default 3).
+                  </span>
+                </label>
+                <label className="field-label">
+                  Re-check at most every (days)
+                  <input
+                    type="number"
+                    min={1}
+                    max={365}
+                    disabled={!payerAutoCheck.enabled}
+                    value={payerAutoCheck.auto_recheck_interval_days}
+                    onChange={(e) =>
+                      setPayerAutoCheck((p) => ({
+                        ...p,
+                        auto_recheck_interval_days: Math.max(1, Number(e.target.value) || 1),
+                      }))
+                    }
+                  />
+                  <span style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)" }}>
+                    Skip a claim if any inquiry (manual or auto) already ran
+                    within this window (default 2).
+                  </span>
+                </label>
+              </div>
             </div>
           </section>
 

@@ -28,6 +28,8 @@ interface FakeRows {
   payer_profiles?: Record<string, unknown> | null;
   insurance_policies?: Record<string, unknown> | null;
   clearinghouse_connections?: Record<string, unknown> | null;
+  /** Per-key `organization_settings.setting_value` seed (one row per key). */
+  organization_settings?: Record<string, unknown>;
 }
 
 function makeFakeSupabase(rows: FakeRows) {
@@ -62,6 +64,17 @@ function makeFakeSupabase(rows: FakeRows) {
     };
 
     const finishRead = () => {
+      // organization_settings → one row per key, looked up via .eq("setting_key", ...).
+      // The fake walks recorded filters to return the matching seed value.
+      if (table === "organization_settings" && !ctx.action) {
+        const keyFilter = filters.find((f) => f.col === "setting_key");
+        const key = keyFilter?.val as string | undefined;
+        const seed = rows.organization_settings ?? {};
+        if (key && Object.prototype.hasOwnProperty.call(seed, key)) {
+          return { data: { setting_value: seed[key] }, error: null };
+        }
+        return { data: null, error: null };
+      }
       // Special-case: claim_status_inquiries SELECT used by the scanner
       // to compute "recent inquiries per claim". The fake routes this to
       // a dedicated bucket so the test can seed claim-specific recency.
@@ -228,5 +241,53 @@ describe("runClaimStatusAutoCheck", () => {
       (o) => o.table === "claim_status_inquiries" && o.kind === "insert",
     );
     assert.equal(inquiryInserts.length, 0, "must not queue a fresh inquiry");
+  });
+
+  it("returns disabled and queues nothing when payer_status.auto_check_enabled is false", async () => {
+    const { supabase, ops } = makeFakeSupabase({
+      professional_claims: [OLD_CLAIM],
+      claim_status_inquiries_recent: [],
+      organization_settings: {
+        "payer_status.auto_check_enabled": false,
+      },
+    });
+
+    const result = await runClaimStatusAutoCheck(supabase as never, {
+      organizationId: ORG,
+    });
+
+    assert.equal(result.disabled, true);
+    assert.equal(result.scanned, 0);
+    assert.equal(result.dispatched, 0);
+
+    const inquiryInserts = ops.filter(
+      (o) => o.table === "claim_status_inquiries" && o.kind === "insert",
+    );
+    assert.equal(inquiryInserts.length, 0, "must not queue any inquiry when disabled");
+
+    const claimSelects = ops.filter(
+      (o) => o.table === "professional_claims" && o.kind === "select",
+    );
+    assert.equal(claimSelects.length, 0, "disabled scanner should short-circuit before SELECT");
+  });
+
+  it("treats payer_status.auto_check_age_days=0 as the off-sentinel", async () => {
+    const { supabase, ops } = makeFakeSupabase({
+      professional_claims: [OLD_CLAIM],
+      claim_status_inquiries_recent: [],
+      organization_settings: {
+        "payer_status.auto_check_age_days": 0,
+      },
+    });
+
+    const result = await runClaimStatusAutoCheck(supabase as never, {
+      organizationId: ORG,
+    });
+
+    assert.equal(result.disabled, true);
+    const inquiryInserts = ops.filter(
+      (o) => o.table === "claim_status_inquiries" && o.kind === "insert",
+    );
+    assert.equal(inquiryInserts.length, 0);
   });
 });

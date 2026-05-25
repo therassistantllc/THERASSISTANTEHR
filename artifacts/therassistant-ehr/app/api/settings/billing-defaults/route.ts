@@ -12,6 +12,20 @@ const AUTOROUTE_AUDIT_ACTION = "rejections_277ca_autoroute_updated";
 const AUTOROUTE_OBJECT_TYPE = "system_setting";
 const RECENT_AUTOROUTE_CHANGES_LIMIT = 20;
 
+// Per-org payer-status auto-check overrides live in `organization_settings`,
+// one row per key (matches what `resolveAutoCheckConfig` reads).
+const PAYER_STATUS_AUTOCHECK_KEYS = {
+  enabled: "payer_status.auto_check_enabled",
+  ageDays: "payer_status.auto_check_age_days",
+  recheckIntervalDays: "payer_status.auto_recheck_interval_days",
+} as const;
+
+const PAYER_STATUS_AUTOCHECK_DEFAULTS = {
+  enabled: true,
+  auto_check_age_days: 3,
+  auto_recheck_interval_days: 2,
+};
+
 
 const DEFAULTS = {
   claim_frequency_code: "1",
@@ -88,11 +102,55 @@ export async function GET(req: NextRequest) {
     organizationId,
   );
 
+  // Read the three per-org payer-status auto-check overrides from
+  // `organization_settings` (separate table — the cron reads from there).
+  const payerStatusAutoCheck = { ...PAYER_STATUS_AUTOCHECK_DEFAULTS };
+  try {
+    const { data: orgRows } = await supabase
+      .from("organization_settings")
+      .select("setting_key,setting_value")
+      .eq("organization_id", organizationId)
+      .in("setting_key", Object.values(PAYER_STATUS_AUTOCHECK_KEYS));
+    for (const row of (orgRows ?? []) as Array<{ setting_key: string; setting_value: unknown }>) {
+      if (row.setting_key === PAYER_STATUS_AUTOCHECK_KEYS.enabled) {
+        const b = coerceBool(row.setting_value);
+        if (b != null) payerStatusAutoCheck.enabled = b;
+      } else if (row.setting_key === PAYER_STATUS_AUTOCHECK_KEYS.ageDays) {
+        const n = coerceNonNegInt(row.setting_value);
+        if (n != null) payerStatusAutoCheck.auto_check_age_days = n;
+      } else if (row.setting_key === PAYER_STATUS_AUTOCHECK_KEYS.recheckIntervalDays) {
+        const n = coerceNonNegInt(row.setting_value);
+        if (n != null && n > 0) payerStatusAutoCheck.auto_recheck_interval_days = n;
+      }
+    }
+  } catch (e) {
+    // organization_settings is optional — fall through with defaults.
+    console.warn("[GET /api/settings/billing-defaults] organization_settings unavailable", e);
+  }
+
   return NextResponse.json({
     billing_defaults: { ...DEFAULTS, ...storedDefaults },
     rejections_277ca_autoroute: pickBooleans(AUTOROUTE_DEFAULTS, storedAutoroute),
     recent_autoroute_changes: recentAutorouteChanges,
+    payer_status_auto_check: payerStatusAutoCheck,
   });
+}
+
+function coerceBool(v: unknown): boolean | null {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v !== 0;
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    if (s === "true" || s === "1") return true;
+    if (s === "false" || s === "0") return false;
+  }
+  return null;
+}
+
+function coerceNonNegInt(v: unknown): number | null {
+  const n = Number(typeof v === "string" || typeof v === "number" ? v : NaN);
+  if (Number.isFinite(n) && n >= 0) return Math.floor(n);
+  return null;
 }
 
 export async function PUT(req: NextRequest) {
@@ -128,6 +186,60 @@ export async function PUT(req: NextRequest) {
     updated_at: string;
     created_at: string;
   }> = [];
+
+  // ── Per-org payer-status auto-check overrides (`organization_settings`) ──
+  // Accept a `payer_status_auto_check` block from the client and translate it
+  // into the three discrete rows the cron reads. We upsert one row per key
+  // (not a single JSON blob) so `resolveAutoCheckConfig` keeps working
+  // unchanged. Stored as raw scalars: bool for the toggle, integer for days.
+  const payerStatusBody =
+    body.payer_status_auto_check && typeof body.payer_status_auto_check === "object"
+      ? (body.payer_status_auto_check as Record<string, unknown>)
+      : null;
+  const orgSettingUpserts: Array<{
+    organization_id: string;
+    setting_key: string;
+    setting_value: unknown;
+    updated_at: string;
+    created_at: string;
+  }> = [];
+  if (payerStatusBody) {
+    if (typeof payerStatusBody.enabled === "boolean") {
+      orgSettingUpserts.push({
+        organization_id: organizationId,
+        setting_key: PAYER_STATUS_AUTOCHECK_KEYS.enabled,
+        setting_value: payerStatusBody.enabled,
+        updated_at: now,
+        created_at: now,
+      });
+    }
+    const ageRaw = payerStatusBody.auto_check_age_days;
+    if (typeof ageRaw === "number" || typeof ageRaw === "string") {
+      const n = Number(ageRaw);
+      if (Number.isFinite(n) && n >= 0 && n <= 365) {
+        orgSettingUpserts.push({
+          organization_id: organizationId,
+          setting_key: PAYER_STATUS_AUTOCHECK_KEYS.ageDays,
+          setting_value: Math.floor(n),
+          updated_at: now,
+          created_at: now,
+        });
+      }
+    }
+    const recheckRaw = payerStatusBody.auto_recheck_interval_days;
+    if (typeof recheckRaw === "number" || typeof recheckRaw === "string") {
+      const n = Number(recheckRaw);
+      if (Number.isFinite(n) && n >= 1 && n <= 365) {
+        orgSettingUpserts.push({
+          organization_id: organizationId,
+          setting_key: PAYER_STATUS_AUTOCHECK_KEYS.recheckIntervalDays,
+          setting_value: Math.floor(n),
+          updated_at: now,
+          created_at: now,
+        });
+      }
+    }
+  }
 
   if (Object.keys(updates).length > 0) {
     upserts.push({
@@ -192,17 +304,27 @@ export async function PUT(req: NextRequest) {
     }
   }
 
-  if (upserts.length === 0) {
-    return NextResponse.json({ success: true });
+  if (upserts.length > 0) {
+    const { error } = await supabase
+      .from("system_settings")
+      .upsert(upserts, { onConflict: "organization_id,setting_key" });
+    if (error) {
+      console.error("[PUT /api/settings/billing-defaults]", error);
+      return NextResponse.json({ error: "Failed to save billing defaults" }, { status: 500 });
+    }
   }
 
-  const { error } = await supabase
-    .from("system_settings")
-    .upsert(upserts, { onConflict: "organization_id,setting_key" });
-
-  if (error) {
-    console.error("[PUT /api/settings/billing-defaults]", error);
-    return NextResponse.json({ error: "Failed to save billing defaults" }, { status: 500 });
+  if (orgSettingUpserts.length > 0) {
+    const { error: orgErr } = await supabase
+      .from("organization_settings")
+      .upsert(orgSettingUpserts, { onConflict: "organization_id,setting_key" });
+    if (orgErr) {
+      console.error("[PUT /api/settings/billing-defaults] organization_settings", orgErr);
+      return NextResponse.json(
+        { error: "Failed to save payer-status auto-check settings" },
+        { status: 500 },
+      );
+    }
   }
 
   if (autorouteAuditPayload) {

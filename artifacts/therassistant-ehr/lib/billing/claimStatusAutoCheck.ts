@@ -52,11 +52,14 @@ export interface RunClaimStatusAutoCheckResult {
   skipped: number;
   failures: number;
   outcomes: ClaimAutoCheckOutcome[];
+  /** True when the org has the auto-check feature switched off. */
+  disabled?: boolean;
 }
 
 const DEFAULT_AGE_DAYS = 3;
 const DEFAULT_RECHECK_DAYS = 2;
 const DEFAULT_MAX_CLAIMS = 200;
+const DEFAULT_ENABLED = true;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Sb = SupabaseClient<any, any, any>;
@@ -65,11 +68,11 @@ interface OrgSettingRow {
   setting_value: unknown;
 }
 
-async function loadIntSetting(
+async function loadRawSetting(
   supabase: Sb,
   organizationId: string,
   key: string,
-): Promise<number | null> {
+): Promise<unknown> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const sb = supabase as unknown as { from: (t: string) => any };
@@ -79,14 +82,43 @@ async function loadIntSetting(
       .eq("organization_id", organizationId)
       .eq("setting_key", key)
       .maybeSingle();
-    const v = (data as OrgSettingRow | null)?.setting_value;
-    if (v == null) return null;
-    const n = Number(typeof v === "string" || typeof v === "number" ? v : NaN);
-    if (Number.isFinite(n) && n > 0) return Math.floor(n);
+    return (data as OrgSettingRow | null)?.setting_value ?? null;
   } catch {
     // organization_settings is optional; fall back to caller-provided defaults.
+    return null;
+  }
+}
+
+async function loadIntSetting(
+  supabase: Sb,
+  organizationId: string,
+  key: string,
+): Promise<number | null> {
+  const v = await loadRawSetting(supabase, organizationId, key);
+  if (v == null) return null;
+  const n = Number(typeof v === "string" || typeof v === "number" ? v : NaN);
+  if (Number.isFinite(n) && n > 0) return Math.floor(n);
+  return null;
+}
+
+/** Parse permissive boolean: true/false, "true"/"false", 1/0, "1"/"0". */
+function coerceBool(v: unknown): boolean | null {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v !== 0;
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    if (s === "true" || s === "1" || s === "yes" || s === "on") return true;
+    if (s === "false" || s === "0" || s === "no" || s === "off") return false;
   }
   return null;
+}
+
+async function loadBoolSetting(
+  supabase: Sb,
+  organizationId: string,
+  key: string,
+): Promise<boolean | null> {
+  return coerceBool(await loadRawSetting(supabase, organizationId, key));
 }
 
 /**
@@ -99,16 +131,30 @@ export async function resolveAutoCheckConfig(
   supabase: Sb,
   organizationId: string,
   input: { ageDays?: number; recheckIntervalDays?: number } = {},
-): Promise<{ ageDays: number; recheckIntervalDays: number }> {
-  const orgAge = await loadIntSetting(
+): Promise<{ ageDays: number; recheckIntervalDays: number; enabled: boolean }> {
+  // Read the raw stored age value FIRST so we can detect the `0` sentinel
+  // ("disabled") before loadIntSetting silently rejects it.
+  const orgAgeRaw = await loadRawSetting(
     supabase,
     organizationId,
     "payer_status.auto_check_age_days",
   );
+  const orgAgeNum = Number(
+    typeof orgAgeRaw === "string" || typeof orgAgeRaw === "number" ? orgAgeRaw : NaN,
+  );
+  const orgAgeSentinelOff = Number.isFinite(orgAgeNum) && orgAgeNum === 0;
+  const orgAge =
+    Number.isFinite(orgAgeNum) && orgAgeNum > 0 ? Math.floor(orgAgeNum) : null;
+
   const orgRecheck = await loadIntSetting(
     supabase,
     organizationId,
     "payer_status.auto_recheck_interval_days",
+  );
+  const orgEnabled = await loadBoolSetting(
+    supabase,
+    organizationId,
+    "payer_status.auto_check_enabled",
   );
 
   const ageDays =
@@ -122,7 +168,10 @@ export async function resolveAutoCheckConfig(
     orgRecheck ??
     DEFAULT_RECHECK_DAYS;
 
-  return { ageDays, recheckIntervalDays };
+  // Disabled if the explicit flag is false OR the age sentinel is 0.
+  const enabled = (orgEnabled ?? DEFAULT_ENABLED) && !orgAgeSentinelOff;
+
+  return { ageDays, recheckIntervalDays, enabled };
 }
 
 function uuid(): string {
@@ -135,11 +184,21 @@ export async function runClaimStatusAutoCheck(
   input: RunClaimStatusAutoCheckInput,
 ): Promise<RunClaimStatusAutoCheckResult> {
   const { organizationId } = input;
-  const { ageDays, recheckIntervalDays } = await resolveAutoCheckConfig(
+  const { ageDays, recheckIntervalDays, enabled } = await resolveAutoCheckConfig(
     supabase,
     organizationId,
     input,
   );
+  if (!enabled) {
+    return {
+      scanned: 0,
+      dispatched: 0,
+      skipped: 0,
+      failures: 0,
+      outcomes: [],
+      disabled: true,
+    };
+  }
   const maxClaims = input.maxClaims ?? DEFAULT_MAX_CLAIMS;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
