@@ -426,6 +426,30 @@ export async function loadEligibilityIssues({
     }
   }
 
+  // One grouped query for comment counts on inbox items linked to these
+  // appointments — keeps the page render to a fixed number of DB round-trips
+  // instead of fanning out per row.
+  const inboxItemIds = Array.from(
+    new Set(
+      Array.from(assignedMap.values())
+        .map((a) => a.inboxItemId)
+        .filter((v): v is string => !!v),
+    ),
+  );
+  const commentCountByInboxItem = new Map<string, number>();
+  if (inboxItemIds.length) {
+    const { data: cmts } = await sb
+      .from("workqueue_item_comments")
+      .select("workqueue_item_id")
+      .eq("organization_id", organizationId)
+      .in("workqueue_item_id", inboxItemIds);
+    for (const c of ((cmts as DbRow[]) ?? [])) {
+      const k = text(c.workqueue_item_id);
+      if (!k) continue;
+      commentCountByInboxItem.set(k, (commentCountByInboxItem.get(k) ?? 0) + 1);
+    }
+  }
+
   const rows: EligibilityIssueRow[] = [];
   for (const a of apptRows) {
     const apptId = text(a.id);
@@ -509,6 +533,10 @@ export async function loadEligibilityIssues({
       assignedToEmail: assignment ? assignment.email : null,
       routedByUserId: assignment ? assignment.routedByUserId : null,
       inboxItemId: assignment ? assignment.inboxItemId : null,
+      inboxCommentCount:
+        assignment && assignment.inboxItemId
+          ? commentCountByInboxItem.get(assignment.inboxItemId) ?? 0
+          : 0,
       assignedBillerId: assignedBillerMap.get(apptId) ?? null,
       followUpDueAt: followUpMap.get(apptId) ?? null,
       denialCode: claim ? carcRarcFromNotes(text(claim.billing_notes) || null) : null,

@@ -132,6 +132,26 @@ export async function GET(request: Request) {
 
   const items = (itemsData ?? []) as WorkqueueRow[];
 
+  // One grouped query for comment counts so we don't fan out N requests
+  // from the client to render a badge per row.
+  const commentCountByItem = new Map<string, number>();
+  if (items.length) {
+    const { data: cmts } = await sb
+      .from("workqueue_item_comments")
+      .select("workqueue_item_id")
+      .eq("organization_id", ctx.organizationId)
+      .in(
+        "workqueue_item_id",
+        items.map((i) => i.id),
+      );
+    for (const c of ((cmts ?? []) as { workqueue_item_id: string }[])) {
+      commentCountByItem.set(
+        c.workqueue_item_id,
+        (commentCountByItem.get(c.workqueue_item_id) ?? 0) + 1,
+      );
+    }
+  }
+
   // Enrich rows that point at appointments so the inbox can show
   // a real date + patient name without the user clicking through.
   const appointmentIds = Array.from(
@@ -214,6 +234,7 @@ export async function GET(request: Request) {
       eligibilityHref: appt?.id
         ? `/billing/eligibility-issues?appointmentId=${encodeURIComponent(appt.id)}`
         : `/billing/eligibility-issues`,
+      commentCount: commentCountByItem.get(i.id) ?? 0,
     };
   });
 

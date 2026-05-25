@@ -480,7 +480,24 @@ export default function EligibilityIssuesClient() {
         id: "assignedTo", header: "Routed to",
         cell: (r) => r.assignedTo ? (
           <span style={{ fontSize: 12 }}>
-            <div style={{ fontWeight: 600, color: "#0F172A" }}>{r.assignedTo}</div>
+            <div style={{ fontWeight: 600, color: "#0F172A", display: "flex", alignItems: "center", gap: 6 }}>
+              <span>{r.assignedTo}</span>
+              {r.inboxCommentCount > 0 ? (
+                <span
+                  title={`${r.inboxCommentCount} comment${r.inboxCommentCount === 1 ? "" : "s"} from the assignee`}
+                  style={{
+                    background: "#E0E7FF",
+                    color: "#3730A3",
+                    borderRadius: 999,
+                    padding: "1px 7px",
+                    fontSize: 11,
+                    fontWeight: 700,
+                  }}
+                >
+                  {r.inboxCommentCount === 1 ? "1 comment" : `${r.inboxCommentCount} comments`}
+                </span>
+              ) : null}
+            </div>
             <div style={{ color: "#64748B", textTransform: "capitalize" }}>
               {r.assignedToKind ?? "—"}
               {r.inboxItemId ? " · inbox" : ""}

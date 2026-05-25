@@ -25,6 +25,7 @@ type InboxItem = {
   createdAt: string;
   updatedAt: string;
   eligibilityHref: string;
+  commentCount: number;
 };
 
 function getOrganizationId() {
@@ -611,6 +612,22 @@ export default function MyInboxClient() {
                     }}
                   >
                     {isExpanded ? "Hide comments" : "Comments"}
+                    {item.commentCount > 0 ? (
+                      <span
+                        title={`${item.commentCount} comment${item.commentCount === 1 ? "" : "s"}`}
+                        style={{
+                          marginLeft: 6,
+                          background: isExpanded ? "#1D4ED8" : "#E0E7FF",
+                          color: isExpanded ? "#FFFFFF" : "#3730A3",
+                          borderRadius: 999,
+                          padding: "1px 7px",
+                          fontSize: 11,
+                          fontWeight: 700,
+                        }}
+                      >
+                        {item.commentCount}
+                      </span>
+                    ) : null}
                   </button>
                 </div>
                 </div>

@@ -51,6 +51,7 @@ export interface EligibilityIssueRow {
   assignedToEmail: string | null;
   routedByUserId: string | null;
   inboxItemId: string | null;
+  inboxCommentCount: number;
   assignedBillerId: string | null;
   followUpDueAt: string | null;
   denialCode: string | null;
