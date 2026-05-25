@@ -80,12 +80,22 @@ type PatientBalancePayload = {
   writeOffs?: WriteOff[];
   statements?: StatementEntry[];
   claims?: ClaimLite[];
+  pendingVisits?: PendingVisit[];
+};
+
+type PendingVisit = {
+  id: string;
+  encounterId: string | null;
+  appointmentId: string | null;
+  serviceDate: string | null;
+  totalCharge: number;
+  status: string;
 };
 
 type LedgerEntry = {
   key: string;
   date: string | null;
-  kind: "invoice" | "payment" | "insurance_payment" | "adjustment" | "write_off" | "statement";
+  kind: "pending_visit" | "invoice" | "payment" | "insurance_payment" | "adjustment" | "write_off" | "statement";
   description: string;
   reference: string;
   charge: number;
@@ -127,8 +137,26 @@ function buildLedger(
   insurancePayments: InsurancePayment[],
   writeOffs: WriteOff[],
   statements: StatementEntry[] = [],
+  pendingVisits: PendingVisit[] = [],
 ): LedgerEntry[] {
   const entries: LedgerEntry[] = [];
+  for (const visit of pendingVisits) {
+    const statusLabel = visit.status === "ready_for_claim"
+      ? "pending claim"
+      : visit.status === "blocked"
+        ? "blocked"
+        : visit.status || "pending";
+    entries.push({
+      key: `visit:${visit.id}`,
+      date: visit.serviceDate,
+      kind: "pending_visit",
+      description: `Visit signed · awaiting claim (${statusLabel})`,
+      reference: visit.encounterId ? `Encounter ${visit.encounterId.slice(0, 8)}` : visit.id.slice(0, 8),
+      charge: visit.totalCharge,
+      credit: 0,
+      status: statusLabel,
+    });
+  }
   for (const inv of invoices) {
     const invDate = inv.createdAt ? String(inv.createdAt) : null;
     const ref = String(inv.invoiceNumber ?? inv.id.slice(0, 8));
@@ -217,14 +245,17 @@ function buildLedger(
     const ta = a.date ? new Date(a.date).getTime() : 0;
     const tb = b.date ? new Date(b.date).getTime() : 0;
     if (ta !== tb) return ta - tb;
-    const order = { invoice: 0, payment: 1, insurance_payment: 1, adjustment: 1, write_off: 1, statement: 2 } as const;
-    return order[a.kind] - order[b.kind];
+    const order = { pending_visit: 0, invoice: 0, payment: 1, insurance_payment: 1, adjustment: 1, write_off: 1, statement: 2 } as const;
+    const diff = order[a.kind] - order[b.kind];
+    if (diff !== 0) return diff;
+    return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
   });
   return entries;
 }
 
 function ledgerKindLabel(kind: LedgerEntry["kind"]): string {
   switch (kind) {
+    case "pending_visit": return "Visit (pending)";
     case "invoice": return "Invoice";
     case "payment": return "Patient payment";
     case "insurance_payment": return "Insurance payment";
@@ -235,6 +266,7 @@ function ledgerKindLabel(kind: LedgerEntry["kind"]): string {
 }
 
 function ledgerKindClass(kind: LedgerEntry["kind"]): string {
+  if (kind === "pending_visit") return "status status-yellow";
   if (kind === "invoice") return "status";
   if (kind === "write_off") return "status status-yellow";
   return "status status-green";
@@ -337,9 +369,10 @@ export default function PatientBalanceClient({ clientId }: { clientId: string })
   const writeOffs = payload?.writeOffs ?? [];
   const statements = payload?.statements ?? [];
   const openClaims = payload?.claims ?? [];
+  const pendingVisits = payload?.pendingVisits ?? [];
   const ledger = useMemo(
-    () => buildLedger(invoices, insurancePayments, writeOffs, statements),
-    [invoices, insurancePayments, writeOffs, statements],
+    () => buildLedger(invoices, insurancePayments, writeOffs, statements, pendingVisits),
+    [invoices, insurancePayments, writeOffs, statements, pendingVisits],
   );
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
   const [statementModalOpen, setStatementModalOpen] = useState(false);

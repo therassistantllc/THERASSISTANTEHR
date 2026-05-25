@@ -16,6 +16,7 @@ type ClaimItem = {
   encounterId: string | null;
   payerName: string | null;
   archivedAt: string | null;
+  isPending?: boolean;
 };
 
 function formatDate(v: string | null | undefined) {
@@ -215,7 +216,15 @@ export default function ClaimsPage() {
                       : "—"}
                   </td>
                   <td>
-                    {claim.archivedAt ? (
+                    {claim.isPending ? (
+                      <Link
+                        className="inline-link"
+                        href={`/billing/charge-capture${orgQ}`}
+                        title="Resolve in Charge Capture to create a claim"
+                      >
+                        Charge Capture
+                      </Link>
+                    ) : claim.archivedAt ? (
                       <button
                         type="button"
                         className="button button-secondary"

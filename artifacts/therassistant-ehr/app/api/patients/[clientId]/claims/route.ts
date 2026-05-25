@@ -107,7 +107,54 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
       };
     });
 
-    return NextResponse.json({ success: true, claims: items, total: items.length });
+    // Surface signed-but-not-yet-billed visits (charge_capture_items without a
+    // professional_claim) so the user can see their visit on the Claims tab
+    // even when claim creation was blocked by missing fields.
+    const claimedEncounterIds = new Set(
+      (claims ?? [])
+        .map((c: DbRow) => text(c.encounter_id))
+        .filter(Boolean),
+    );
+
+    const { data: pendingCharges } = await supabase
+      .from("charge_capture_items")
+      .select("id, encounter_id, appointment_id, service_date, total_charge, diagnosis_codes, charge_status, blocker_reasons, claim_id, created_at")
+      .eq("organization_id", organizationId)
+      .eq("client_id", clientId)
+      .is("archived_at", null)
+      .is("claim_id", null)
+      .in("charge_status", ["ready_for_claim", "blocked"])
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    const pendingItems = ((pendingCharges ?? []) as DbRow[])
+      .filter((row) => !claimedEncounterIds.has(text(row.encounter_id)))
+      .map((row) => {
+        const blockerCount = Array.isArray(row.blocker_reasons) ? row.blocker_reasons.length : 0;
+        const status = String(row.charge_status ?? "");
+        return {
+          id: `charge:${String(row.id)}`,
+          claimNumber: null,
+          status: status === "ready_for_claim"
+            ? "pending claim"
+            : status === "blocked"
+              ? `blocked${blockerCount ? ` (${blockerCount})` : ""}`
+              : status,
+          totalCharge: Number(row.total_charge ?? 0),
+          patientResponsibilityAmount: null,
+          diagnosisCodes: (row.diagnosis_codes ?? []) as string[],
+          createdAt: (row.created_at ?? null) as string | null,
+          submittedAt: null,
+          appointmentId: (row.appointment_id ?? null) as string | null,
+          encounterId: (row.encounter_id ?? null) as string | null,
+          payerName: fallbackPayerName || null,
+          archivedAt: null,
+          isPending: true,
+        };
+      });
+
+    const merged = [...pendingItems, ...items];
+    return NextResponse.json({ success: true, claims: merged, total: merged.length });
   } catch (err) {
     return NextResponse.json(
       { success: false, error: err instanceof Error ? err.message : "Failed to load claims" },

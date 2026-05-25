@@ -178,6 +178,40 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
         status: c.status ?? null,
       }));
 
+    // Surface signed-but-not-yet-billed visits as pending ledger entries so
+    // the user sees the visit on the Balance tab the moment the note is
+    // signed, even if claim creation hasn't completed yet.
+    const { data: pendingCharges } = await (supabase as any)
+      .from("charge_capture_items")
+      .select("id, encounter_id, appointment_id, service_date, total_charge, charge_status, claim_id, created_at")
+      .eq("organization_id", organizationId)
+      .eq("client_id", clientId)
+      .is("archived_at", null)
+      .is("claim_id", null)
+      .in("charge_status", ["ready_for_claim", "blocked"])
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    // Dedup: if a real professional_claim already exists for the same encounter
+    // (claim_id backfill may lag), don't surface the pending row — otherwise the
+    // ledger would double-count the charge against the running balance.
+    const claimedEncounterIds = new Set(
+      (claimRows ?? [])
+        .map((c: DbRow) => (c.encounter_id ? String(c.encounter_id) : ""))
+        .filter(Boolean),
+    );
+
+    const pendingVisits = ((pendingCharges ?? []) as DbRow[])
+      .filter((row) => !claimedEncounterIds.has(String(row.encounter_id ?? "")))
+      .map((row) => ({
+      id: String(row.id),
+      encounterId: (row.encounter_id ?? null) as string | null,
+      appointmentId: (row.appointment_id ?? null) as string | null,
+      serviceDate: (row.service_date ?? row.created_at ?? null) as string | null,
+      totalCharge: money(row.total_charge),
+      status: String(row.charge_status ?? "pending"),
+    }));
+
     return NextResponse.json({
       success: true,
       organizationId,
@@ -202,6 +236,7 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
       writeOffs,
       statements,
       claims: openClaims,
+      pendingVisits,
     });
   } catch (error) {
     console.error("Patient balance API error:", error);
