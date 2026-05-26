@@ -28,8 +28,6 @@ interface LifecycleDef {
   label: string;
   description: string;
   chips: ChipDef[];
-  /** Note that the data source is in v1 / scope is partial. */
-  phaseTwoNote?: string;
 }
 
 const LIFECYCLES: LifecycleDef[] = [
@@ -81,7 +79,6 @@ const LIFECYCLES: LifecycleDef[] = [
       { id: "underpayments", label: "Underpayment", tone: "pending",
         predicate: (r) => r.balance > 0 && r.balance < r.totalCharge * 0.5 },
     ],
-    phaseTwoNote: "Sourced from claim aging. Denial-specific feeds (CARC/RARC rollups, formal partial-denial workflow) deepen in phase 2.",
   },
   {
     id: "follow_up",
@@ -107,7 +104,6 @@ const LIFECYCLES: LifecycleDef[] = [
       { id: "credit_balance", label: "Credit balances", tone: "neutral", serverTab: "reversals" },
       { id: "recoupments", label: "Recoupments", tone: "pending", serverTab: "reversals" },
     ],
-    phaseTwoNote: "Sourced from write-off ledger. Patient-responsibility transfers and refund flows roll up here in phase 2.",
   },
 ];
 
@@ -642,12 +638,6 @@ export default function ClaimsWorkspace() {
       ) : null}
 
       {error ? <div className={styles.error}>{error}</div> : null}
-
-      {lifecycle.phaseTwoNote ? (
-        <div className={styles.phaseBanner}>
-          <strong>Data source:</strong> {lifecycle.phaseTwoNote}
-        </div>
-      ) : null}
 
       {/* Body — table */}
       <div className={styles.tableWrap}>
