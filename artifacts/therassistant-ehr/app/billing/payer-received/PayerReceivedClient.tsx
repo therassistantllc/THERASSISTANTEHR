@@ -16,7 +16,7 @@ import {
   PAYER_RECEIVED_TABS,
   type PayerReceivedRow,
   type PayerReceivedTab,
-} from "@/lib/billing/payerReceivedService";
+} from "@/lib/billing/payerReceivedService.types";
 
 type ListPayload = {
   success: boolean;
