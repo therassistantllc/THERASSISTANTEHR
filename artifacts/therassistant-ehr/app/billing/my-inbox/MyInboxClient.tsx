@@ -26,6 +26,8 @@ type InboxItem = {
   updatedAt: string;
   eligibilityHref: string;
   commentCount: number;
+  reminderCount: number;
+  lastRemindedAt: string | null;
 };
 
 function getOrganizationId() {
@@ -522,6 +524,35 @@ export default function MyInboxClient() {
                     <span style={{ fontSize: 12, color: "#94A3B8" }} title={item.updatedAt}>
                       routed {relative(item.updatedAt)}
                     </span>
+                    {item.reminderCount > 0 ? (
+                      <span
+                        title={
+                          item.lastRemindedAt
+                            ? `Last reminder ${formatWhen(item.lastRemindedAt)}`
+                            : "Reminder sent"
+                        }
+                        style={{
+                          fontSize: 10.5,
+                          fontWeight: 700,
+                          letterSpacing: 0.04,
+                          textTransform: "uppercase",
+                          background: "#FEF3C7",
+                          color: "#92400E",
+                          padding: "2px 8px",
+                          borderRadius: 4,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                        }}
+                      >
+                        <span aria-hidden>🔔</span>
+                        Reminded {item.reminderCount}{" "}
+                        {item.reminderCount === 1 ? "time" : "times"}
+                        {item.lastRemindedAt
+                          ? ` · last ${relative(item.lastRemindedAt)}`
+                          : null}
+                      </span>
+                    ) : null}
                   </div>
 
                   <div style={{ marginTop: 6, fontSize: 14.5, fontWeight: 600, color: "#0F172A" }}>

@@ -135,20 +135,44 @@ export async function GET(request: Request) {
   // One grouped query for comment counts so we don't fan out N requests
   // from the client to render a badge per row.
   const commentCountByItem = new Map<string, number>();
+  const reminderStatsByItem = new Map<
+    string,
+    { count: number; lastSentAt: string | null }
+  >();
   if (items.length) {
+    const ids = items.map((i) => i.id);
     const { data: cmts } = await sb
       .from("workqueue_item_comments")
       .select("workqueue_item_id")
       .eq("organization_id", ctx.organizationId)
-      .in(
-        "workqueue_item_id",
-        items.map((i) => i.id),
-      );
+      .in("workqueue_item_id", ids);
     for (const c of ((cmts ?? []) as { workqueue_item_id: string }[])) {
       commentCountByItem.set(
         c.workqueue_item_id,
         (commentCountByItem.get(c.workqueue_item_id) ?? 0) + 1,
       );
+    }
+
+    // Task #740: per-item reminder history so assignees see they've been
+    // nudged. Pull every reminder log row for these items in one query.
+    const { data: reminders } = await sb
+      .from("eligibility_routing_reminders")
+      .select("workqueue_item_id, sent_at")
+      .eq("organization_id", ctx.organizationId)
+      .in("workqueue_item_id", ids);
+    for (const r of ((reminders ?? []) as {
+      workqueue_item_id: string;
+      sent_at: string | null;
+    }[])) {
+      const prev = reminderStatsByItem.get(r.workqueue_item_id) ?? {
+        count: 0,
+        lastSentAt: null as string | null,
+      };
+      prev.count += 1;
+      if (r.sent_at && (!prev.lastSentAt || r.sent_at > prev.lastSentAt)) {
+        prev.lastSentAt = r.sent_at;
+      }
+      reminderStatsByItem.set(r.workqueue_item_id, prev);
     }
   }
 
@@ -235,6 +259,8 @@ export async function GET(request: Request) {
         ? `/billing/eligibility-issues?appointmentId=${encodeURIComponent(appt.id)}`
         : `/billing/eligibility-issues`,
       commentCount: commentCountByItem.get(i.id) ?? 0,
+      reminderCount: reminderStatsByItem.get(i.id)?.count ?? 0,
+      lastRemindedAt: reminderStatsByItem.get(i.id)?.lastSentAt ?? null,
     };
   });
 
