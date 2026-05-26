@@ -634,11 +634,14 @@ function makeFakeSupabaseForDispute(args: {
 function makeDeps(overrides: Partial<StripeWebhookDeps> = {}): StripeWebhookDeps {
   return {
     getSecret: () => SECRET,
-    getSupabase: () => null,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    getSupabase: () => null as any,
     commitPayment: async () =>
       mkResult({ ok: true, alreadyPosted: false, paymentId: "pay_default" }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    reversePayment: async () => { throw new Error("reversePayment not mocked in this test"); },
     ...overrides,
-  };
+  } as unknown as StripeWebhookDeps;
 }
 
 function mkResult(partial: {

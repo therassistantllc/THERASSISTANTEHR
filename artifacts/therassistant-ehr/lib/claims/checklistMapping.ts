@@ -16,6 +16,15 @@ export type ChecklistRowId =
   | "rendering"
   | "payer";
 
+/** Field pointer within a batch generation error (mirrors the local
+ * GenerationErrorPointer in ReadyToGenerateClient). */
+export type GenerationErrorPointer = {
+  loop?: string;
+  segment?: string;
+  field?: string;
+  message: string;
+};
+
 /** Mirrors Rebuild837PBatchErrorDetail so client code can stay loose-typed. */
 export type GenerationErrorFieldDetail = {
   code: "validation_failed" | "infrastructure_error";
@@ -24,6 +33,7 @@ export type GenerationErrorFieldDetail = {
   loop?: string;
   segment?: string;
   field?: string;
+  errors?: GenerationErrorPointer[];
 };
 
 /** Human-readable label for each checklist row. Mirrors the labels rendered

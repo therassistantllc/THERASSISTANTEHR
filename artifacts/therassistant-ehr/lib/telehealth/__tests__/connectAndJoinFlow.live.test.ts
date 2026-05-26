@@ -211,7 +211,8 @@ describe("LIVE: Zoom sandbox end-to-end", { skip: !LIVE }, () => {
       assert.ok(created.externalMeetingId, "Zoom must return an external meeting id");
 
       // Persist the session like the live route does.
-      await fake.client.from("telehealth_sessions").insert({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (fake.client.from("telehealth_sessions").insert({
         organization_id: ORG,
         appointment_id: "live-appt-1",
         provider_id: null,
@@ -221,7 +222,7 @@ describe("LIVE: Zoom sandbox end-to-end", { skip: !LIVE }, () => {
         host_url: created.hostUrl,
         session_status: "scheduled",
         external_meeting_id: created.externalMeetingId,
-      });
+      }) as unknown as Promise<void>);
       assert.equal(fake.tables.telehealth_sessions.length, 1);
 
       // 3. Disconnect: both rows go away.
