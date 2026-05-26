@@ -165,13 +165,20 @@ type MonthlyHeadline = {
  * breakdown, payer performance, call activity). Respects clinician
  * scoping when `claimAppointmentFilter` is provided (null = practice-wide).
  *
- * Outstanding AR & average days in AR are computed as a snapshot at the
- * end of the month: every claim currently in an outstanding status whose
- * submitted_at is on/before monthEnd is counted. This is an approximation
- * (status may have changed since), but it is the best signal we have
- * without an audited status-history table.
+ * Outstanding AR & average days in AR are computed against an audited
+ * status-history source: the `billing_claim_status_snapshot(org, asOf,
+ * appointmentIds?)` RPC returns each claim's latest status as of
+ * monthEnd, sourced from `professional_claim_status_history` (one row
+ * per claim_status / submitted_at / total_charge transition, written by
+ * the trg_professional_claims_record_status_history trigger). Counts
+ * therefore reflect what was actually outstanding at the close of each
+ * past month, not the projection of today's status backwards.
+ *
+ * If the snapshot RPC is unavailable (older live DB without the
+ * migration), we fall back to the legacy "today's status" approximation
+ * so the report still renders.
  */
-async function computeMonthlyHeadline(args: {
+export async function computeMonthlyHeadline(args: {
   supabase: ReturnType<typeof createServerSupabaseAdminClient>;
   organizationId: string;
   month: string;
@@ -230,19 +237,62 @@ async function computeMonthlyHeadline(args: {
         .is("archived_at", null)
     : Promise.resolve({ data: [] as Array<{ id: string; amount: number | string | null }> });
 
-  // Outstanding AR as-of monthEnd
-  const outstandingQ = scope(
-    supabase
-      .from("professional_claims")
-      .select("id, total_charge, submitted_at")
-      .eq("organization_id", organizationId)
-      .in("claim_status", Array.from(OUTSTANDING_STATUSES))
-      .not("submitted_at", "is", null)
-      .lt("submitted_at", periodEnd),
-  ) as Promise<{ data: Array<{ id: string; total_charge: number | string | null; submitted_at: string | null }> | null }>;
+  // Outstanding AR as-of monthEnd. First-choice source: the audited
+  // status-history snapshot RPC, which returns each claim's true status
+  // as of monthEnd. Fallback: today's status filtered to claims
+  // submitted on/before monthEnd (the previous approximation).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const snapshotQ = (supabase as any)
+    .rpc("billing_claim_status_snapshot", {
+      p_organization_id: organizationId,
+      p_as_of: periodEnd,
+      p_appointment_ids: claimAppointmentFilter,
+    }) as Promise<{
+      data: Array<{
+        professional_claim_id: string;
+        claim_status: string;
+        submitted_at: string | null;
+        total_charge: number | string | null;
+      }> | null;
+      error: { message?: string; code?: string } | null;
+    }>;
 
-  const [{ data: submittedClaims }, { count: paidCount }, { count: deniedCount }, paymentsRes, { data: outstandingRows }] =
-    await Promise.all([submittedQ, paidQ, deniedQ, paymentsQ, outstandingQ]);
+  const [{ data: submittedClaims }, { count: paidCount }, { count: deniedCount }, paymentsRes, snapshotRes] =
+    await Promise.all([submittedQ, paidQ, deniedQ, paymentsQ, snapshotQ]);
+
+  let outstandingRows: Array<{
+    total_charge: number | string | null;
+    submitted_at: string | null;
+    claim_status: string;
+  }> | null = null;
+
+  if (!snapshotRes.error && Array.isArray(snapshotRes.data)) {
+    outstandingRows = snapshotRes.data
+      .filter((row) => OUTSTANDING_STATUSES.has(row.claim_status))
+      .map((row) => ({
+        total_charge: row.total_charge,
+        submitted_at: row.submitted_at,
+        claim_status: row.claim_status,
+      }));
+  } else {
+    if (snapshotRes.error) {
+      console.warn(
+        "billing reports: billing_claim_status_snapshot RPC failed, falling back to live-status approximation:",
+        snapshotRes.error.message ?? snapshotRes.error,
+      );
+    }
+    const fallbackQ = scope(
+      supabase
+        .from("professional_claims")
+        .select("id, total_charge, submitted_at, claim_status")
+        .eq("organization_id", organizationId)
+        .in("claim_status", Array.from(OUTSTANDING_STATUSES))
+        .not("submitted_at", "is", null)
+        .lt("submitted_at", periodEnd),
+    ) as Promise<{ data: Array<{ id: string; total_charge: number | string | null; submitted_at: string | null; claim_status: string }> | null }>;
+    const { data: fallbackRows } = await fallbackQ;
+    outstandingRows = fallbackRows ?? [];
+  }
 
   const chargesSubmitted = (submittedClaims ?? []).reduce(
     (s, c) => s + Number(c.total_charge ?? 0),
