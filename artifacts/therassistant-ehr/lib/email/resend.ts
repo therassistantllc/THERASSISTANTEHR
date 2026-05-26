@@ -521,3 +521,119 @@ export async function sendPortalInviteEmail(
     return { ok: false, error: message };
   }
 }
+
+export type SendAutopayFailureEmailInput = {
+  to: string;
+  patientName: string;
+  practiceName: string;
+  portalUrl: string;
+  amountDollars: number;
+  brand: string;
+  last4: string;
+  /**
+   * The Stripe error code surfaced by `chargeSavedCardForInvoice`.
+   * `authentication_required` triggers the 3DS-specific copy; any
+   * other value uses the generic "card was declined" copy.
+   */
+  failureKind: "authentication_required" | "card_declined";
+};
+
+export type SendAutopayFailureEmailResult =
+  | { ok: true; providerId: string | null; fromEmail: string }
+  | { ok: false; error: string };
+
+function formatMoneyForEmail(n: number): string {
+  if (!Number.isFinite(n)) return "$0.00";
+  return `$${n.toFixed(2)}`;
+}
+
+/**
+ * Notify a patient that an autopay charge against their saved card
+ * failed (Task #736). Copy branches on `failureKind`:
+ *   - `authentication_required` → 3DS confirmation copy (their bank
+ *     wants them to verify the charge from the portal; we re-bill
+ *     automatically once they confirm).
+ *   - anything else → plain decline copy (update the card on file).
+ * Throttling lives in the caller (autopayService) — this helper just
+ * fires the email and returns the provider result.
+ */
+export async function sendAutopayFailureEmail(
+  input: SendAutopayFailureEmailInput,
+): Promise<SendAutopayFailureEmailResult> {
+  const credentials = await resolveResendCredentials();
+  if (!credentials) {
+    return {
+      ok: false,
+      error:
+        "Email is not configured. Connect Resend in Integrations (or set RESEND_API_KEY) before sending autopay failure notices.",
+    };
+  }
+
+  const fromEmail =
+    credentials.fromEmail ??
+    process.env.RESEND_FROM_EMAIL?.trim() ??
+    "onboarding@resend.dev";
+
+  const safeName = input.patientName.trim() || "there";
+  const safePractice = input.practiceName.trim() || "your care team";
+  const amountText = formatMoneyForEmail(input.amountDollars);
+  const cardSuffix = input.last4
+    ? `${input.brand || "card"} ending in ${input.last4}`
+    : input.brand || "card on file";
+
+  const is3ds = input.failureKind === "authentication_required";
+
+  const subject = is3ds
+    ? `${safePractice}: confirm your ${amountText} autopay charge`
+    : `${safePractice}: your autopay charge of ${amountText} didn't go through`;
+
+  const ctaLabel = is3ds ? "Confirm the charge" : "Update your payment";
+
+  const introLine = is3ds
+    ? `Your bank asked us to verify the ${amountText} autopay charge we tried to run on your ${cardSuffix}. ` +
+      `Tap the button below to confirm it from your patient portal — once you do, we'll re-run the charge automatically.`
+    : `We tried to run an autopay charge of ${amountText} on your ${cardSuffix} and it was declined. ` +
+      `Open your patient portal to update the card on file (or use a different card), and we'll charge the new card right away.`;
+
+  const textBody =
+    `Hello ${safeName},\n\n` +
+    `${introLine}\n\n` +
+    `Open your portal: ${input.portalUrl}\n\n` +
+    `If you've already taken care of it, you can ignore this email.\n\n` +
+    `Thank you,\n${safePractice}`;
+
+  const htmlBody = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; color: #1f2937; max-width: 560px; margin: 0 auto;">
+      <p>Hello ${escapeHtml(safeName)},</p>
+      <p>${escapeHtml(introLine)}</p>
+      <p style="margin: 24px 0;">
+        <a href="${escapeHtml(input.portalUrl)}" style="background:#1D4ED8;color:#ffffff;padding:12px 18px;border-radius:6px;text-decoration:none;display:inline-block;">${escapeHtml(ctaLabel)}</a>
+      </p>
+      <p style="font-size: 13px; color: #4b5563;">Or paste this link into your browser:<br/>
+        <a href="${escapeHtml(input.portalUrl)}">${escapeHtml(input.portalUrl)}</a>
+      </p>
+      <p style="font-size: 13px; color: #6b7280;">If you've already taken care of it, you can ignore this email.</p>
+      <p style="margin-top: 32px;">Thank you,<br/>${escapeHtml(safePractice)}</p>
+    </div>
+  `;
+
+  try {
+    const client = new Resend(credentials.apiKey);
+    const result = await client.emails.send({
+      from: fromEmail,
+      to: input.to,
+      subject,
+      text: textBody,
+      html: htmlBody,
+    });
+
+    if (result.error) {
+      const message = result.error.message || "Resend rejected the email";
+      return { ok: false, error: message };
+    }
+    return { ok: true, providerId: result.data?.id ?? null, fromEmail };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to send email";
+    return { ok: false, error: message };
+  }
+}

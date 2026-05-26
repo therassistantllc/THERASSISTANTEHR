@@ -134,6 +134,32 @@ mock.module("@/lib/payments/savedCardService", {
   },
 });
 
+/* Task #736: capture outbound autopay failure emails so tests can
+ * assert on copy + throttling without hitting Resend. */
+type SentFailureEmail = {
+  to: string;
+  patientName: string;
+  practiceName: string;
+  portalUrl: string;
+  amountDollars: number;
+  brand: string;
+  last4: string;
+  failureKind: "authentication_required" | "card_declined";
+};
+const sentFailureEmails: SentFailureEmail[] = [];
+let failureEmailResult: { ok: true } | { ok: false; error: string } = { ok: true };
+
+mock.module("@/lib/email/resend", {
+  namedExports: {
+    sendAutopayFailureEmail: async (input: SentFailureEmail) => {
+      sentFailureEmails.push(input);
+      return failureEmailResult.ok
+        ? { ok: true, providerId: "rs_test", fromEmail: "test@from" }
+        : { ok: false, error: failureEmailResult.error };
+    },
+  },
+});
+
 let attemptAutopayForInvoice: (input: {
   organizationId: string;
   patientInvoiceId: string;
@@ -167,6 +193,8 @@ before(async () => {
 beforeEach(() => {
   resetState();
   chargeOutcome = { ok: true, paymentIntentId: "pi_test_1" };
+  sentFailureEmails.length = 0;
+  failureEmailResult = { ok: true };
 });
 
 function seedInvoiceAndClient(opts: {
@@ -189,6 +217,7 @@ function seedInvoiceAndClient(opts: {
       organization_id: "org-1",
       first_name: "Jane",
       last_name: "Doe",
+      email: "jane@example.com",
       autopay_enabled: opts.autopay,
       stripe_customer_id: opts.hasCard ?? true ? "cus_1" : null,
       stripe_payment_method_id: opts.hasCard ?? true ? "pm_1" : null,
@@ -198,6 +227,7 @@ function seedInvoiceAndClient(opts: {
       archived_at: null,
     },
   ];
+  tables.organizations = [{ id: "org-1", name: "Riverside Therapy" }];
 }
 
 test("skips when autopay flag is off", async () => {
@@ -293,6 +323,100 @@ test("autopay on + Stripe declined → failed payment row + failure audit", asyn
   const ctx = wqRow!.row.context_payload as Record<string, unknown>;
   assert.equal(ctx.patient_invoice_id, "inv-1");
   assert.equal(ctx.error_code, "card_declined");
+});
+
+test("Task #736: emails the patient with decline copy on plain card decline", async () => {
+  seedInvoiceAndClient({ autopay: true });
+  chargeOutcome = {
+    ok: false,
+    code: "card_declined",
+    message: "Your card was declined.",
+  };
+  await attemptAutopayForInvoice({
+    organizationId: "org-1",
+    patientInvoiceId: "inv-1",
+  });
+  assert.equal(sentFailureEmails.length, 1);
+  const email = sentFailureEmails[0];
+  assert.equal(email.to, "jane@example.com");
+  assert.equal(email.failureKind, "card_declined");
+  assert.equal(email.amountDollars, 50);
+  assert.equal(email.brand, "visa");
+  assert.equal(email.last4, "4242");
+  assert.equal(email.practiceName, "Riverside Therapy");
+  assert.match(email.portalUrl, /\/portal\/home$/);
+  // Audit row stamped so the throttle has something to look at.
+  const audit = inserted.find(
+    (i) =>
+      i.table === "audit_logs" &&
+      i.row.event_type === "patient_billing_autopay_failure_email_sent",
+  );
+  assert.ok(audit, "expected failure-email audit row");
+  const md = audit!.row.event_metadata as Record<string, unknown>;
+  assert.equal(md.ok, true);
+  assert.equal(md.failure_kind, "card_declined");
+});
+
+test("Task #736: emails the patient with 3DS copy on authentication_required", async () => {
+  seedInvoiceAndClient({ autopay: true });
+  chargeOutcome = {
+    ok: false,
+    code: "authentication_required",
+    message: "Authentication required by issuer.",
+  };
+  await attemptAutopayForInvoice({
+    organizationId: "org-1",
+    patientInvoiceId: "inv-1",
+  });
+  assert.equal(sentFailureEmails.length, 1);
+  assert.equal(sentFailureEmails[0].failureKind, "authentication_required");
+});
+
+test("Task #736: throttles a second failure email within the cooldown window", async () => {
+  seedInvoiceAndClient({ autopay: true });
+  chargeOutcome = {
+    ok: false,
+    code: "card_declined",
+    message: "Your card was declined.",
+  };
+  await attemptAutopayForInvoice({
+    organizationId: "org-1",
+    patientInvoiceId: "inv-1",
+  });
+  // Second failure for the same invoice immediately after — the throttle
+  // audit row should suppress the re-send.
+  await attemptAutopayForInvoice({
+    organizationId: "org-1",
+    patientInvoiceId: "inv-1",
+  });
+  assert.equal(
+    sentFailureEmails.length,
+    1,
+    "expected exactly one email across two back-to-back failures",
+  );
+});
+
+test("Task #736: skips the email when the patient has no email on file", async () => {
+  seedInvoiceAndClient({ autopay: true });
+  // Strip the email after seeding.
+  (tables.clients![0] as Row).email = null;
+  chargeOutcome = {
+    ok: false,
+    code: "card_declined",
+    message: "Your card was declined.",
+  };
+  await attemptAutopayForInvoice({
+    organizationId: "org-1",
+    patientInvoiceId: "inv-1",
+  });
+  assert.equal(sentFailureEmails.length, 0);
+  // And we should not stamp a misleading throttle row in that case.
+  const audit = inserted.find(
+    (i) =>
+      i.table === "audit_logs" &&
+      i.row.event_type === "patient_billing_autopay_failure_email_sent",
+  );
+  assert.equal(audit, undefined);
 });
 
 test("dedupes the autopay_charge_failed WQ row across repeat failures", async () => {

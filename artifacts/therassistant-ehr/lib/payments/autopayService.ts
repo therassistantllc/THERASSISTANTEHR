@@ -27,6 +27,7 @@
  */
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { chargeSavedCardForInvoice } from "@/lib/payments/savedCardService";
+import { sendAutopayFailureEmail } from "@/lib/email/resend";
 
 type SupabaseAdmin = NonNullable<ReturnType<typeof createServerSupabaseAdminClient>>;
 
@@ -52,6 +53,7 @@ interface ClientAutopayRow {
   id: string;
   first_name: string | null;
   last_name: string | null;
+  email: string | null;
   organization_id: string;
   autopay_enabled: boolean;
   stripe_customer_id: string | null;
@@ -71,6 +73,14 @@ interface InvoiceAutopayRow {
 
 const AUTOPAY_SUCCESS_EVT = "patient_billing_autopay_succeeded";
 const AUTOPAY_FAILURE_EVT = "patient_billing_autopay_failed";
+/** Task #736: stamped after we actually send the patient an email so
+ *  repeated failures on a stuck card don't re-flood their inbox. */
+const AUTOPAY_FAILURE_EMAIL_EVT = "patient_billing_autopay_failure_email_sent";
+/** Throttle window between consecutive failure emails for the same
+ *  invoice. The retry sweep waits 24h between attempts (see
+ *  `DEFAULT_AUTOPAY_RETRY_BACKOFF_HOURS`), so 20h gives the email a
+ *  little grace and still pairs one email with each retry boundary. */
+const AUTOPAY_FAILURE_EMAIL_THROTTLE_HOURS = 20;
 
 /** Work-type for the WQ row a failed autopay attempt files. */
 export const AUTOPAY_CHARGE_FAILED_WORK_TYPE = "autopay_charge_failed";
@@ -251,6 +261,186 @@ export async function closeAutopayFailureWorkqueueItem(input: {
   }
 }
 
+/**
+ * Resolve the public base URL for portal deep-links emailed to patients.
+ * Mirrors the portal/home route's resolver — env first, REPLIT_DEV_DOMAIN
+ * as a dev fallback, otherwise null (we just omit the prefix and the
+ * link becomes relative, which is better than blasting `localhost`).
+ */
+function resolvePortalBaseUrl(): string | null {
+  const env =
+    process.env.NEXT_PUBLIC_APP_BASE_URL?.trim() ||
+    process.env.NEXT_PUBLIC_APP_URL?.trim() ||
+    process.env.APP_URL?.trim();
+  if (env) return env.replace(/\/+$/, "");
+  const replit = process.env.REPLIT_DEV_DOMAIN?.trim();
+  if (replit) return `https://${replit}`;
+  return null;
+}
+
+function buildPortalHomeUrl(): string {
+  const base = resolvePortalBaseUrl();
+  return base ? `${base}/portal/home` : "/portal/home";
+}
+
+/**
+ * Look up the practice/organization display name for outbound patient
+ * email. Best-effort — returns "your care team" if anything goes wrong
+ * or the row isn't readable, so we never block the email send.
+ */
+async function fetchPracticeName(
+  supabase: SupabaseAdmin,
+  organizationId: string,
+): Promise<string> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sb = supabase as unknown as { from: (t: string) => any };
+    const { data } = await sb
+      .from("organizations")
+      .select("name")
+      .eq("id", organizationId)
+      .maybeSingle();
+    const name = (data as { name?: string | null } | null)?.name?.trim();
+    return name || "your care team";
+  } catch {
+    return "your care team";
+  }
+}
+
+/**
+ * Throttle check (Task #736): true when we sent the patient a failure
+ * email for this invoice within the throttle window. Backed by an
+ * audit_logs row we stamp on each successful send.
+ */
+async function recentFailureEmailExists(
+  supabase: SupabaseAdmin,
+  args: {
+    organizationId: string;
+    patientInvoiceId: string;
+    windowHours: number;
+    now: Date;
+  },
+): Promise<boolean> {
+  try {
+    const cutoff = new Date(
+      args.now.getTime() - args.windowHours * 3600 * 1000,
+    ).toISOString();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sb = supabase as unknown as { from: (t: string) => any };
+    const { data } = await sb
+      .from("audit_logs")
+      .select("id, created_at")
+      .eq("organization_id", args.organizationId)
+      .eq("event_type", AUTOPAY_FAILURE_EMAIL_EVT)
+      .eq("object_type", "patient_invoice")
+      .eq("object_id", args.patientInvoiceId)
+      .gte("created_at", cutoff)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    return Array.isArray(data) && data.length > 0;
+  } catch {
+    // If the throttle lookup itself blows up, err on the side of NOT
+    // emailing (a missed nudge is better than a flood).
+    return true;
+  }
+}
+
+/**
+ * Send the patient-facing autopay failure email and stamp an audit row
+ * so the throttle window starts ticking. Best-effort and isolated —
+ * never throws to the caller; the WQ row and audit trail are the
+ * source of truth for "what happened".
+ */
+async function notifyPatientOfAutopayFailure(
+  supabase: SupabaseAdmin,
+  args: {
+    organizationId: string;
+    client: ClientAutopayRow;
+    invoiceId: string;
+    amountDollars: number;
+    brand: string;
+    last4: string;
+    failureCode: string;
+    now: Date;
+  },
+): Promise<void> {
+  const email = args.client.email?.trim();
+  if (!email) return; // no email on file → nothing to send
+
+  const throttled = await recentFailureEmailExists(supabase, {
+    organizationId: args.organizationId,
+    patientInvoiceId: args.invoiceId,
+    windowHours: AUTOPAY_FAILURE_EMAIL_THROTTLE_HOURS,
+    now: args.now,
+  });
+  if (throttled) return;
+
+  const practiceName = await fetchPracticeName(supabase, args.organizationId);
+  const patientName = [args.client.first_name, args.client.last_name]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  const portalUrl = buildPortalHomeUrl();
+  const failureKind =
+    args.failureCode === "authentication_required"
+      ? "authentication_required"
+      : "card_declined";
+
+  let sendResult:
+    | { ok: true; providerId: string | null }
+    | { ok: false; error: string };
+  try {
+    const result = await sendAutopayFailureEmail({
+      to: email,
+      patientName,
+      practiceName,
+      portalUrl,
+      amountDollars: args.amountDollars,
+      brand: args.brand,
+      last4: args.last4,
+      failureKind,
+    });
+    sendResult = result.ok
+      ? { ok: true, providerId: result.providerId }
+      : { ok: false, error: result.error };
+  } catch (err) {
+    sendResult = {
+      ok: false,
+      error: err instanceof Error ? err.message : "unknown send error",
+    };
+  }
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase as any).from("audit_logs").insert({
+      organization_id: args.organizationId,
+      patient_id: args.client.id,
+      event_type: AUTOPAY_FAILURE_EMAIL_EVT,
+      event_summary: sendResult.ok
+        ? `Emailed patient about failed autopay charge ($${args.amountDollars.toFixed(2)})`
+        : `Autopay failure email send failed: ${sendResult.error}`,
+      event_metadata: {
+        patient_invoice_id: args.invoiceId,
+        amount: args.amountDollars,
+        failure_kind: failureKind,
+        failure_code: args.failureCode,
+        to: email,
+        ok: sendResult.ok,
+        provider_id: sendResult.ok ? sendResult.providerId : null,
+        error: sendResult.ok ? null : sendResult.error,
+      },
+      action: AUTOPAY_FAILURE_EMAIL_EVT,
+      object_type: "patient_invoice",
+      object_id: args.invoiceId,
+    });
+  } catch (err) {
+    console.warn(
+      "[autopay] failure-email audit insert threw (non-fatal)",
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
 async function writeAutopayAudit(
   supabase: SupabaseAdmin,
   args: {
@@ -392,7 +582,7 @@ export async function attemptAutopayForInvoice(input: {
   const { data: cliRow } = await sb
     .from("clients")
     .select(
-      "id, first_name, last_name, organization_id, autopay_enabled, " +
+      "id, first_name, last_name, email, organization_id, autopay_enabled, " +
         "stripe_customer_id, stripe_payment_method_id, " +
         "stripe_payment_method_brand, stripe_payment_method_last4, " +
         "stripe_connect_account_id",
@@ -517,6 +707,19 @@ export async function attemptAutopayForInvoice(input: {
     last4,
     errorCode: outcome.code,
     errorMessage: outcome.message,
+  });
+  // Task #736: also email the patient directly so they don't have to
+  // happen to log into the portal to learn the charge failed. Throttled
+  // and best-effort — see notifyPatientOfAutopayFailure.
+  await notifyPatientOfAutopayFailure(supabase, {
+    organizationId: input.organizationId,
+    client,
+    invoiceId: invoice.id,
+    amountDollars: balance,
+    brand,
+    last4,
+    failureCode: outcome.code,
+    now: new Date(),
   });
   return {
     attempted: true,
