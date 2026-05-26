@@ -7,7 +7,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getStaffContext } from "@/lib/rbac/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 
-export async function GET(_request: NextRequest) {
+export async function GET(request: NextRequest) {
   try {
     const supabase = createServerSupabaseAdminClient();
 
@@ -18,11 +18,15 @@ export async function GET(_request: NextRequest) {
       );
     }
 
-    // Get auth session to extract org_id from JWT or request context
+    // Extract the JWT from the Authorization header sent by the browser client
+    const authHeader = request.headers.get("authorization");
+    const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
+
+    // Get auth session — pass the token so the admin client can validate it
     const {
       data: { user },
       error: userError,
-    } = await supabase.auth.getUser();
+    } = await supabase.auth.getUser(token);
 
     if (userError || !user) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
