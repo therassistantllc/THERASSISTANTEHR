@@ -856,6 +856,24 @@ textarea {
   color: var(--navy);
 }
 
+.reports-hero-identity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.reports-hero-logo {
+  max-height: 56px;
+  max-width: 140px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 4px;
+  background: #fff;
+  flex-shrink: 0;
+}
+
 .reports-hero .hero-copy {
   color: var(--muted);
   font-size: 13px;
@@ -1806,6 +1824,11 @@ textarea {
     border: none !important;
     padding: 0 0 6px !important;
     margin-bottom: 6px !important;
+  }
+
+  .reports-hero-logo {
+    max-height: 40px !important;
+    max-width: 110px !important;
   }
 
   .reports-section {

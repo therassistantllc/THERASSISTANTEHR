@@ -302,6 +302,7 @@ export default function BillingReportsClient() {
   const [error, setError] = useState<string | null>(null);
   const [viewerRoles, setViewerRoles] = useState<string[]>([]);
   const [organizationName, setOrganizationName] = useState<string | null>(null);
+  const [organizationLogoUrl, setOrganizationLogoUrl] = useState<string | null>(null);
   const [role, setRole] = useState<ViewerRole>("owner");
   const [roleManuallySet, setRoleManuallySet] = useState(false);
   const [sendOpen, setSendOpen] = useState(false);
@@ -320,10 +321,15 @@ export default function BillingReportsClient() {
       try {
         const res = await fetch("/api/auth/me", { cache: "no-store" });
         if (!res.ok) return;
-        const json = (await res.json()) as { roles?: string[]; organizationName?: string | null };
+        const json = (await res.json()) as {
+          roles?: string[];
+          organizationName?: string | null;
+          organizationLogoUrl?: string | null;
+        };
         if (cancelled) return;
         setViewerRoles(Array.isArray(json.roles) ? json.roles : []);
         setOrganizationName(json.organizationName ?? null);
+        setOrganizationLogoUrl(json.organizationLogoUrl ?? null);
         if (!roleManuallySet) setRole(pickPrimaryRole(json.roles));
       } catch {
         /* role detection is best-effort */
@@ -434,13 +440,22 @@ export default function BillingReportsClient() {
   return (
     <main className="app-shell reports-shell">
       <section className="reports-hero">
-        <div>
-          <p className="eyebrow">Billing{organizationName ? <> · {organizationName}</> : null}</p>
-          <h1>{organizationName ? `${organizationName} — Revenue Overview` : "Revenue Overview"}</h1>
-          <p className="hero-copy">
-            {formatMonth(payload?.month || month)} · <strong>{scopeLabel}</strong>
-            {viewerRoles.length > 0 ? <> · Viewing as <strong>{ROLE_LABEL[role]}</strong></> : null}
-          </p>
+        <div className="reports-hero-identity">
+          {organizationLogoUrl ? (
+            <img
+              className="reports-hero-logo"
+              src={organizationLogoUrl}
+              alt={organizationName ? `${organizationName} logo` : "Practice logo"}
+            />
+          ) : null}
+          <div>
+            <p className="eyebrow">Billing{organizationName ? <> · {organizationName}</> : null}</p>
+            <h1>{organizationName ? `${organizationName} — Revenue Overview` : "Revenue Overview"}</h1>
+            <p className="hero-copy">
+              {formatMonth(payload?.month || month)} · <strong>{scopeLabel}</strong>
+              {viewerRoles.length > 0 ? <> · Viewing as <strong>{ROLE_LABEL[role]}</strong></> : null}
+            </p>
+          </div>
         </div>
         <div className="reports-toolbar">
           <label className="reports-control">
