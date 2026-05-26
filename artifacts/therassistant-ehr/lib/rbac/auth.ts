@@ -47,6 +47,15 @@ export async function getAuthenticatedUser(): Promise<AuthenticatedUser | null> 
     } = await supabase.auth.getUser();
 
     if (error || !user) {
+      // Development bypass: return the configured org's default admin user
+      // so API routes work without a browser session during local development.
+      if (process.env.NODE_ENV === "development") {
+        const orgId = process.env.NEXT_PUBLIC_ORGANIZATION_ID ?? null;
+        const devUserId = process.env.DEV_AUTH_USER_ID ?? null;
+        if (orgId && devUserId) {
+          return { userId: devUserId, email: null, organizationId: orgId };
+        }
+      }
       return null;
     }
 

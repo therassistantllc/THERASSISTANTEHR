@@ -29,6 +29,27 @@ export async function GET(request: NextRequest) {
     } = await supabase.auth.getUser(token);
 
     if (userError || !user) {
+      // Development bypass — use DEV_AUTH_USER_ID when no real session exists
+      if (process.env.NODE_ENV === "development") {
+        const devUserId = process.env.DEV_AUTH_USER_ID;
+        const orgId = process.env.NEXT_PUBLIC_ORGANIZATION_ID;
+        if (devUserId && orgId) {
+          const context = await getStaffContext(orgId, devUserId);
+          if (context) {
+            return NextResponse.json({
+              staffId: context.staffId,
+              organizationId: context.organizationId,
+              firstName: context.firstName,
+              lastName: context.lastName,
+              email: context.email,
+              jobTitle: context.jobTitle,
+              providerNpi: context.providerNpi,
+              roles: context.roles,
+              permissions: context.permissions,
+            });
+          }
+        }
+      }
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
 
