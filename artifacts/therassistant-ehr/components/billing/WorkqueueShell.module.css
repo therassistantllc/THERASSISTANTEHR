@@ -278,6 +278,13 @@
 .table tbody tr:hover { background: #F8FAFC; }
 .table tbody tr.rowSelected { background: #EFF6FF; }
 
+.table tbody tr.rowDragOver,
+.table tbody tr.rowDragOver:hover,
+.table tbody tr.rowDragOver td {
+  background: #DBEAFE;
+  box-shadow: inset 0 0 0 2px #1D4ED8;
+}
+
 .table tbody tr.rowPulse {
   animation: wqRowPulse 1s ease-out 0s 3;
   position: relative;

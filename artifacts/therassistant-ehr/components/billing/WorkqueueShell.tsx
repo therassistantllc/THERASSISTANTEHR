@@ -117,6 +117,12 @@ export interface WorkqueueShellProps<TRow> {
   selectedRowIds?: string[];
   onSelectionChange?: (ids: string[]) => void;
   rowActions?: RowAction<TRow>[];
+  /**
+   * Optional file-drop handler. When set, dragging files over a row shows a
+   * drop-target highlight and dropping invokes the callback with the row and
+   * the dropped files. Callers wire this up to upload to the row's claim.
+   */
+  onRowDrop?: (row: TRow, files: File[]) => void;
   /** Right-side detail panel */
   detailTabs?: DetailTab[];
   /**
@@ -277,6 +283,7 @@ export default function WorkqueueShell<TRow>(props: WorkqueueShellProps<TRow>) {
     selectedRowIds,
     onSelectionChange,
     rowActions,
+    onRowDrop,
     detailTabs,
     activeDetailTabId,
     onDetailTabChange,
@@ -364,6 +371,8 @@ export default function WorkqueueShell<TRow>(props: WorkqueueShellProps<TRow>) {
     columns.length +
     (rowActions && rowActions.length > 0 ? 1 : 0) +
     (selectionEnabled ? 1 : 0);
+
+  const [dragRowId, setDragRowId] = useState<string | null>(null);
 
   const setFilter = useCallback(
     (id: string, value: string) => {
@@ -609,18 +618,64 @@ export default function WorkqueueShell<TRow>(props: WorkqueueShellProps<TRow>) {
                   const selected = selectedRowId === id;
                   const checked = selectedSet.has(id);
                   const pulsing = pulseRowId === id;
+                  const dragOver = dragRowId === id;
                   const rowClass = [
                     selected ? styles.rowSelected : "",
                     pulsing ? styles.rowPulse : "",
+                    dragOver ? styles.rowDragOver : "",
                   ]
                     .filter(Boolean)
                     .join(" ");
+                  const dragProps = onRowDrop
+                    ? {
+                        onDragEnter: (e: React.DragEvent) => {
+                          if (
+                            !Array.from(e.dataTransfer?.types || []).includes(
+                              "Files",
+                            )
+                          )
+                            return;
+                          e.preventDefault();
+                          setDragRowId(id);
+                        },
+                        onDragOver: (e: React.DragEvent) => {
+                          if (
+                            !Array.from(e.dataTransfer?.types || []).includes(
+                              "Files",
+                            )
+                          )
+                            return;
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = "copy";
+                          if (dragRowId !== id) setDragRowId(id);
+                        },
+                        onDragLeave: (e: React.DragEvent) => {
+                          // Only clear when leaving the row entirely
+                          const related = e.relatedTarget as Node | null;
+                          if (
+                            related &&
+                            (e.currentTarget as Node).contains(related)
+                          )
+                            return;
+                          if (dragRowId === id) setDragRowId(null);
+                        },
+                        onDrop: (e: React.DragEvent) => {
+                          e.preventDefault();
+                          setDragRowId(null);
+                          const files = Array.from(
+                            e.dataTransfer?.files ?? [],
+                          );
+                          if (files.length > 0) onRowDrop(row, files);
+                        },
+                      }
+                    : {};
                   return (
                     <tr
                       key={id}
                       id={`wqrow-${id}`}
                       className={rowClass}
                       onClick={() => onSelectRow?.(id)}
+                      {...dragProps}
                     >
                       {selectionEnabled ? (
                         <td

@@ -11,6 +11,10 @@ import WorkqueueShell, {
 } from "@/components/billing/WorkqueueShell";
 import PlaceClaimOnHoldModal from "@/components/billing/PlaceClaimOnHoldModal";
 import { ClaimDocumentsPanel } from "@/components/billing/ClaimDocumentsPanel";
+import {
+  ClaimDocumentUploadsOverlay,
+  useClaimDocumentUploads,
+} from "@/components/billing/ClaimDocumentUploads";
 import StatusCheckHistory from "@/components/billing/StatusCheckHistory";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -957,6 +961,7 @@ export default function NoResponseClient() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkHoldOpen, setBulkHoldOpen] = useState(false);
   const [bumpKey, setBumpKey] = useState(0);
+  const docUploads = useClaimDocumentUploads(organizationId);
 
   const load = useCallback(async () => {
     if (!organizationId) return;
@@ -1515,6 +1520,19 @@ export default function NoResponseClient() {
         detailTabs={detailTabs}
         detailActions={detailActions}
         message={message}
+        onRowDrop={(row, files) => {
+          const label = row.claim_number ?? row.id;
+          docUploads.uploadFiles(
+            row.id,
+            `Claim ${label}${row.payer_name ? ` · ${row.payer_name}` : ""}`,
+            files,
+            () => setBumpKey((k) => k + 1),
+          );
+        }}
+      />
+      <ClaimDocumentUploadsOverlay
+        uploads={docUploads.uploads}
+        onDismiss={docUploads.dismiss}
       />
 
       {noteRow ? (

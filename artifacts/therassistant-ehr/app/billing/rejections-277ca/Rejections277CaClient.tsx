@@ -19,6 +19,10 @@ import {
 import { getWorkqueue } from "@/lib/billing/workqueues";
 import { buildClaimDetailHref } from "@/lib/claims/claimDetailRouting";
 import { ClaimDocumentsPanel } from "@/components/billing/ClaimDocumentsPanel";
+import {
+  ClaimDocumentUploadsOverlay,
+  useClaimDocumentUploads,
+} from "@/components/billing/ClaimDocumentUploads";
 
 type ActionId =
   | "correct_claim"
@@ -113,6 +117,7 @@ const queueDef = getWorkqueue("rejections_277ca");
 
 export default function Rejections277CaClient() {
   const organizationId = useMemo(() => getOrganizationId(), []);
+  const docUploads = useClaimDocumentUploads(organizationId);
   const [items, setItems] = useState<RejectionRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
@@ -1083,6 +1088,18 @@ export default function Rejections277CaClient() {
         detailTabs={detailTabs}
         detailActions={detailActions}
         message={message}
+        onRowDrop={(row, files) => {
+          const label = row.claimNumber ?? row.claimId.slice(0, 8);
+          docUploads.uploadFiles(
+            row.claimId,
+            `Claim ${label}${row.payerName ? ` · ${row.payerName}` : ""}`,
+            files,
+          );
+        }}
+      />
+      <ClaimDocumentUploadsOverlay
+        uploads={docUploads.uploads}
+        onDismiss={docUploads.dismiss}
       />
     </main>
   );

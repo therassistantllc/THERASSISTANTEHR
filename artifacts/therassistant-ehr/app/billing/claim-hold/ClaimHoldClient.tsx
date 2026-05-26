@@ -11,6 +11,10 @@ import WorkqueueShell, {
 } from "@/components/billing/WorkqueueShell";
 import { getWorkqueue } from "@/lib/billing/workqueues";
 import { ClaimDocumentsPanel } from "@/components/billing/ClaimDocumentsPanel";
+import {
+  ClaimDocumentUploadsOverlay,
+  useClaimDocumentUploads,
+} from "@/components/billing/ClaimDocumentUploads";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -704,6 +708,7 @@ export default function ClaimHoldClient() {
   const [noteRow, setNoteRow] = useState<HoldRow | null>(null);
   const [cancelRow, setCancelRow] = useState<HoldRow | null>(null);
   const [notesBumpKey, setNotesBumpKey] = useState(0);
+  const docUploads = useClaimDocumentUploads(organizationId);
 
   const load = useCallback(async () => {
     if (!organizationId) return;
@@ -1171,6 +1176,18 @@ export default function ClaimHoldClient() {
         detailTabs={detailTabs}
         detailActions={detailActions}
         message={message}
+        onRowDrop={(row, files) => {
+          docUploads.uploadFiles(
+            row.id,
+            `Claim ${row.claimNumber} · ${row.patientName}`,
+            files,
+            () => setNotesBumpKey((k) => k + 1),
+          );
+        }}
+      />
+      <ClaimDocumentUploadsOverlay
+        uploads={docUploads.uploads}
+        onDismiss={docUploads.dismiss}
       />
 
       {extendRow ? (

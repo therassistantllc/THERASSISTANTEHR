@@ -12,6 +12,10 @@ import WorkqueueShell, {
 } from "@/components/billing/WorkqueueShell";
 import { getWorkqueue } from "@/lib/billing/workqueues";
 import { ClaimDocumentsPanel } from "@/components/billing/ClaimDocumentsPanel";
+import {
+  ClaimDocumentUploadsOverlay,
+  useClaimDocumentUploads,
+} from "@/components/billing/ClaimDocumentUploads";
 
 type Tab = "needed" | "replacement" | "void" | "ready" | "sent";
 
@@ -303,6 +307,7 @@ function ActionModal({
 
 export default function CorrectedClaimsClient() {
   const organizationId = useMemo(() => getOrganizationId(), []);
+  const docUploads = useClaimDocumentUploads(organizationId);
   const [rows, setRows] = useState<CorrectedRow[]>([]);
   const [facets, setFacets] = useState<Facets>({
     payers: [],
@@ -1002,6 +1007,17 @@ export default function CorrectedClaimsClient() {
         detailTabs={detailTabs}
         detailActions={detailActions}
         message={message}
+        onRowDrop={(row, files) => {
+          const targetClaimId = row.correctedClaimId ?? row.originalClaimId;
+          const label = `Claim ${shortId(row.originalClaimId)}${
+            row.payerName ? ` · ${row.payerName}` : ""
+          }`;
+          docUploads.uploadFiles(targetClaimId, label, files);
+        }}
+      />
+      <ClaimDocumentUploadsOverlay
+        uploads={docUploads.uploads}
+        onDismiss={docUploads.dismiss}
       />
 
       {modal ? (

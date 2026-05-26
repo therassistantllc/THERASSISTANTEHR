@@ -48,7 +48,7 @@ const STYLE_KEYS = [
   "summaryAmber", "summaryRed", "summaryGreen", "filterRail",
   "filterGroup", "filterLabel", "filterSelect", "filterInput",
   "filterClear", "body", "tablePane", "table", "tableLoading",
-  "tableEmpty", "rowSelected", "detailPane", "detailTabs",
+  "tableEmpty", "rowSelected", "rowDragOver", "detailPane", "detailTabs",
   "detailTab", "detailTabActive", "detailBody", "detailEmpty",
   "detailActions",
 ] as const;
