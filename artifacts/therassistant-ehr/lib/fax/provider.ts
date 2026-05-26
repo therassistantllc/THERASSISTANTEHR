@@ -38,10 +38,36 @@ export type SendOutboundFaxResult =
   | { ok: true; providerId: string; providerStatus: string | null }
   | { ok: false; error: string };
 
+/**
+ * Normalized terminal/lifecycle status the worker reasons about. Provider
+ * vocabularies (Telnyx: queued / media.processed / sending / delivered /
+ * failed) collapse into these buckets.
+ */
+export type NormalizedFaxStatus = "sending" | "delivered" | "failed" | "unknown";
+
+export type GetFaxStatusResult =
+  | {
+      ok: true;
+      providerStatus: string | null;
+      normalized: NormalizedFaxStatus;
+      failureReason?: string | null;
+    }
+  | { ok: false; error: string };
+
 export interface FaxProvider {
   readonly name: string;
   readonly configured: boolean;
   send(input: SendOutboundFaxInput): Promise<SendOutboundFaxResult>;
+  /**
+   * Poll the provider for the latest status of a previously-sent fax.
+   * Implementations should map the provider's vocabulary onto the
+   * `NormalizedFaxStatus` union so callers don't need provider-specific
+   * knowledge. Returning `{ ok: false }` is reserved for transport
+   * failures (network, auth) — a successful HTTP response whose body
+   * says the fax is still mid-flight returns `{ ok: true, normalized:
+   * "sending" }`.
+   */
+  getStatus(providerId: string): Promise<GetFaxStatusResult>;
 }
 
 type TelnyxCredentials = {
@@ -98,17 +124,33 @@ async function resolveTelnyxCredentials(): Promise<TelnyxCredentials | null> {
 }
 
 function notConfiguredProvider(): FaxProvider {
+  const error =
+    "Fax provider is not configured. Connect Telnyx in Integrations (or set TELNYX_API_KEY and TELNYX_FROM_NUMBER) so the outbound fax worker can deliver queued documentation.";
   return {
     name: "not_configured",
     configured: false,
     async send() {
-      return {
-        ok: false,
-        error:
-          "Fax provider is not configured. Connect Telnyx in Integrations (or set TELNYX_API_KEY and TELNYX_FROM_NUMBER) so the outbound fax worker can deliver queued documentation.",
-      };
+      return { ok: false, error };
+    },
+    async getStatus() {
+      return { ok: false, error };
     },
   };
+}
+
+/**
+ * Telnyx fax lifecycle (per their docs): queued → media.processed →
+ * sending → delivered | failed. Anything else (or missing) is treated
+ * as still-in-flight so we keep polling.
+ */
+function normalizeTelnyxStatus(raw: string | null | undefined): NormalizedFaxStatus {
+  const s = String(raw ?? "").toLowerCase();
+  if (s === "delivered") return "delivered";
+  if (s === "failed") return "failed";
+  if (s === "sending" || s === "queued" || s === "media.processed" || s === "initiated") {
+    return "sending";
+  }
+  return "unknown";
 }
 
 function telnyxProvider(creds: TelnyxCredentials): FaxProvider {
@@ -161,6 +203,53 @@ function telnyxProvider(creds: TelnyxCredentials): FaxProvider {
         return {
           ok: false,
           error: `Telnyx request failed: ${e instanceof Error ? e.message : String(e)}`,
+        };
+      }
+    },
+    async getStatus(providerId) {
+      try {
+        const resp = await fetch(
+          `https://api.telnyx.com/v2/faxes/${encodeURIComponent(providerId)}`,
+          {
+            method: "GET",
+            headers: {
+              Authorization: `Bearer ${creds.apiKey}`,
+              Accept: "application/json",
+            },
+          },
+        );
+        const text = await resp.text();
+        let parsed: Record<string, unknown> | null = null;
+        try {
+          parsed = text ? (JSON.parse(text) as Record<string, unknown>) : null;
+        } catch {
+          parsed = null;
+        }
+        if (!resp.ok) {
+          // 404: provider has aged the record out — we can't reconcile.
+          // Surface as transport error so the caller leaves the row alone.
+          const errs = (parsed?.errors as Array<Record<string, unknown>> | undefined) ?? [];
+          const msg =
+            errs.length && typeof errs[0]?.detail === "string"
+              ? String(errs[0].detail)
+              : text || `Telnyx GET returned HTTP ${resp.status}`;
+          return { ok: false, error: msg };
+        }
+        const data = (parsed?.data ?? {}) as Record<string, unknown>;
+        const providerStatus = typeof data.status === "string" ? (data.status as string) : null;
+        const normalized = normalizeTelnyxStatus(providerStatus);
+        const failureReason =
+          normalized === "failed"
+            ? (typeof data.failure_reason === "string" && (data.failure_reason as string)) ||
+              (typeof (data as { failover_status?: unknown }).failover_status === "string" &&
+                ((data as { failover_status: string }).failover_status as string)) ||
+              null
+            : null;
+        return { ok: true, providerStatus, normalized, failureReason };
+      } catch (e) {
+        return {
+          ok: false,
+          error: `Telnyx status request failed: ${e instanceof Error ? e.message : String(e)}`,
         };
       }
     },

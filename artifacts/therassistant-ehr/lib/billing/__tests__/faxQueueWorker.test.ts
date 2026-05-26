@@ -5,9 +5,11 @@
  * matching `claim_documentation_transmissions` row references, merging
  * them into one PDF, uploading it, and handing the signed URL to a fax
  * provider. These tests use an in-memory fake supabase to verify:
- *   1. The happy path flips both the fax_queue row and the transmission
- *      row to 'sent' with sent_at populated and the provider id stored
- *      on the transmission.
+ *   1. The happy path flips the fax_queue row to 'sent' (handed off to
+ *      the provider) and the transmission row to 'sending' (delivery
+ *      still in flight — terminal status comes from the reconciler in
+ *      Task #726), with sent_at populated and the provider id stored on
+ *      the transmission.
  *   2. A provider failure flips both rows to 'failed' with the error
  *      surfaced on each.
  *   3. A pending fax row with no matching transmission is failed loudly
@@ -301,6 +303,9 @@ const okProvider: FaxProvider = {
   async send() {
     return { ok: true, providerId: "prov-abc", providerStatus: "queued" };
   },
+  async getStatus() {
+    return { ok: true, providerStatus: "queued", normalized: "sending" };
+  },
 };
 const failProvider: FaxProvider = {
   name: "test-fail",
@@ -308,10 +313,13 @@ const failProvider: FaxProvider = {
   async send() {
     return { ok: false, error: "Telnyx 422: invalid number" };
   },
+  async getStatus() {
+    return { ok: true, providerStatus: "failed", normalized: "failed" };
+  },
 };
 
 describe("runFaxQueueDispatch", () => {
-  it("flips fax + transmission to sent and stores provider id on success", async () => {
+  it("flips fax to sent and transmission to sending (awaiting Telnyx terminal status) on success", async () => {
     const seed = seedHappyPath();
     const { supabase, uploads, signedUrls } = makeFakeSupabase(seed);
 
@@ -329,12 +337,16 @@ describe("runFaxQueueDispatch", () => {
     assert.equal(signedUrls.length, 1);
 
     const fax = seed.faxes.find((f) => f.id === "fax-1")!;
-    assert.equal(fax.status, "sent");
+    assert.equal(fax.status, "sent", "fax_queue.status='sent' = handed off to provider");
     assert.ok(fax.sent_at, "sent_at populated");
     assert.equal(fax.error, null);
 
     const tx = seed.transmissions.find((t) => t.id === "tx-1")!;
-    assert.equal(tx.status, "sent");
+    assert.equal(
+      tx.status,
+      "sending",
+      "transmission stays 'sending' until the status reconciler observes Telnyx's terminal verdict",
+    );
     assert.equal(tx.provider_message_id, "prov-abc", "real provider id overwrites the fax_queue.id placeholder");
     assert.ok(tx.sent_at);
   });
@@ -370,6 +382,9 @@ describe("runFaxQueueDispatch", () => {
       async send() {
         sends += 1;
         return { ok: true, providerId: `prov-${sends}`, providerStatus: "queued" };
+      },
+      async getStatus() {
+        return { ok: true, providerStatus: "queued", normalized: "sending" };
       },
     };
 

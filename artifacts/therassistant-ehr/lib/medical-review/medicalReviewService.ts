@@ -471,7 +471,7 @@ export interface MedicalReviewClaimContext {
     id: string;
     channel: "email" | "fax" | "logged";
     recipient: string | null;
-    status: "queued" | "sent" | "failed" | "logged";
+    status: "queued" | "sending" | "sent" | "delivered" | "failed" | "logged";
     sentAt: string | null;
     createdAt: string;
     error: string | null;
@@ -591,8 +591,13 @@ export async function loadMedicalReviewClaimContext(
           ? channelRaw
           : "logged";
       const statusRaw = text(t.status).toLowerCase();
-      const status: "queued" | "sent" | "failed" | "logged" =
-        statusRaw === "sent" || statusRaw === "failed" || statusRaw === "logged" || statusRaw === "queued"
+      const status: "queued" | "sending" | "sent" | "delivered" | "failed" | "logged" =
+        statusRaw === "sent" ||
+        statusRaw === "sending" ||
+        statusRaw === "delivered" ||
+        statusRaw === "failed" ||
+        statusRaw === "logged" ||
+        statusRaw === "queued"
           ? statusRaw
           : "queued";
       return {

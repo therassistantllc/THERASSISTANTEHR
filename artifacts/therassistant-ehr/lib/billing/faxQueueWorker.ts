@@ -430,8 +430,14 @@ export async function runFaxQueueDispatch(
       error: null,
       sent_at: sentAt.toISOString(),
     });
+    // Telnyx delivery is asynchronous — accepting the job means the
+    // provider has the document, not that the recipient's machine has
+    // answered. Mark the transmission as 'sending' so the Submission
+    // history shows "in flight" until the status reconciler (or webhook)
+    // flips it to 'delivered'/'failed' with Telnyx's terminal verdict.
+    // We still record sent_at because it captures the hand-off moment.
     const txUpdate = await updateTransmission(supabase, transmissionId, organizationId, {
-      status: "sent",
+      status: "sending",
       error: null,
       sent_at: sentAt.toISOString(),
       provider_message_id: send.providerId,

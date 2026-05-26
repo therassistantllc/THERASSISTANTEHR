@@ -51,7 +51,7 @@ interface ContextPayload {
       id: string;
       channel: "email" | "fax" | "logged";
       recipient: string | null;
-      status: "queued" | "sent" | "failed" | "logged";
+      status: "queued" | "sending" | "sent" | "delivered" | "failed" | "logged";
       sentAt: string | null;
       createdAt: string;
       error: string | null;
@@ -1187,10 +1187,15 @@ export default function MedicalReviewClient() {
           if (hist.length === 0 && txs.length === 0) {
             return <p style={{ color: "#64748B", fontSize: 13 }}>No medical-review actions logged yet.</p>;
           }
+          // 'delivered' is the new terminal success (Telnyx confirmed
+          // the recipient machine answered). 'sent' is the legacy
+          // synonym for back-compat with rows written before the
+          // reconciler existed. 'sending' is the new mid-flight state
+          // (provider accepted the job, awaiting delivery).
           const statusColor = (s: string) =>
-            s === "sent" ? "#15803D" :
+            s === "delivered" || s === "sent" ? "#15803D" :
             s === "failed" ? "#B91C1C" :
-            s === "queued" ? "#B45309" :
+            s === "queued" || s === "sending" ? "#B45309" :
             "#475569";
           return (
             <div>
