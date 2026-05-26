@@ -100,6 +100,7 @@ type Summary = {
   total_dollars: number;
   oldest_age_days: number | null;
   urgent_count: number;
+  autopay_failed_count: number;
   by_tab: Record<Tab, number>;
 };
 
@@ -1056,6 +1057,7 @@ export default function PatientBillingClient() {
       total_dollars: 0,
       oldest_age_days: null,
       urgent_count: 0,
+      autopay_failed_count: 0,
       by_tab: {
         invoice_ready: 0,
         statements_sent: 0,
@@ -1081,8 +1083,16 @@ export default function PatientBillingClient() {
         value: String(s.urgent_count),
         tone: s.urgent_count > 0 ? "amber" : "default",
       },
+      {
+        id: "autopay_failed",
+        label: "Autopay failed",
+        value: String(s.autopay_failed_count),
+        tone: s.autopay_failed_count > 0 ? "red" : "default",
+        onClick: () =>
+          setFilterValues((prev) => ({ ...prev, autopayFailed: "failed" })),
+      },
     ];
-  }, [summary]);
+  }, [summary, setFilterValues]);
 
   return (
     <WorkqueueShell<Row>

@@ -17,6 +17,7 @@ export interface SummaryMetric {
   label: string;
   value: ReactNode;
   tone?: "default" | "amber" | "red" | "green";
+  onClick?: () => void;
 }
 
 export type FilterKind = "text" | "select" | "date" | "number" | "combobox";
@@ -430,8 +431,8 @@ export default function WorkqueueShell<TRow>(props: WorkqueueShellProps<TRow>) {
       {/* Summary */}
       {summary && summary.length > 0 ? (
         <div className={styles.summaryStrip}>
-          {summary.map((s) => (
-            <div key={s.id} className={styles.summaryCard}>
+          {summary.map((s) => {
+            const valueEl = (
               <span
                 className={`${styles.summaryValue} ${
                   s.tone === "amber"
@@ -445,9 +446,33 @@ export default function WorkqueueShell<TRow>(props: WorkqueueShellProps<TRow>) {
               >
                 {s.value}
               </span>
-              <span className={styles.summaryLabel}>{s.label}</span>
-            </div>
-          ))}
+            );
+            if (s.onClick) {
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={s.onClick}
+                  className={styles.summaryCard}
+                  style={{
+                    cursor: "pointer",
+                    border: 0,
+                    textAlign: "left",
+                    font: "inherit",
+                  }}
+                >
+                  {valueEl}
+                  <span className={styles.summaryLabel}>{s.label}</span>
+                </button>
+              );
+            }
+            return (
+              <div key={s.id} className={styles.summaryCard}>
+                {valueEl}
+                <span className={styles.summaryLabel}>{s.label}</span>
+              </div>
+            );
+          })}
         </div>
       ) : null}
 

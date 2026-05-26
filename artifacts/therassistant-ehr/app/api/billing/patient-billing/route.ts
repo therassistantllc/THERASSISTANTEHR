@@ -137,6 +137,7 @@ export type PatientBillingSummary = {
   total_dollars: number;
   oldest_age_days: number | null;
   urgent_count: number;
+  autopay_failed_count: number;
   by_tab: Record<PatientBillingTab, number>;
 };
 
@@ -773,6 +774,9 @@ export async function GET(request: Request) {
       urgent_count: allRows.filter(
         (r) => r.priority === "critical" || r.priority === "high",
       ).length,
+      autopay_failed_count: allRows.filter(
+        (r) => r.autopay_last_attempt_status === "failed",
+      ).length,
       by_tab: {
         invoice_ready: 0,
         statements_sent: 0,
@@ -814,6 +818,7 @@ function emptySummary(): PatientBillingSummary {
     total_dollars: 0,
     oldest_age_days: null,
     urgent_count: 0,
+    autopay_failed_count: 0,
     by_tab: {
       invoice_ready: 0,
       statements_sent: 0,
