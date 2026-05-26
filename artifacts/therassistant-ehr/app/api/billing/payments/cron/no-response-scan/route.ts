@@ -19,10 +19,14 @@ import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAuthenticatedPaymentPoster } from "@/lib/payments/postingEngine";
 import { runNoResponseAgingScan } from "@/lib/payments/postingEngine/workqueueRules";
 import type { PostingActor } from "@/lib/payments/postingEngine/types";
+import { recordCronJobRun } from "@/lib/cron/recordRun";
 
 export const runtime = "nodejs";
 
+const JOB_ID = "payments-no-response-scan";
+
 export async function POST(req: Request) {
+  const startedAt = new Date();
   const cronSecret = process.env.CRON_SECRET;
   const headerSecret = req.headers.get("x-cron-secret");
   const supabase = createServerSupabaseAdminClient();
@@ -108,6 +112,27 @@ export async function POST(req: Request) {
     },
     { scanned: 0, itemsCreated: 0, errors: 0 },
   );
+
+  // Heartbeat: cron-secret fan-out runs are recorded as a single global
+  // row (organization_id=null); per-org manual catch-up runs as scoped.
+  // Either way the registry probe (Task #745) reads MAX(finished_at) so
+  // the Billing Defaults banner / external uptime check can tell the
+  // job is still alive even on days where every org has zero candidates.
+  const overallStatus: "success" | "error" =
+    totals.errors > 0 && totals.itemsCreated === 0 && totals.scanned === 0
+      ? "error"
+      : "success";
+  await recordCronJobRun(supabase, {
+    jobId: JOB_ID,
+    status: overallStatus,
+    organizationId: isCronCaller ? null : (organizationIds[0] ?? null),
+    startedAt,
+    summary: { organizations: perOrg.length, totals, mode: isCronCaller ? "cron" : "manual" },
+    errorMessage:
+      overallStatus === "error"
+        ? `All ${totals.errors} per-org scan(s) failed.`
+        : null,
+  });
 
   return NextResponse.json({ ok: true, organizations: perOrg.length, totals, perOrg });
 }

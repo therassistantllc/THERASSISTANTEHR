@@ -71,6 +71,18 @@ type AutoCheckHeartbeat = {
   lastRunSummary?: AutoCheckLastRunSummary | null;
 };
 
+type JobHeartbeat = AutoCheckHeartbeat & {
+  jobId: string;
+  label: string;
+  description: string;
+  runbookPath?: string;
+};
+
+type CronHeartbeats = {
+  overall: "ok" | "degraded";
+  jobs: JobHeartbeat[];
+};
+
 const INITIAL: BillingDefaults = {
   claim_frequency_code: "1",
   default_pos: "11",
@@ -107,6 +119,7 @@ export default function BillingDefaultsClient() {
   const [recentChanges, setRecentChanges] = useState<SettingsChange[]>([]);
   const [payerAutoCheck, setPayerAutoCheck] = useState<PayerStatusAutoCheck>(INITIAL_PAYER_AUTOCHECK);
   const [autoCheckHeartbeat, setAutoCheckHeartbeat] = useState<AutoCheckHeartbeat | null>(null);
+  const [cronHeartbeats, setCronHeartbeats] = useState<CronHeartbeats | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
@@ -155,6 +168,23 @@ export default function BillingDefaultsClient() {
     }
   }, [organizationId]);
 
+  const loadCronHeartbeats = useCallback(async () => {
+    if (!organizationId) return;
+    try {
+      const r = await fetch(
+        `/api/admin/cron-heartbeats?organizationId=${encodeURIComponent(organizationId)}`,
+      );
+      if (!r.ok) {
+        setCronHeartbeats(null);
+        return;
+      }
+      const json = (await r.json()) as CronHeartbeats;
+      setCronHeartbeats(json);
+    } catch {
+      setCronHeartbeats(null);
+    }
+  }, [organizationId]);
+
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!organizationId) { setLoading(false); return; }
@@ -163,8 +193,14 @@ export default function BillingDefaultsClient() {
         setStatusMsg({ type: "err", text: "Failed to load billing defaults." });
       }),
       loadAutoCheckHeartbeat(),
+      loadCronHeartbeats(),
     ]).finally(() => setLoading(false));
-  }, [organizationId, loadDefaults, loadAutoCheckHeartbeat]);
+  }, [organizationId, loadDefaults, loadAutoCheckHeartbeat, loadCronHeartbeats]);
+
+  const staleCronJobs = useMemo(
+    () => (cronHeartbeats?.jobs ?? []).filter((j) => j.status !== "ok"),
+    [cronHeartbeats],
+  );
 
   const handleSave = useCallback(async () => {
     setSaving(true);
@@ -217,6 +253,38 @@ export default function BillingDefaultsClient() {
       {!organizationId && <div className="alert-panel">No organization context.</div>}
       {statusMsg && (
         <div className={statusMsg.type === "ok" ? "alert-panel alert-panel-success" : "alert-panel"}>{statusMsg.text}</div>
+      )}
+
+      {staleCronJobs.length > 0 && (
+        <div
+          className="alert-panel"
+          role="alert"
+          data-testid="cron-heartbeats-banner"
+          style={{ borderLeft: "4px solid var(--color-danger, #b91c1c)" }}
+        >
+          <strong>
+            {staleCronJobs.length === 1
+              ? "1 nightly background job looks broken."
+              : `${staleCronJobs.length} nightly background jobs look broken.`}
+          </strong>
+          <ul style={{ margin: "var(--space-2) 0 0", paddingLeft: "var(--space-5)" }}>
+            {staleCronJobs.map((job) => (
+              <li key={job.jobId} data-testid={`cron-heartbeat-stale-${job.jobId}`}>
+                <strong>{job.label}.</strong> {job.message}{" "}
+                {job.lastRunAt && (
+                  <span style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)" }}>
+                    Last successful run: {new Date(job.lastRunAt).toLocaleString()}.
+                  </span>
+                )}
+                {job.runbookPath && (
+                  <span style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)" }}>
+                    {" "}See <code>{job.runbookPath}</code>.
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {loading ? (

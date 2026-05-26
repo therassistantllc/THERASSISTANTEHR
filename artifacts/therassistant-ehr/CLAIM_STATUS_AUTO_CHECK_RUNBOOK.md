@@ -72,6 +72,14 @@ window.
 
 ## Heartbeat alert
 
+> **Generalized (Task #745):** every nightly background job is now
+> registered in `lib/cron/jobRegistry.ts` and surfaced through the
+> multi-job endpoint
+> `GET /api/admin/cron-heartbeats` (and rendered in the Billing
+> Defaults page as a single "N jobs look broken" banner). The
+> single-job endpoint below is preserved for back-compat with the
+> existing UptimeRobot configuration.
+
 A heartbeat check answers the question "is the cron still running?" by
 looking at the latest `claim_status_inquiries` row with
 `trigger_source = 'auto'`. If nothing has been written in the last 36

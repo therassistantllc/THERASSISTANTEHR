@@ -28,8 +28,11 @@ import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireBillingAccess } from "@/lib/billing/requireBillingAccess";
 import { runClaimStatusAutoCheck } from "@/lib/billing/claimStatusAutoCheck";
+import { recordCronJobRun } from "@/lib/cron/recordRun";
 
 export const runtime = "nodejs";
+
+const JOB_ID = "claim-status-auto-check";
 
 interface CronBody {
   organizationId?: string;
@@ -39,6 +42,7 @@ interface CronBody {
 }
 
 export async function POST(req: Request) {
+  const startedAt = new Date();
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) {
     return NextResponse.json({ error: "Database unavailable" }, { status: 503 });
@@ -125,6 +129,28 @@ export async function POST(req: Request) {
     },
     { scanned: 0, dispatched: 0, skipped: 0, failures: 0 },
   );
+
+  // Heartbeat (Task #745): record every cron invocation so the job
+  // registry can detect silent failures. The claim-status registry
+  // entry still probes claim_status_inquiries.trigger_source='auto'
+  // by default (older, richer evidence), but recording here means a
+  // future migration of that probe to cron_job_runs is a one-line
+  // registry change.
+  const overallStatus: "success" | "error" =
+    totals.failures > 0 && totals.dispatched === 0
+      ? "error"
+      : "success";
+  await recordCronJobRun(supabase, {
+    jobId: JOB_ID,
+    status: overallStatus,
+    organizationId: isCronCaller ? null : (organizationIds[0] ?? null),
+    startedAt,
+    summary: { organizations: perOrg.length, totals, mode: isCronCaller ? "cron" : "manual" },
+    errorMessage:
+      overallStatus === "error"
+        ? `All ${totals.failures} per-org run(s) failed without dispatching.`
+        : null,
+  });
 
   return NextResponse.json({
     ok: true,
