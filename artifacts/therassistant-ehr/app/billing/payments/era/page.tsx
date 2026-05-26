@@ -1,7 +1,7 @@
-import { redirect } from "next/navigation";
+import EraWorksheetClient from "./EraWorksheetClient";
 
 export const dynamic = "force-dynamic";
 
-export default function EraQueueLegacyRedirect() {
-  redirect("/billing/era-import");
+export default function EraImportPage() {
+  return <EraWorksheetClient />;
 }
