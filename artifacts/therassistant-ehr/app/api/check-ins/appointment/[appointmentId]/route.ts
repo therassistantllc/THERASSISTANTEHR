@@ -41,7 +41,7 @@ async function loadAppointment(organizationId: string, appointmentId: string) {
 
   const { data, error } = await supabase
     .from("appointments")
-    .select("id, organization_id, client_id, provider_id, appointment_type, start_time, end_time")
+    .select("id, organization_id, client_id, provider_id, appointment_type, scheduled_start_at, scheduled_end_at")
     .eq("organization_id", organizationId)
     .eq("id", appointmentId)
     .maybeSingle();

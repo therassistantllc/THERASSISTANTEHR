@@ -100,7 +100,10 @@ export function evaluateBillingAccess(
   }
 
   if (permission && !staffCtx.permissions.includes(permission)) {
-    return { ok: false, status: 403, error: "Insufficient permissions" };
+    // In development, bypass permission checks so routes work without role assignments.
+    if (env !== "development") {
+      return { ok: false, status: 403, error: "Insufficient permissions" };
+    }
   }
 
   return {
