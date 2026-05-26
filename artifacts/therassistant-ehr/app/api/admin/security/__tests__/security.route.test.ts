@@ -492,6 +492,116 @@ describe("GET /api/admin/security/audit-log", () => {
       );
     }
   });
+
+  it("surfaces billing-defaults / payer-status setting changes with field-level before/after", async () => {
+    scenario.organizationId = ORG_A;
+    scenario.auditRows = [
+      {
+        id: "log-bd",
+        created_at: "2026-05-25T12:00:00Z",
+        user_id: null,
+        user_role: "admin",
+        action: "billing_defaults_updated",
+        object_type: "system_setting",
+        object_id: null,
+        event_summary: "Billing defaults: Claim Hold Period (days before submission) changed from 3 to 5",
+        event_metadata: {
+          setting_key: "billing.defaults",
+          field: "claim_hold_days",
+          field_label: "Claim Hold Period (days before submission)",
+        },
+        before_value: { claim_hold_days: 3 },
+        after_value: { claim_hold_days: 5 },
+      },
+      {
+        id: "log-ps",
+        created_at: "2026-05-25T12:05:00Z",
+        user_id: null,
+        user_role: "admin",
+        action: "payer_status_auto_check_updated",
+        object_type: "system_setting",
+        object_id: null,
+        event_summary: "Payer status auto-check: Enable scheduled payer-status auto-checking changed from On to Off",
+        event_metadata: {
+          setting_key: "payer_status.auto_check",
+          field: "enabled",
+          field_label: "Enable scheduled payer-status auto-checking",
+        },
+        before_value: { enabled: true },
+        after_value: { enabled: false },
+      },
+    ];
+    const { GET } = await import("../audit-log/route");
+    const res = await GET(new Request("https://app.test/api/admin/security/audit-log") as never);
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as {
+      entries: Array<{
+        id: string;
+        action: string;
+        settingKey: string | null;
+        field: string | null;
+        fieldLabel: string | null;
+        beforeValue: unknown;
+        afterValue: unknown;
+        objectType: string | null;
+      }>;
+    };
+    const bd = body.entries.find((e) => e.id === "log-bd")!;
+    assert.ok(bd, "billing_defaults_updated entry should be returned");
+    assert.equal(bd.action, "billing_defaults_updated");
+    assert.equal(bd.objectType, "system_setting");
+    assert.equal(bd.settingKey, "billing.defaults");
+    assert.equal(bd.field, "claim_hold_days");
+    assert.equal(bd.fieldLabel, "Claim Hold Period (days before submission)");
+    assert.equal(bd.beforeValue, 3);
+    assert.equal(bd.afterValue, 5);
+
+    const ps = body.entries.find((e) => e.id === "log-ps")!;
+    assert.ok(ps, "payer_status_auto_check_updated entry should be returned");
+    assert.equal(ps.action, "payer_status_auto_check_updated");
+    assert.equal(ps.settingKey, "payer_status.auto_check");
+    assert.equal(ps.field, "enabled");
+    assert.equal(ps.beforeValue, true);
+    assert.equal(ps.afterValue, false);
+  });
+
+  it("filters by setting action so admins can scope to a single setting category", async () => {
+    scenario.organizationId = ORG_A;
+    scenario.auditRows = [
+      {
+        id: "log-bd",
+        created_at: "2026-05-25T12:00:00Z",
+        user_id: null,
+        user_role: "admin",
+        action: "billing_defaults_updated",
+        object_type: "system_setting",
+        object_id: null,
+        event_summary: "x",
+        event_metadata: { setting_key: "billing.defaults", field: "claim_hold_days" },
+        before_value: { claim_hold_days: 3 },
+        after_value: { claim_hold_days: 5 },
+      },
+    ];
+    const { GET } = await import("../audit-log/route");
+    const res = await GET(
+      new Request(
+        "https://app.test/api/admin/security/audit-log?action=billing_defaults_updated",
+      ) as never,
+    );
+    assert.equal(res.status, 200);
+    // The paginated audit_logs select must include an action=eq filter so the
+    // category dropdown narrows the result set server-side.
+    const auditReads = lastCalls.filter((c) => c.table === "audit_logs" && c.op === "select");
+    const filteredRead = auditReads.find((c) =>
+      c.filters.some(
+        (f) => f.field === "action" && f.op === "eq" && f.value === "billing_defaults_updated",
+      ),
+    );
+    assert.ok(
+      filteredRead,
+      "paginated audit_logs read must apply the action=billing_defaults_updated filter",
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

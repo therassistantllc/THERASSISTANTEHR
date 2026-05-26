@@ -20,6 +20,8 @@ type AuditRow = {
   object_id: string | null;
   event_summary: string | null;
   event_metadata: Record<string, unknown> | null;
+  before_value: Record<string, unknown> | null;
+  after_value: Record<string, unknown> | null;
 };
 
 function parseDateBound(value: string | null, endOfDay: boolean): string | null {
@@ -62,7 +64,7 @@ export async function GET(request: NextRequest) {
   let query = supabase
     .from("audit_logs")
     .select(
-      "id, created_at, user_id, user_role, action, object_type, object_id, event_summary, event_metadata",
+      "id, created_at, user_id, user_role, action, object_type, object_id, event_summary, event_metadata, before_value, after_value",
       { count: "exact" },
     )
     .eq("organization_id", organizationId)
@@ -144,6 +146,26 @@ export async function GET(request: NextRequest) {
         ? { name: meta.actor_name as string, email: (meta.actor_email as string) || null }
         : null;
     const actor = fromAuth ?? fromMeta ?? fromMetaInline;
+    // Surface settings-writer breadcrumbs (settings page audit writers stash
+    // setting_key / field / field_label in event_metadata and a one-key
+    // {field: value} object in before_value/after_value). The Security tab
+    // renders these so admins can read a billing-defaults change here without
+    // bouncing to the Billing Defaults page.
+    const settingKey =
+      typeof meta.setting_key === "string" ? (meta.setting_key as string) : null;
+    const field = typeof meta.field === "string" ? (meta.field as string) : null;
+    const fieldLabel =
+      typeof meta.field_label === "string" ? (meta.field_label as string) : field;
+    const before = row.before_value ?? null;
+    const after = row.after_value ?? null;
+    const beforeAtField =
+      field && before && Object.prototype.hasOwnProperty.call(before, field)
+        ? before[field]
+        : null;
+    const afterAtField =
+      field && after && Object.prototype.hasOwnProperty.call(after, field)
+        ? after[field]
+        : null;
     return {
       id: row.id,
       createdAt: row.created_at,
@@ -155,6 +177,11 @@ export async function GET(request: NextRequest) {
       actorName: actor?.name ?? null,
       actorEmail: actor?.email ?? null,
       userRole: row.user_role,
+      settingKey,
+      field,
+      fieldLabel,
+      beforeValue: beforeAtField ?? before,
+      afterValue: afterAtField ?? after,
       detail: meta,
     };
   });

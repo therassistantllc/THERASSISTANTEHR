@@ -29,6 +29,11 @@ type AuditEntry = {
   actorName: string | null;
   actorEmail: string | null;
   userRole: string | null;
+  settingKey: string | null;
+  field: string | null;
+  fieldLabel: string | null;
+  beforeValue: unknown;
+  afterValue: unknown;
   detail: Record<string, unknown>;
 };
 
@@ -68,6 +73,18 @@ function formatTimestamp(iso: string): string {
 function formatAction(action: string | null): string {
   if (!action) return "—";
   return action.replace(/_/g, " ");
+}
+
+function formatAuditValue(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "boolean") return value ? "On" : "Off";
+  if (typeof value === "string") return value || "—";
+  if (typeof value === "number") return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 export default function SecuritySettingsClient() {
@@ -454,6 +471,28 @@ function AuditLogPanel() {
                   </td>
                   <td style={{ padding: "0.5rem 0.75rem", color: "#555" }}>
                     {e.summary ?? "—"}
+                    {e.objectType === "system_setting" && e.field ? (
+                      <div style={{ marginTop: 4, fontSize: "0.85rem" }}>
+                        <span style={{ color: "#444", fontWeight: 600 }}>
+                          {e.fieldLabel ?? e.field}:
+                        </span>{" "}
+                        <code>{formatAuditValue(e.beforeValue)}</code>{" "}
+                        <span aria-hidden="true">→</span>{" "}
+                        <code>{formatAuditValue(e.afterValue)}</code>
+                        {e.settingKey ? (
+                          <div
+                            style={{
+                              fontSize: "0.75rem",
+                              color: "#888",
+                              fontFamily: "var(--font-mono, monospace)",
+                              marginTop: 2,
+                            }}
+                          >
+                            {e.settingKey}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </td>
                 </tr>
               ))}
