@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 type ParsedStc = {
@@ -46,11 +47,15 @@ function formatStcCode(s: ParsedStc): string {
 /**
  * Claim277caAckSummary
  *
- * Renders the most recent 277CA acknowledgement message for ONE claim.
- * Prefers the per-claim STC entries from `parsed.claimRefs` matched
- * by TRN02 ↔ patient_account_number / claim_number / id, falling
- * back to the batch-level STC list when this claim's TRN didn't
- * appear in the 2200D loop.
+ * Renders the full timeline of 277CA acknowledgements for ONE claim,
+ * newest first. Each entry prefers the per-claim STC entries from
+ * `parsed.claimRefs` matched by TRN02 ↔ patient_account_number /
+ * claim_number / id, falling back to the batch-level STC list when
+ * this claim's TRN didn't appear in the 2200D loop.
+ *
+ * Showing every ack (not just the latest) keeps the audit trail
+ * intact across resubmissions: the earlier rejections that explain
+ * why a corrected claim was needed stay visible.
  */
 export default function Claim277caAckSummary({
   claimId,
@@ -59,7 +64,7 @@ export default function Claim277caAckSummary({
   claimId: string;
   organizationId: string;
 }) {
-  const [ack, setAck] = useState<Acknowledgement | null>(null);
+  const [acks, setAcks] = useState<Acknowledgement[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -77,9 +82,14 @@ export default function Claim277caAckSummary({
         if (cancelled) return;
         if (j?.success === false) {
           setError(j.error || "Failed to load 277CA");
-          setAck(null);
+          setAcks(null);
         } else {
-          setAck((j?.acknowledgement ?? null) as Acknowledgement | null);
+          const list = Array.isArray(j?.acknowledgements)
+            ? (j.acknowledgements as Acknowledgement[])
+            : j?.acknowledgement
+              ? [j.acknowledgement as Acknowledgement]
+              : [];
+          setAcks(list);
         }
         setLoading(false);
       })
@@ -100,12 +110,14 @@ export default function Claim277caAckSummary({
     background: "#fff",
   };
 
+  const heading = (
+    <strong style={{ fontSize: 14 }}>277CA acknowledgement history</strong>
+  );
+
   if (loading) {
     return (
       <section style={cardStyle}>
-        <header style={{ marginBottom: 8 }}>
-          <strong style={{ fontSize: 14 }}>Latest 277CA acknowledgement</strong>
-        </header>
+        <header style={{ marginBottom: 8 }}>{heading}</header>
         <div style={{ color: "#94A3B8", fontSize: 13 }}>Loading…</div>
       </section>
     );
@@ -113,38 +125,21 @@ export default function Claim277caAckSummary({
   if (error) {
     return (
       <section style={cardStyle}>
-        <header style={{ marginBottom: 8 }}>
-          <strong style={{ fontSize: 14 }}>Latest 277CA acknowledgement</strong>
-        </header>
+        <header style={{ marginBottom: 8 }}>{heading}</header>
         <div style={{ color: "#B91C1C", fontSize: 13 }}>{error}</div>
       </section>
     );
   }
-  if (!ack) {
+  if (!acks || acks.length === 0) {
     return (
       <section style={cardStyle}>
-        <header style={{ marginBottom: 8 }}>
-          <strong style={{ fontSize: 14 }}>Latest 277CA acknowledgement</strong>
-        </header>
+        <header style={{ marginBottom: 8 }}>{heading}</header>
         <div style={{ color: "#94A3B8", fontSize: 13 }}>
           No 277CA has been received for this claim yet.
         </div>
       </section>
     );
   }
-
-  const ref = ack.matched_claim_ref;
-  // Per-claim STCs from this claim's own 2200D loop; if the ack didn't
-  // slice per claim (eg. older payer that only puts STCs at the
-  // transaction level), drop back to the batch-level list so the
-  // biller still sees the payer's wording.
-  const usingPerClaim = !!ref && (ref.stc_statuses?.length ?? 0) > 0;
-  const stcList = usingPerClaim ? ref!.stc_statuses : ack.batch_stc_statuses;
-  const headlineMessage =
-    (usingPerClaim ? ref!.message : null) ??
-    stcList.find((s) => s.message)?.message ??
-    null;
-  const colors = outcomeColor(ack.outcome);
 
   return (
     <section style={cardStyle}>
@@ -153,90 +148,169 @@ export default function Claim277caAckSummary({
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          marginBottom: 8,
+          marginBottom: 12,
           gap: 8,
         }}
       >
-        <strong style={{ fontSize: 14 }}>Latest 277CA acknowledgement</strong>
-        <span
-          style={{
-            fontSize: 11,
-            fontWeight: 600,
-            textTransform: "uppercase",
-            letterSpacing: 0.5,
-            padding: "2px 8px",
-            borderRadius: 999,
-            background: colors.bg,
-            color: colors.fg,
-            border: `1px solid ${colors.border}`,
-          }}
-        >
-          {ack.outcome ?? "unknown"}
+        {heading}
+        <span style={{ fontSize: 12, color: "#64748B" }}>
+          {acks.length} acknowledgement{acks.length === 1 ? "" : "s"}
         </span>
       </header>
-      <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 8 }}>
-        {formatDateTime(ack.created_at)}
-        {ack.file_name ? ` · ${ack.file_name}` : ""}
-        {usingPerClaim ? (
-          <span style={{ marginLeft: 8, color: "#475569" }}>
-            · TRN <span style={{ fontFamily: "ui-monospace, monospace" }}>{ref!.trn}</span>
-          </span>
-        ) : (
-          <span style={{ marginLeft: 8, color: "#92400E" }}>
-            · No per-claim TRN matched — showing batch-level reason
-          </span>
-        )}
-      </div>
 
-      {headlineMessage ? (
-        <div
-          style={{
-            fontSize: 13,
-            color: "#0F172A",
-            marginBottom: stcList.length > 0 ? 10 : 0,
-            whiteSpace: "pre-wrap",
-          }}
-        >
-          {headlineMessage}
-        </div>
-      ) : null}
+      <div style={{ display: "grid", gap: 12 }}>
+        {acks.map((ack, ackIdx) => {
+          const ref = ack.matched_claim_ref;
+          const usingPerClaim = !!ref && (ref.stc_statuses?.length ?? 0) > 0;
+          const stcList = usingPerClaim ? ref!.stc_statuses : ack.batch_stc_statuses;
+          const headlineMessage =
+            (usingPerClaim ? ref!.message : null) ??
+            stcList.find((s) => s.message)?.message ??
+            null;
+          const colors = outcomeColor(ack.outcome);
+          const isLatest = ackIdx === 0;
 
-      {stcList.length > 0 ? (
-        <div style={{ display: "grid", gap: 6 }}>
-          {stcList.map((s, idx) => (
-            <div
-              key={idx}
+          return (
+            <article
+              key={ack.id || ackIdx}
               style={{
-                display: "grid",
-                gridTemplateColumns: "auto 1fr",
-                gap: "2px 12px",
-                padding: 8,
-                borderRadius: 6,
-                background: "#F8FAFC",
-                border: "1px solid #E2E8F0",
-                fontSize: 12,
+                border: `1px solid ${isLatest ? colors.border : "#E5E7EB"}`,
+                borderRadius: 8,
+                padding: 12,
+                background: isLatest ? "#FFFFFF" : "#FAFAFA",
               }}
             >
-              <strong style={{ color: "#475569" }}>STC code</strong>
-              <span style={{ fontFamily: "ui-monospace, monospace", color: "#0F172A" }}>
-                {formatStcCode(s)}
-              </span>
-              {s.message ? (
-                <>
-                  <strong style={{ color: "#475569" }}>Message</strong>
-                  <span style={{ color: "#0F172A", whiteSpace: "pre-wrap" }}>
-                    {s.message}
+              <header
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: 6,
+                  gap: 8,
+                  flexWrap: "wrap",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 600,
+                      textTransform: "uppercase",
+                      letterSpacing: 0.5,
+                      padding: "2px 8px",
+                      borderRadius: 999,
+                      background: colors.bg,
+                      color: colors.fg,
+                      border: `1px solid ${colors.border}`,
+                    }}
+                  >
+                    {ack.outcome ?? "unknown"}
                   </span>
-                </>
+                  {isLatest ? (
+                    <span
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 600,
+                        textTransform: "uppercase",
+                        letterSpacing: 0.5,
+                        padding: "2px 6px",
+                        borderRadius: 4,
+                        background: "#EEF2FF",
+                        color: "#3730A3",
+                        border: "1px solid #C7D2FE",
+                      }}
+                    >
+                      Latest
+                    </span>
+                  ) : null}
+                  <span style={{ fontSize: 12, color: "#6B7280" }}>
+                    {formatDateTime(ack.created_at)}
+                  </span>
+                </div>
+                {ack.edi_batch_id ? (
+                  <Link
+                    href={`/billing/batches/${encodeURIComponent(ack.edi_batch_id)}`}
+                    style={{ fontSize: 12, color: "#2563EB", textDecoration: "underline" }}
+                  >
+                    View EDI batch
+                  </Link>
+                ) : null}
+              </header>
+
+              <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 8 }}>
+                {ack.file_name ? ack.file_name : "—"}
+                {usingPerClaim ? (
+                  <span style={{ marginLeft: 8, color: "#475569" }}>
+                    · TRN{" "}
+                    <span style={{ fontFamily: "ui-monospace, monospace" }}>
+                      {ref!.trn}
+                    </span>
+                  </span>
+                ) : (
+                  <span style={{ marginLeft: 8, color: "#92400E" }}>
+                    · No per-claim TRN matched — showing batch-level reason
+                  </span>
+                )}
+              </div>
+
+              {headlineMessage ? (
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: "#0F172A",
+                    marginBottom: stcList.length > 0 ? 10 : 0,
+                    whiteSpace: "pre-wrap",
+                  }}
+                >
+                  {headlineMessage}
+                </div>
               ) : null}
-            </div>
-          ))}
-        </div>
-      ) : !headlineMessage ? (
-        <div style={{ color: "#94A3B8", fontSize: 13 }}>
-          No STC reason codes were attached to this acknowledgement.
-        </div>
-      ) : null}
+
+              {stcList.length > 0 ? (
+                <div style={{ display: "grid", gap: 6 }}>
+                  {stcList.map((s, idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "auto 1fr",
+                        gap: "2px 12px",
+                        padding: 8,
+                        borderRadius: 6,
+                        background: "#F8FAFC",
+                        border: "1px solid #E2E8F0",
+                        fontSize: 12,
+                      }}
+                    >
+                      <strong style={{ color: "#475569" }}>STC code</strong>
+                      <span
+                        style={{
+                          fontFamily: "ui-monospace, monospace",
+                          color: "#0F172A",
+                        }}
+                      >
+                        {formatStcCode(s)}
+                      </span>
+                      {s.message ? (
+                        <>
+                          <strong style={{ color: "#475569" }}>Message</strong>
+                          <span style={{ color: "#0F172A", whiteSpace: "pre-wrap" }}>
+                            {s.message}
+                          </span>
+                        </>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : !headlineMessage ? (
+                <div style={{ color: "#94A3B8", fontSize: 13 }}>
+                  No STC reason codes were attached to this acknowledgement.
+                </div>
+              ) : null}
+            </article>
+          );
+        })}
+      </div>
     </section>
   );
 }
