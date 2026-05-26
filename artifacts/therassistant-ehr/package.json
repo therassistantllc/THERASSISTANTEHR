@@ -41,6 +41,7 @@
     "tailwindcss": "^4",
     "tsx": "catalog:",
     "typescript": "^5",
-    "undici": "^8.3.0"
+    "undici": "^8.3.0",
+    "vitest": "^3.2.0"
   }
 }
