@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import SoapNoteEditor, { SoapNoteData } from "@/components/encounter/SoapNoteEditor";
 import DiagnosisPicker, { Diagnosis } from "@/components/encounter/DiagnosisPicker";
@@ -77,6 +78,7 @@ type EncounterMailroomDocument = {
 };
 
 export default function EncounterNoteClient({ encounterId }: { encounterId: string }) {
+  const router = useRouter();
   const organizationId = useMemo(() => getOrganizationId(), []);
   const [summary, setSummary] = useState<EncounterSummary | null>(null);
   const [soapNote, setSoapNote] = useState<SoapNoteData>({});
@@ -428,9 +430,8 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
       });
       const json = (await response.json()) as { success?: boolean; error?: string };
       if (!response.ok || !json.success) throw new Error(json.error ?? "Failed to sign note");
-      setMessage("Note signed successfully.");
       setShowSignModal(false);
-      await loadEncounter();
+      router.push(`/billing/charges?organizationId=${encodeURIComponent(organizationId)}`);
     } catch (signError) {
       setError(signError instanceof Error ? signError.message : "Failed to sign note");
     } finally {
