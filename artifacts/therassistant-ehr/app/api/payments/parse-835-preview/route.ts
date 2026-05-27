@@ -127,7 +127,7 @@ export async function POST(request: Request) {
 
       for (const row of byNumber ?? []) {
         if (row.claim_number && row.client_id) {
-          const c = row.clients as { first_name: string | null; last_name: string | null } | null;
+          const c = row.clients as unknown as { first_name: string | null; last_name: string | null } | null;
           claimMatchMap.set(row.claim_number, {
             clientId: row.client_id,
             clientName: c ? [c.first_name, c.last_name].filter(Boolean).join(" ") : "Unknown",
@@ -148,7 +148,7 @@ export async function POST(request: Request) {
 
         for (const row of byId ?? []) {
           if (row.client_id) {
-            const c = row.clients as { first_name: string | null; last_name: string | null } | null;
+            const c = row.clients as unknown as { first_name: string | null; last_name: string | null } | null;
             claimMatchMap.set(row.id, {
               clientId: row.client_id,
               clientName: c ? [c.first_name, c.last_name].filter(Boolean).join(" ") : "Unknown",
