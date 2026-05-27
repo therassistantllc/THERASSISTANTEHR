@@ -13,7 +13,7 @@ import type {
   UseQueryResult,
 } from "@tanstack/react-query";
 
-import type { HealthStatus } from "./api.schemas";
+import type { HealthStatus } from "./api.schemas.tsx";
 
 import { customFetch } from "../custom-fetch";
 import type { ErrorType } from "../custom-fetch";
