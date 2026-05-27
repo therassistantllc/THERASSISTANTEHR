@@ -168,6 +168,148 @@ function normalizeConnection(row: Record<string, unknown>): AvailityConnection {
   };
 }
 
+type SupervisionRule = {
+  enabled: boolean;
+  supervisorProviderId: string | null;
+  applyToAllPayers: boolean;
+  payerProfileIds: string[];
+};
+
+async function maybeApplySupervisionRenderingOverride(args: {
+  supabase: ReturnType<typeof createServerSupabaseAdminClient>;
+  claim: ProfessionalClaim;
+  parties: ClaimPartiesSnapshot;
+  payerProfileId: string | null;
+}): Promise<{
+  parties: ClaimPartiesSnapshot;
+  overrideApplied: boolean;
+  reason: string | null;
+}> {
+  const { supabase, claim, parties, payerProfileId } = args;
+  if (!supabase || !claim.appointment_id) {
+    return { parties, overrideApplied: false, reason: null };
+  }
+
+  const { data: appt } = await supabase
+    .from("appointments")
+    .select("provider_id")
+    .eq("id", claim.appointment_id)
+    .maybeSingle();
+
+  const providerId = (appt as Record<string, unknown> | null)?.provider_id as string | null;
+  if (!providerId) return { parties, overrideApplied: false, reason: null };
+
+  const { data: provider } = await supabase
+    .from("providers")
+    .select("user_id")
+    .eq("id", providerId)
+    .eq("organization_id", claim.organization_id)
+    .is("archived_at", null)
+    .maybeSingle();
+  const providerUserId = (provider as Record<string, unknown> | null)?.user_id as string | null;
+  if (!providerUserId) return { parties, overrideApplied: false, reason: null };
+
+  const { data: staff } = await supabase
+    .from("staff_profiles")
+    .select("id")
+    .eq("organization_id", claim.organization_id)
+    .eq("auth_user_id", providerUserId)
+    .is("archived_at", null)
+    .maybeSingle();
+  const staffId = (staff as Record<string, unknown> | null)?.id as string | null;
+  if (!staffId) return { parties, overrideApplied: false, reason: null };
+
+  // Read supervision rules blob from organization_settings.
+  let rule: SupervisionRule | null = null;
+  try {
+    const { data: settingRow } = await (supabase as unknown as { from: (table: string) => any })
+      .from("organization_settings")
+      .select("setting_value")
+      .eq("organization_id", claim.organization_id)
+      .eq("setting_key", "security.supervision.rules")
+      .maybeSingle();
+    const settingValue = settingRow?.setting_value as unknown;
+    if (settingValue && typeof settingValue === "object" && !Array.isArray(settingValue)) {
+      const rawMap = settingValue as Record<string, unknown>;
+      const raw = (rawMap[staffId] ?? null) as Record<string, unknown> | null;
+      if (raw) {
+        rule = {
+          enabled: Boolean(raw.enabled),
+          supervisorProviderId:
+            typeof raw.supervisorProviderId === "string" && raw.supervisorProviderId.trim()
+              ? raw.supervisorProviderId.trim()
+              : null,
+          applyToAllPayers: raw.applyToAllPayers !== false,
+          payerProfileIds: Array.isArray(raw.payerProfileIds)
+            ? raw.payerProfileIds.map((v) => String(v)).filter(Boolean)
+            : [],
+        };
+      }
+    }
+  } catch {
+    rule = null;
+  }
+
+  if (!rule?.enabled || !rule.supervisorProviderId) {
+    return { parties, overrideApplied: false, reason: null };
+  }
+
+  const payerAllowed =
+    rule.applyToAllPayers ||
+    (payerProfileId ? rule.payerProfileIds.includes(payerProfileId) : false);
+  if (!payerAllowed) {
+    return { parties, overrideApplied: false, reason: "payer_not_in_scope" };
+  }
+
+  const { data: supervisor } = await supabase
+    .from("providers")
+    .select("id, first_name, last_name, display_name, npi")
+    .eq("id", rule.supervisorProviderId)
+    .eq("organization_id", claim.organization_id)
+    .eq("is_active", true)
+    .is("archived_at", null)
+    .maybeSingle();
+
+  if (!supervisor) {
+    return { parties, overrideApplied: false, reason: "supervisor_not_found" };
+  }
+
+  const sup = supervisor as Record<string, unknown>;
+  const npi = asString(sup.npi, "").trim();
+  if (npi.length !== 10) {
+    return { parties, overrideApplied: false, reason: "supervisor_npi_invalid" };
+  }
+
+  const first = asString(sup.first_name, "").trim();
+  const last = asString(sup.last_name, "").trim();
+  const display = asString(sup.display_name, "").trim();
+  const lastOrOrg = last || display || parties.rendering_provider_last_name_or_org || "";
+
+  const patched: ClaimPartiesSnapshot = {
+    ...parties,
+    rendering_same_as_billing: false,
+    rendering_provider_entity_type: "1",
+    rendering_provider_npi: npi,
+    rendering_provider_first_name: first || null,
+    rendering_provider_last_name_or_org: lastOrOrg || null,
+  };
+
+  // Keep the snapshot in sync with what we're submitting.
+  await supabase
+    .from("claim_parties_snapshot")
+    .update({
+      rendering_same_as_billing: patched.rendering_same_as_billing,
+      rendering_provider_entity_type: patched.rendering_provider_entity_type,
+      rendering_provider_npi: patched.rendering_provider_npi,
+      rendering_provider_first_name: patched.rendering_provider_first_name,
+      rendering_provider_last_name_or_org: patched.rendering_provider_last_name_or_org,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("claim_id", claim.id);
+
+  return { parties: patched, overrideApplied: true, reason: null };
+}
+
 async function insertClaimStatusEvent(
   supabase: ReturnType<typeof createServerSupabaseAdminClient>,
   claimId: string,
@@ -333,6 +475,14 @@ export async function POST(request: Request) {
         notes: ((payerProfileRow as Record<string, unknown>).notes as string | null | undefined) ?? null,
       },
     };
+
+    const rendered = await maybeApplySupervisionRenderingOverride({
+      supabase,
+      claim,
+      parties: generationInput.parties,
+      payerProfileId: claim.payer_profile_id ?? null,
+    });
+    generationInput.parties = rendered.parties;
 
     const validation = validateAvaility837PClaim(generationInput);
 

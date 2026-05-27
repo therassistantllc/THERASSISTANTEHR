@@ -14,9 +14,26 @@ type Member = {
   isActive: boolean;
   roles: Array<{ id: string; code: string; name: string }>;
   primaryRoleId: string | null;
+  providerId: string | null;
+  providerNpi: string | null;
+  providerName: string | null;
+  supervision: {
+    enabled: boolean;
+    supervisorProviderId: string | null;
+    applyToAllPayers: boolean;
+    payerProfileIds: string[];
+  };
 };
 
 type Role = { id: string; code: string; name: string };
+type ProviderOption = {
+  id: string;
+  userId: string | null;
+  npi: string | null;
+  name: string;
+  credential: string | null;
+};
+type PayerOption = { id: string; payerName: string };
 
 type AuditEntry = {
   id: string;
@@ -97,7 +114,7 @@ export default function SecuritySettingsClient() {
           <p className="eyebrow">Settings</p>
           <h1>Security &amp; Access</h1>
           <p className="hero-copy">
-            Reset staff passwords, review the audit log, and manage roles.
+            Add users, assign roles, configure supervision billing, reset passwords, and review the audit log.
           </p>
         </div>
         <div className="hero-actions">
@@ -120,7 +137,7 @@ export default function SecuritySettingsClient() {
             [
               { id: "password", label: "Password Reset" },
               { id: "audit", label: "Audit Log" },
-              { id: "roles", label: "Roles" },
+              { id: "roles", label: "Users & Roles" },
             ] as Array<{ id: Tab; label: string }>
           ).map((entry) => {
             const active = tab === entry.id;
@@ -509,10 +526,24 @@ function AuditLogPanel() {
 function RolesPanel() {
   const [members, setMembers] = useState<Member[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
+  const [providers, setProviders] = useState<ProviderOption[]>([]);
+  const [payers, setPayers] = useState<PayerOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [savingSupervisionId, setSavingSupervisionId] = useState<string | null>(null);
+  const [supervisionDrafts, setSupervisionDrafts] = useState<
+    Record<
+      string,
+      {
+        enabled: boolean;
+        supervisorProviderId: string | null;
+        applyToAllPayers: boolean;
+        payerProfileIds: string[];
+      }
+    >
+  >({});
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteFirst, setInviteFirst] = useState("");
   const [inviteLast, setInviteLast] = useState("");
@@ -531,6 +562,28 @@ function RolesPanel() {
       }
       setMembers(json.members as Member[]);
       setRoles(json.roles as Role[]);
+      setProviders((json.providers ?? []) as ProviderOption[]);
+      setPayers((json.payerProfiles ?? []) as PayerOption[]);
+      const nextDrafts: Record<
+        string,
+        {
+          enabled: boolean;
+          supervisorProviderId: string | null;
+          applyToAllPayers: boolean;
+          payerProfileIds: string[];
+        }
+      > = {};
+      for (const member of (json.members ?? []) as Member[]) {
+        nextDrafts[member.id] = {
+          enabled: Boolean(member.supervision?.enabled),
+          supervisorProviderId: member.supervision?.supervisorProviderId ?? null,
+          applyToAllPayers: member.supervision?.applyToAllPayers !== false,
+          payerProfileIds: Array.isArray(member.supervision?.payerProfileIds)
+            ? member.supervision.payerProfileIds
+            : [],
+        };
+      }
+      setSupervisionDrafts(nextDrafts);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load members");
     } finally {
@@ -566,6 +619,67 @@ function RolesPanel() {
       }
     },
     [load],
+  );
+
+  const saveSupervision = useCallback(
+    async (
+      staffId: string,
+      rule: {
+        enabled: boolean;
+        supervisorProviderId: string | null;
+        applyToAllPayers: boolean;
+        payerProfileIds: string[];
+      },
+    ) => {
+      setSavingSupervisionId(staffId);
+      setError(null);
+      setToast(null);
+      try {
+        const resp = await fetch("/api/admin/security/supervision", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ staffId, rule }),
+        });
+        const json = await resp.json();
+        if (!resp.ok || !json.success) {
+          throw new Error(json.error ?? "Failed to save supervision rule");
+        }
+        setToast("Supervision billing rule updated.");
+        await load();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to save supervision rule");
+      } finally {
+        setSavingSupervisionId(null);
+      }
+    },
+    [load],
+  );
+
+  const updateDraft = useCallback(
+    (
+      staffId: string,
+      patch: Partial<{
+        enabled: boolean;
+        supervisorProviderId: string | null;
+        applyToAllPayers: boolean;
+        payerProfileIds: string[];
+      }>,
+    ) => {
+      setSupervisionDrafts((prev) => {
+        const current =
+          prev[staffId] ?? {
+            enabled: false,
+            supervisorProviderId: null,
+            applyToAllPayers: true,
+            payerProfileIds: [],
+          };
+        return {
+          ...prev,
+          [staffId]: { ...current, ...patch },
+        };
+      });
+    },
+    [],
   );
 
   const resetInviteForm = useCallback(() => {
@@ -621,9 +735,9 @@ function RolesPanel() {
         }}
       >
         <div>
-          <h2 style={{ marginTop: 0 }}>Roles</h2>
+          <h2 style={{ marginTop: 0 }}>Users &amp; Roles</h2>
           <p style={{ color: "var(--text-secondary, #555)", marginTop: 0 }}>
-            Assign a role to each staff member. Changes are recorded in the audit log.
+            Add users, assign roles, and configure supervision billing. Changes are recorded in the audit log.
           </p>
         </div>
         <button
@@ -635,7 +749,7 @@ function RolesPanel() {
             setToast(null);
           }}
         >
-          {inviteOpen ? "Close" : "Invite staff"}
+          {inviteOpen ? "Close" : "Add user"}
         </button>
       </div>
 
@@ -755,45 +869,155 @@ function RolesPanel() {
                 <th style={{ padding: "0.5rem 0.75rem" }}>Email</th>
                 <th style={{ padding: "0.5rem 0.75rem" }}>Job title</th>
                 <th style={{ padding: "0.5rem 0.75rem" }}>Role</th>
+                <th style={{ padding: "0.5rem 0.75rem" }}>Rendering provider</th>
+                <th style={{ padding: "0.5rem 0.75rem" }}>Supervision billing</th>
               </tr>
             </thead>
             <tbody>
-              {members.map((m) => (
-                <tr key={m.id} style={{ borderTop: "1px solid #e5e5ea" }}>
-                  <td style={{ padding: "0.5rem 0.75rem" }}>{fullName(m)}</td>
-                  <td style={{ padding: "0.5rem 0.75rem", color: "#555" }}>{m.email ?? "—"}</td>
-                  <td style={{ padding: "0.5rem 0.75rem", color: "#555" }}>
-                    {m.jobTitle ?? "—"}
-                  </td>
-                  <td style={{ padding: "0.5rem 0.75rem" }}>
-                    <select
-                      className="input"
-                      value={m.primaryRoleId ?? ""}
-                      disabled={savingId === m.id}
-                      onChange={(e) => {
-                        const next = e.target.value;
-                        if (next && next !== m.primaryRoleId) {
-                          changeRole(m.id, next);
-                        }
-                      }}
-                    >
-                      <option value="" disabled>
-                        No role assigned
-                      </option>
-                      {roles.map((r) => (
-                        <option key={r.id} value={r.id}>
-                          {r.name} ({r.code})
+              {members.map((m) => {
+                const draft =
+                  supervisionDrafts[m.id] ?? {
+                    enabled: false,
+                    supervisorProviderId: null,
+                    applyToAllPayers: true,
+                    payerProfileIds: [] as string[],
+                  };
+                return (
+                  <tr key={m.id} style={{ borderTop: "1px solid #e5e5ea", verticalAlign: "top" }}>
+                    <td style={{ padding: "0.5rem 0.75rem" }}>{fullName(m)}</td>
+                    <td style={{ padding: "0.5rem 0.75rem", color: "#555" }}>{m.email ?? "—"}</td>
+                    <td style={{ padding: "0.5rem 0.75rem", color: "#555" }}>
+                      {m.jobTitle ?? "—"}
+                    </td>
+                    <td style={{ padding: "0.5rem 0.75rem", minWidth: 220 }}>
+                      <select
+                        className="input"
+                        value={m.primaryRoleId ?? ""}
+                        disabled={savingId === m.id}
+                        onChange={(e) => {
+                          const next = e.target.value;
+                          if (next && next !== m.primaryRoleId) {
+                            changeRole(m.id, next);
+                          }
+                        }}
+                      >
+                        <option value="" disabled>
+                          No role assigned
                         </option>
-                      ))}
-                    </select>
-                    {m.roles.length > 1 ? (
-                      <div style={{ fontSize: "0.75rem", color: "#888", marginTop: 4 }}>
-                        Other roles: {m.roles.slice(1).map((r) => r.code).join(", ")}
+                        {roles.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.name} ({r.code})
+                          </option>
+                        ))}
+                      </select>
+                      {m.roles.length > 1 ? (
+                        <div style={{ fontSize: "0.75rem", color: "#888", marginTop: 4 }}>
+                          Other roles: {m.roles.slice(1).map((r) => r.code).join(", ")}
+                        </div>
+                      ) : null}
+                    </td>
+                    <td style={{ padding: "0.5rem 0.75rem", color: "#555", minWidth: 230 }}>
+                      <div>{m.providerName ?? "No linked provider"}</div>
+                      <div style={{ fontSize: "0.75rem", color: "#888" }}>
+                        {m.providerNpi ? `NPI ${m.providerNpi}` : "No NPI"}
                       </div>
-                    ) : null}
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td style={{ padding: "0.5rem 0.75rem", minWidth: 420 }}>
+                      <label style={{ display: "inline-flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                        <input
+                          type="checkbox"
+                          checked={draft.enabled}
+                          onChange={(e) => updateDraft(m.id, { enabled: e.target.checked })}
+                        />
+                        <span style={{ fontWeight: 600 }}>Enable supervision for billing</span>
+                      </label>
+
+                      {draft.enabled ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                            <span style={{ fontSize: "0.8rem", color: "#666" }}>Supervisor (used as rendering provider)</span>
+                            <select
+                              className="input"
+                              value={draft.supervisorProviderId ?? ""}
+                              onChange={(e) =>
+                                updateDraft(m.id, {
+                                  supervisorProviderId: e.target.value || null,
+                                })
+                              }
+                            >
+                              <option value="">Select supervisor provider</option>
+                              {providers.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.name}
+                                  {p.npi ? ` (NPI ${p.npi})` : ""}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+                            <input
+                              type="checkbox"
+                              checked={draft.applyToAllPayers}
+                              onChange={(e) =>
+                                updateDraft(m.id, {
+                                  applyToAllPayers: e.target.checked,
+                                  payerProfileIds: e.target.checked ? [] : draft.payerProfileIds,
+                                })
+                              }
+                            />
+                            <span>Apply to all payers</span>
+                          </label>
+
+                          {!draft.applyToAllPayers ? (
+                            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                              <span style={{ fontSize: "0.8rem", color: "#666" }}>Apply to selected payers</span>
+                              <select
+                                className="input"
+                                multiple
+                                size={Math.min(6, Math.max(3, payers.length || 3))}
+                                value={draft.payerProfileIds}
+                                onChange={(e) => {
+                                  const values = Array.from(e.target.selectedOptions).map((opt) => opt.value);
+                                  updateDraft(m.id, { payerProfileIds: values });
+                                }}
+                              >
+                                {payers.map((p) => (
+                                  <option key={p.id} value={p.id}>
+                                    {p.payerName}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          ) : null}
+
+                          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                            <button
+                              type="button"
+                              className="button button-primary"
+                              disabled={savingSupervisionId === m.id}
+                              onClick={() =>
+                                saveSupervision(m.id, {
+                                  enabled: draft.enabled,
+                                  supervisorProviderId: draft.supervisorProviderId,
+                                  applyToAllPayers: draft.applyToAllPayers,
+                                  payerProfileIds: draft.payerProfileIds,
+                                })
+                              }
+                            >
+                              {savingSupervisionId === m.id ? "Saving…" : "Save supervision"}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: "0.8rem", color: "#888" }}>
+                          If disabled, claims bill under the provider on the encounter.
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
