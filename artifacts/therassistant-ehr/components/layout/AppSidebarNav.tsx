@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import styles from "./AppShell.module.css";
 
 function CalendarIcon() {
@@ -239,13 +239,8 @@ export default function AppSidebarNav() {
   const [adminOpen, setAdminOpen] = useState(adminActive || false);
   const [billingOpen, setBillingOpen] = useState(billingRouteActive || false);
 
-  useEffect(() => {
-    if (billingRouteActive) setBillingOpen(true);
-  }, [billingRouteActive]);
-
-  useEffect(() => {
-    if (adminActive) setAdminOpen(true);
-  }, [adminActive]);
+  const billingExpanded = billingOpen || billingRouteActive;
+  const adminExpanded = adminOpen || adminActive;
 
   return (
     <nav className={styles.nav} aria-label="Primary navigation">
@@ -268,14 +263,14 @@ export default function AppSidebarNav() {
         type="button"
         className={`${styles.navItem} ${styles.navItemCollapsible} ${billingGroupActive ? styles.navItemActive : ""}`}
         onClick={() => setBillingOpen((o) => !o)}
-        aria-expanded={billingOpen}
+        aria-expanded={billingExpanded}
       >
         <span className={styles.navIcon}><DollarIcon /></span>
         Billing
-        <ChevronIcon open={billingOpen} />
+        <ChevronIcon open={billingExpanded} />
       </button>
 
-      {billingOpen ? (
+      {billingExpanded ? (
         <div className={styles.subnav}>
           <SubNavLinkIcon href="/billing/my-inbox" icon={<TasksIcon />} label="Dashboard" prefixes={["/billing/my-inbox", "/billing/executive-priority"]} pathname={pathname} badge={<MyInboxBadge />} />
           <SubNavLinkIcon href="/billing/claims" icon={<ClipboardIcon />} label="Claims" prefixes={["/billing/claims", "/billing/charge-capture", "/billing/documentation-pending", "/billing/no-response", "/billing/claim-readiness", "/billing/denials-by-carc", "/billing/claim-submission", "/billing/underpayments", "/billing/timely-filing", "/billing/837p-batches", "/billing/batches", "/billing/claim-edit-dashboard", "/billing/duplicate-claim-review", "/billing/aging", "/billing/rejections-999", "/billing/rejections-277ca", "/billing/payer-rejections", "/billing/resubmissions", "/billing/corrected-claims", "/billing/submitted-claims", "/billing/payer-received", "/billing/medical-review", "/billing/medical-necessity", "/billing/appeals", "/billing/cob-issues", "/billing/secondary-billing", "/billing/transmission-failures", "/billing/claim-build-errors", "/billing/claim-hold", "/billing/ready-to-generate", "/billing/eligibility-issues", "/billing/authorization-required", "/billing/provider-enrollment-issues", "/billing/partial-denials", "/billing/adjustments-review"]} pathname={pathname} />
@@ -294,14 +289,14 @@ export default function AppSidebarNav() {
         type="button"
         className={`${styles.navItem} ${styles.navItemCollapsible} ${adminActive ? styles.navItemActive : ""}`}
         onClick={() => setAdminOpen((o) => !o)}
-        aria-expanded={adminOpen}
+        aria-expanded={adminExpanded}
       >
         <span className={styles.navIcon}><GearIcon /></span>
         Settings
-        <ChevronIcon open={adminOpen} />
+        <ChevronIcon open={adminExpanded} />
       </button>
 
-      {adminOpen ? (
+      {adminExpanded ? (
         <div className={styles.subnav}>
           <SubNavLinkIcon href="/settings/providers" icon={<UserCheckIcon />} label="Providers" prefixes={["/settings/providers"]} pathname={pathname} />
           <SubNavLinkIcon href="/settings/organizations" icon={<BuildingIcon />} label="Organizations" prefixes={["/settings/organization", "/settings/organizations"]} pathname={pathname} />
