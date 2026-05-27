@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+.next
+**/.next
+dist
+**/dist
+.git
+.gitignore
+.vscode
+.canvas
+attached_assets
+_tmp_*
+*.log
