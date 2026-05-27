@@ -36,7 +36,7 @@ async function recomputeBatchTotals(params: { organizationId: string; batchId: s
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) throw new Error("Database connection not available");
 
-  const { data: links, error: linkError } = await (supabase as unknown as { from: (table: string) => any })
+  const { data: links, error: linkError } = await supabase
     .from("claim_837p_batch_claims")
     .select("professional_claim_id")
     .eq("organization_id", params.organizationId)
@@ -48,7 +48,7 @@ async function recomputeBatchTotals(params: { organizationId: string; batchId: s
 
   let totalChargeAmount = 0;
   if (claimIds.length > 0) {
-    const { data: claims, error: claimError } = await (supabase as unknown as { from: (table: string) => any })
+    const { data: claims, error: claimError } = await supabase
       .from("professional_claims")
       .select("id, total_charge")
       .eq("organization_id", params.organizationId)
@@ -58,7 +58,7 @@ async function recomputeBatchTotals(params: { organizationId: string; batchId: s
     totalChargeAmount = ((claims ?? []) as DbRow[]).reduce((sum, c) => sum + number(c.total_charge), 0);
   }
 
-  const { error: updateError } = await (supabase as unknown as { from: (table: string) => any })
+  const { error: updateError } = await supabase
     .from("claim_837p_batches")
     .update({
       claim_count: claimIds.length,
@@ -79,7 +79,7 @@ export async function assignClaimToAutoBatch(
     return { ok: false, batchId: null, batchNumber: null, payerProfileId: null, billingProviderTaxId: null, error: "Database connection not available" };
   }
 
-  const { data: claim, error: claimError } = await (supabase as unknown as { from: (table: string) => any })
+  const { data: claim, error: claimError } = await supabase
     .from("professional_claims")
     .select("id, claim_status, payer_profile_id")
     .eq("organization_id", input.organizationId)
@@ -121,7 +121,7 @@ export async function assignClaimToAutoBatch(
     };
   }
 
-  const { data: snapshot, error: snapshotError } = await (supabase as unknown as { from: (table: string) => any })
+  const { data: snapshot, error: snapshotError } = await supabase
     .from("claim_parties_snapshot")
     .select("claim_id, billing_provider_tax_id")
     .eq("claim_id", input.claimId)
@@ -149,7 +149,7 @@ export async function assignClaimToAutoBatch(
     };
   }
 
-  const { data: existingLink } = await (supabase as unknown as { from: (table: string) => any })
+  const { data: existingLink } = await supabase
     .from("claim_837p_batch_claims")
     .select("batch_id")
     .eq("organization_id", input.organizationId)
@@ -158,7 +158,7 @@ export async function assignClaimToAutoBatch(
     .maybeSingle();
 
   if (existingLink?.batch_id) {
-    const { data: existingBatch } = await (supabase as unknown as { from: (table: string) => any })
+    const { data: existingBatch } = await supabase
       .from("claim_837p_batches")
       .select("id, batch_number")
       .eq("organization_id", input.organizationId)
@@ -177,7 +177,7 @@ export async function assignClaimToAutoBatch(
   let batchId: string | null = null;
   let selectedBatchNumber: string | null = null;
 
-  const { data: openBatch } = await (supabase as unknown as { from: (table: string) => any })
+  const { data: openBatch } = await supabase
     .from("claim_837p_batches")
     .select("id, batch_number")
     .eq("organization_id", input.organizationId)
@@ -195,7 +195,7 @@ export async function assignClaimToAutoBatch(
     selectedBatchNumber = text(openBatch.batch_number) || null;
   } else {
     const createdNumber = batchNumber(payerProfileId, billingProviderTaxId);
-    const { data: inserted, error: insertError } = await (supabase as unknown as { from: (table: string) => any })
+    const { data: inserted, error: insertError } = await supabase
       .from("claim_837p_batches")
       .insert({
         organization_id: input.organizationId,
@@ -210,7 +210,7 @@ export async function assignClaimToAutoBatch(
 
     if (insertError || !inserted) {
       // Race-safe fallback: another request likely inserted the same open group.
-      const { data: winner, error: winnerError } = await (supabase as unknown as { from: (table: string) => any })
+      const { data: winner, error: winnerError } = await supabase
         .from("claim_837p_batches")
         .select("id, batch_number")
         .eq("organization_id", input.organizationId)
@@ -251,7 +251,7 @@ export async function assignClaimToAutoBatch(
     };
   }
 
-  const { error: linkError } = await (supabase as unknown as { from: (table: string) => any })
+  const { error: linkError } = await supabase
     .from("claim_837p_batch_claims")
     .insert({
       organization_id: input.organizationId,
@@ -286,7 +286,7 @@ export async function assignClaimToAutoBatch(
     };
   }
 
-  await (supabase as unknown as { from: (table: string) => any })
+  await supabase
     .from("professional_claims")
     .update({ claim_status: "batched", updated_at: new Date().toISOString() })
     .eq("organization_id", input.organizationId)
