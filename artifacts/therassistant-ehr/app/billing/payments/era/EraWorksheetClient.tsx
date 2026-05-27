@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useRef, useState } from "react";
+import Link from "next/link";
 import type { PreviewResponse, PreviewRow } from "@/app/api/payments/parse-835-preview/route";
 
 type PreviewErrorResponse = { ok: false; error?: string };
@@ -587,13 +588,13 @@ export default function EraWorksheetClient() {
           </p>
         </div>
         <div className="flex gap-3">
-          <a
+          <Link
             href="/billing/era-import"
             className="px-5 py-2 rounded-xl text-sm font-semibold border"
             style={{ borderColor: "var(--line)", color: "var(--navy)" }}
           >
             View ERA Queue
-          </a>
+          </Link>
           <button
             type="button"
             className="px-5 py-2 rounded-xl text-sm font-semibold text-white"
