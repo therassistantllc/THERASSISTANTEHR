@@ -32,21 +32,12 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN corepack enable
 RUN corepack prepare pnpm@10.32.1 --activate
 
-WORKDIR /workspace
+WORKDIR /workspace/artifacts/therassistant-ehr
 
-COPY --from=deps /workspace/package.json ./package.json
-COPY --from=deps /workspace/pnpm-lock.yaml ./pnpm-lock.yaml
-COPY --from=deps /workspace/pnpm-workspace.yaml ./pnpm-workspace.yaml
-COPY --from=deps /workspace/.npmrc ./
-COPY --from=deps /workspace/node_modules ./node_modules
-COPY --from=deps /workspace/artifacts ./artifacts
-COPY --from=deps /workspace/lib ./lib
-COPY --from=deps /workspace/scripts ./scripts
-COPY --from=deps /workspace/tsconfig.base.json ./tsconfig.base.json
-COPY --from=deps /workspace/tsconfig.json ./tsconfig.json
-COPY --from=build /workspace/artifacts/therassistant-ehr/.next ./artifacts/therassistant-ehr/.next
-COPY --from=build /workspace/artifacts/therassistant-ehr/public ./artifacts/therassistant-ehr/public
+COPY --from=build /workspace/artifacts/therassistant-ehr/.next/standalone ./
+COPY --from=build /workspace/artifacts/therassistant-ehr/.next/static ./.next/static
+COPY --from=build /workspace/artifacts/therassistant-ehr/public ./public
 
 EXPOSE 8080
 
-CMD ["sh", "-c", "pnpm -C artifacts/therassistant-ehr start"]
+CMD ["node", "server.js"]
