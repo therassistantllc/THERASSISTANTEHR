@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev --webpack --port ${PORT:-8080}",
     "build": "next build --webpack",
+    "build:ci": "NODE_OPTIONS=--max-old-space-size=4096 NEXT_DISABLE_ESLINT=1 NEXT_TELEMETRY_DISABLED=1 next build",
     "start": "next start --port ${PORT:-8080}",
     "lint": "eslint && knip",
     "dead-code": "knip",

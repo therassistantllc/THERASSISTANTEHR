@@ -31,10 +31,10 @@ ENV NEXT_DISABLE_ESLINT=1
 ENV NEXT_PRIVATE_BUILD_WORKER=1
 
 RUN set -eux; \
-	pnpm --filter @workspace/therassistant-ehr... run build || \
+	pnpm --filter @workspace/therassistant-ehr... run build:ci || \
 	(echo "First build attempt failed, clearing Next cache and retrying once" && \
 	 rm -rf /workspace/artifacts/therassistant-ehr/.next/cache && \
-	 pnpm --filter @workspace/therassistant-ehr... run build)
+	 pnpm --filter @workspace/therassistant-ehr... run build:ci)
 
 FROM node:24-slim AS runner
 
