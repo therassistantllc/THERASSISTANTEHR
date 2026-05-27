@@ -3,6 +3,8 @@
 import React, { useCallback, useRef, useState } from "react";
 import type { PreviewResponse, PreviewRow } from "@/app/api/payments/parse-835-preview/route";
 
+type PreviewErrorResponse = { ok: false; error?: string };
+
 /* ─────────────────────────────────────────────────────────────────────────
    Types
 ───────────────────────────────────────────────────────────────────────── */
@@ -351,10 +353,10 @@ export default function EraWorksheetClient() {
 
     try {
       const res = await fetch("/api/payments/parse-835-preview", { method: "POST", body: fd });
-      const json: PreviewResponse & { ok: false; error?: string } = await res.json();
+      const json = (await res.json()) as PreviewResponse | PreviewErrorResponse;
 
       if (!res.ok || !json.ok) {
-        throw new Error((json as { error?: string }).error ?? "Parse failed");
+        throw new Error(("error" in json ? json.error : undefined) ?? "Parse failed");
       }
 
       setHeader({
