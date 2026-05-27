@@ -57,6 +57,14 @@ export const WORKQUEUES: WorkqueueDef[] = [
 
   // ── Pre-submission ──────────────────────────────────────────────────────
   {
+    id: "charges",
+    title: "Charges",
+    description: "Auto-batched charges grouped by payer ID and billing TIN, ready for 837 download and submission tracking.",
+    href: "/billing/charges",
+    stage: "pre_submission",
+    status: "live",
+  },
+  {
     id: "charge_capture",
     title: "Charge Capture",
     description: "Unsigned and unreleased charges waiting on documentation, codes, or provider review.",
