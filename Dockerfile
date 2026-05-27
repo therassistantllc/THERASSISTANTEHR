@@ -1,3 +1,4 @@
+# File: Dockerfile
 FROM node:24-slim AS base
 
 ENV PNPM_HOME=/pnpm
@@ -18,23 +19,25 @@ COPY tsconfig.base.json tsconfig.json replit.md ./
 RUN pnpm config set ignore-scripts false \
  && pnpm install --frozen-lockfile --filter @workspace/therassistant-ehr...
 
- FROM deps AS build
+FROM deps AS build
 
- ENV NODE_OPTIONS=--max-old-space-size=6144
- RUN pnpm -C artifacts/therassistant-ehr build
+ENV NODE_ENV=production
+ENV NODE_OPTIONS=--max-old-space-size=2048
 
- FROM node:24-slim AS runner
+RUN pnpm -C artifacts/therassistant-ehr build
 
- ENV NODE_ENV=production
- ENV PORT=8080
- ENV NEXT_TELEMETRY_DISABLED=1
+FROM node:24-slim AS runner
 
- WORKDIR /app
+ENV NODE_ENV=production
+ENV PORT=8080
+ENV NEXT_TELEMETRY_DISABLED=1
 
- COPY --from=build /workspace/artifacts/therassistant-ehr/.next/standalone ./
- COPY --from=build /workspace/artifacts/therassistant-ehr/.next/static ./.next/static
- COPY --from=build /workspace/artifacts/therassistant-ehr/public ./public
+WORKDIR /app
 
- EXPOSE 8080
+COPY --from=build /workspace/artifacts/therassistant-ehr/.next/standalone ./
+COPY --from=build /workspace/artifacts/therassistant-ehr/.next/static ./.next/static
+COPY --from=build /workspace/artifacts/therassistant-ehr/public ./public
 
- CMD ["node", "server.js"]
+EXPOSE 8080
+
+CMD ["node", "server.js"]

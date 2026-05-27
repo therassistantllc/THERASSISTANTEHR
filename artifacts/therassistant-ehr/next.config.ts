@@ -15,8 +15,7 @@ import type { NextConfig } from "next";
  * unposted-payments, vcc, reconciliation-exceptions, payments) live
  * under the Payments nav item and are intentionally NOT redirected.
  *
- * The detail route /billing/claims/[claimId] is excluded (it's the
- * per-claim drill-in for the new workspace, not a legacy queue).
+ * The detail route /billing/claims/[claimId] is excluded.
  */
 const claimRedirects: Array<{ from: string; tab: string; filter?: string }> = [
   { from: "/billing/charge-capture", tab: "needs_attention" },
@@ -66,34 +65,35 @@ const claimRedirects: Array<{ from: string; tab: string; filter?: string }> = [
   { from: "/billing/bad-debt-review", tab: "resolutions", filter: "bad_debt" },
   { from: "/billing/write-offs", tab: "resolutions", filter: "write_offs" },
   { from: "/billing/credit-balances", tab: "resolutions", filter: "credit_balance" },
-  { from: "/billing/recoupments", tab: "resolutions", filter: "recoupments" },
+  { from: "/billing/recoupments", tab: "resolutions", filter: "recoupments" }
 ];
 
 const nextConfig: NextConfig = {
   output: "standalone",
   experimental: {
-    webpackMemoryOptimizations: true,
+    webpackMemoryOptimizations: true
   },
   typescript: {
-    ignoreBuildErrors: true,
+    ignoreBuildErrors: true
   },
   allowedDevOrigins: [
     "*.janeway.replit.dev",
     "*.replit.dev",
-    "*.repl.co",
+    "*.repl.co"
   ],
   async redirects() {
     return claimRedirects.map(({ from, tab, filter }) => {
       const qs = new URLSearchParams();
       qs.set("tab", tab);
       if (filter) qs.set("filter", filter);
+
       return {
         source: from,
         destination: `/billing/claims?${qs.toString()}`,
-        permanent: false,
+        permanent: false
       };
     });
-  },
+  }
 };
 
 export default nextConfig;
