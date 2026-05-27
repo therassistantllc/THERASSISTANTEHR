@@ -17,6 +17,7 @@ COPY artifacts/therassistant-ehr ./artifacts/therassistant-ehr
 COPY tsconfig.base.json tsconfig.json replit.md ./
 
 RUN pnpm config set ignore-scripts false \
+ && pnpm config set onlyBuiltDependencies sharp \
  && pnpm install --frozen-lockfile --filter @workspace/therassistant-ehr...
 
 FROM deps AS build
@@ -40,4 +41,4 @@ COPY --from=build /workspace/artifacts/therassistant-ehr/public ./public
 
 EXPOSE 8080
 
-CMD ["node", "server.js"]
+CMD ["node", "workspace/artifacts/therassistant-ehr/server.js"]
