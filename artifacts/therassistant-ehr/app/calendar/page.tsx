@@ -1,9 +1,5 @@
-import dynamic from "next/dynamic";
-
-const MonthCalendarClient = dynamic(() => import("./MonthCalendarClient"), {
-  ssr: false,
-});
+import CalendarClientOnly from "./CalendarClientOnly";
 
 export default function CalendarPage() {
-  return <MonthCalendarClient />;
+  return <CalendarClientOnly />;
 }
