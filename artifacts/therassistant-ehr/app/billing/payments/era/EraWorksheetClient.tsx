@@ -78,15 +78,17 @@ function balanceStatus(
 ───────────────────────────────────────────────────────────────────────── */
 interface AddPatientModalProps {
   rowId: string;
-  suggestedName: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  memberId: string | null;
+  payerName: string | null;
   onClose: () => void;
   onCreated: (rowId: string, patientId: string, patientName: string) => void;
 }
 
-function AddPatientModal({ rowId, suggestedName, onClose, onCreated }: AddPatientModalProps) {
-  const parts = (suggestedName ?? "").trim().split(/\s+/);
-  const [firstName, setFirstName] = useState(parts.slice(0, -1).join(" ") || parts[0] || "");
-  const [lastName, setLastName] = useState(parts.length > 1 ? parts[parts.length - 1] : "");
+function AddPatientModal({ rowId, firstName, lastName, memberId, payerName, onClose, onCreated }: AddPatientModalProps) {
+  const [firstNameInput, setFirstNameInput] = useState(firstName ?? "");
+  const [lastNameInput, setLastNameInput] = useState(lastName ?? "");
   const [dob, setDob] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
@@ -103,8 +105,8 @@ function AddPatientModal({ rowId, suggestedName, onClose, onCreated }: AddPatien
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           organizationId: orgId(),
-          firstName,
-          lastName,
+          firstName: firstNameInput,
+          lastName: lastNameInput,
           dateOfBirth: dob,
           phone,
           email: email || undefined,
@@ -113,7 +115,7 @@ function AddPatientModal({ rowId, suggestedName, onClose, onCreated }: AddPatien
       });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error ?? "Failed to create patient");
-      onCreated(rowId, json.id ?? json.clientId ?? json.client?.id, `${firstName} ${lastName}`.trim());
+      onCreated(rowId, json.id ?? json.clientId ?? json.client?.id, `${firstNameInput} ${lastNameInput}`.trim());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -139,8 +141,15 @@ function AddPatientModal({ rowId, suggestedName, onClose, onCreated }: AddPatien
 
         <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
           <p className="text-sm" style={{ color: "var(--muted)" }}>
-            This patient was not found in the system. Complete the required fields to add them.
+            This patient was not found in the system. Patient information from the ERA has been pre-filled below.
           </p>
+
+          {memberId && (
+            <div className="px-3 py-2 rounded-lg text-xs" style={{ background: "var(--sage-soft)", color: "var(--sage)" }}>
+              <strong>Member ID:</strong> {memberId}
+              {payerName && <span className="ml-2">· <strong>Insurance:</strong> {payerName}</span>}
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
@@ -148,8 +157,8 @@ function AddPatientModal({ rowId, suggestedName, onClose, onCreated }: AddPatien
               <input
                 className="mt-1 w-full px-3 py-2 rounded-lg text-sm border"
                 style={{ borderColor: "var(--line)", color: "var(--text)" }}
-                value={firstName}
-                onChange={(e) => setFirstName(e.target.value)}
+                value={firstNameInput}
+                onChange={(e) => setFirstNameInput(e.target.value)}
                 required
               />
             </label>
@@ -158,22 +167,23 @@ function AddPatientModal({ rowId, suggestedName, onClose, onCreated }: AddPatien
               <input
                 className="mt-1 w-full px-3 py-2 rounded-lg text-sm border"
                 style={{ borderColor: "var(--line)", color: "var(--text)" }}
-                value={lastName}
-                onChange={(e) => setLastName(e.target.value)}
+                value={lastNameInput}
+                onChange={(e) => setLastNameInput(e.target.value)}
                 required
               />
             </label>
           </div>
 
           <label className="block">
-            <span className="text-xs font-medium" style={{ color: "var(--muted)" }}>Date of Birth (YYYY-MM-DD) *</span>
+            <span className="text-xs font-medium" style={{ color: "var(--muted)" }}>
+              Date of Birth (YYYY-MM-DD) {dob ? "*" : "(optional - add from your EHR)"}
+            </span>
             <input
               type="date"
               className="mt-1 w-full px-3 py-2 rounded-lg text-sm border"
               style={{ borderColor: "var(--line)", color: "var(--text)" }}
               value={dob}
               onChange={(e) => setDob(e.target.value)}
-              required
             />
           </label>
 
@@ -604,14 +614,20 @@ export default function EraWorksheetClient() {
   return (
     <div className="flex flex-col min-h-0">
       {/* Add Patient Modal */}
-      {addPatientRowId !== null && (
-        <AddPatientModal
-          rowId={addPatientRowId}
-          suggestedName={rows.find((r) => r.rowId === addPatientRowId)?.patientName ?? null}
-          onClose={() => setAddPatientRowId(null)}
-          onCreated={handlePatientCreated}
-        />
-      )}
+      {addPatientRowId !== null && (() => {
+        const row = rows.find((r) => r.rowId === addPatientRowId);
+        return (
+          <AddPatientModal
+            rowId={addPatientRowId}
+            firstName={row?.patientFirstName ?? null}
+            lastName={row?.patientLastName ?? null}
+            memberId={row?.patientMemberId ?? null}
+            payerName={row?.payerName ?? null}
+            onClose={() => setAddPatientRowId(null)}
+            onCreated={handlePatientCreated}
+          />
+        );
+      })()}
 
       {/* ── Header / Toolbar ─────────────────────────────────────── */}
       <div className="flex items-center justify-between px-6 py-3 border-b" style={{ borderColor: "var(--line)", background: "var(--card)" }}>

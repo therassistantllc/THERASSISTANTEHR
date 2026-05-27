@@ -39,6 +39,9 @@ type Parsed835ClaimPayment = {
   checkOrEftNumber: string | null;
   traceNumber: string | null;
   paymentDate: string | null;
+  patientLastName: string | null;
+  patientFirstName: string | null;
+  patientMemberId: string | null;
   serviceLines: Parsed835ServiceLine[];
   adjustments: Parsed835Adjustment[];
   raw: Record<string, unknown>;
@@ -161,6 +164,9 @@ export function parse835(raw835: string): Parsed835File {
         checkOrEftNumber,
         traceNumber,
         paymentDate,
+        patientLastName: null,
+        patientFirstName: null,
+        patientMemberId: null,
         serviceLines: [],
         adjustments: [],
         raw: { clp: seg.raw },
@@ -200,7 +206,20 @@ export function parse835(raw835: string): Parsed835File {
       continue;
     }
 
+    if (seg.id === "NM1" && seg.elements[0] === "QC") {
+      // NM1*QC = Patient/Subscriber name
+      // NM1*QC*1*LastName*FirstName
+      currentClaim.patientLastName = seg.elements[2] ?? null;
+      currentClaim.patientFirstName = seg.elements[3] ?? null;
+      continue;
+    }
+
     if (seg.id === "REF") {
+      // REF*1L or REF*1W = Member ID
+      const qualifier = seg.elements[0];
+      if (qualifier === "1L" || qualifier === "1W" || qualifier === "EA") {
+        currentClaim.patientMemberId = seg.elements[1] ?? currentClaim.patientMemberId;
+      }
       currentClaim.raw = {
         ...currentClaim.raw,
         refs: [...((currentClaim.raw.refs as string[] | undefined) ?? []), seg.raw],

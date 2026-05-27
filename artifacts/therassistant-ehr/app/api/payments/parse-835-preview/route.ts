@@ -26,6 +26,10 @@ export interface PreviewRow {
   patientName: string | null;
   patientId: string | null;
   patientFound: boolean;
+  patientFirstName: string | null;
+  patientLastName: string | null;
+  patientMemberId: string | null;
+  payerName: string | null;
   // Service line fields
   dateOfService: string | null;
   providerName: string | null;
@@ -162,9 +166,14 @@ export async function POST(request: Request) {
       const claimPR = money(claim.patientResponsibilityAmount);
       totalPatientResponsibility += claimPR;
 
-      // Distribute patient responsibility proportionally across service lines
+      // Build patient name from ERA data or matched client
+      const patientFirstName = claim.patientFirstName ?? null;
+      const patientLastName = claim.patientLastName ?? null;
+      const patientName = match?.clientName ?? 
+        (patientFirstName && patientLastName ? `${patientFirstName} ${patientLastName}`.trim() : null);
+
+      // Patient responsibility: use service line PR adjustments, not proportional distribution
       const numLines = claim.serviceLines.length || 1;
-      const prPerLine = claimPR / numLines;
 
       for (const sl of claim.serviceLines) {
         const chargeAmt = money(sl.chargeAmount);
@@ -180,6 +189,14 @@ export async function POST(request: Request) {
           .reduce((sum, a) => sum + money(a.amount), 0);
         const allowedAmt = chargeAmt - coAdj;
 
+        // Patient Responsibility (PR) = sum of PR group adjustments
+        const prAdj = sl.adjustments
+          .filter((a) => a.groupCode === "PR")
+          .reduce((sum, a) => sum + money(a.amount), 0);
+        
+        // If no PR adjustments at service line level, distribute claim PR
+        const servicePR = prAdj > 0 ? prAdj : (claimPR / numLines);
+
         // CARC/RARC: comma-list of groupCode-reasonCode pairs
         const carcParts = sl.adjustments
           .filter((a) => a.reasonCode)
@@ -189,9 +206,13 @@ export async function POST(request: Request) {
         rows.push({
           rowId: nextRowId(),
           claimControlNumber: claim.patientControlNumber,
-          patientName: match?.clientName ?? null,
+          patientName,
           patientId: match?.clientId ?? null,
           patientFound: Boolean(match),
+          patientFirstName,
+          patientLastName,
+          patientMemberId: claim.patientMemberId,
+          payerName: claim.payerName,
           dateOfService: sl.serviceDate,
           providerName: claim.payeeName,
           cptCode: sl.procedureCode,
@@ -199,7 +220,7 @@ export async function POST(request: Request) {
           allowedAmount: allowedAmt,
           adjustmentAmount: adjAmt,
           carcRarc,
-          patientResponsibility: prPerLine,
+          patientResponsibility: servicePR,
           amountPaid: paidAmt,
           claimPaidAmount: money(claim.paidAmount),
           claimTotalCharge: money(claim.totalChargeAmount),
@@ -218,9 +239,13 @@ export async function POST(request: Request) {
         rows.push({
           rowId: nextRowId(),
           claimControlNumber: claim.patientControlNumber,
-          patientName: match?.clientName ?? null,
+          patientName,
           patientId: match?.clientId ?? null,
           patientFound: Boolean(match),
+          patientFirstName,
+          patientLastName,
+          patientMemberId: claim.patientMemberId,
+          payerName: claim.payerName,
           dateOfService: null,
           providerName: claim.payeeName,
           cptCode: null,

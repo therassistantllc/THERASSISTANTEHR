@@ -51,7 +51,7 @@ export async function POST(request: Request) {
         .in("id", claimIds);
 
       const results = (claims ?? []).map((c) => {
-        const client = c.clients as Record<string, unknown> | null;
+        const client = c.clients as unknown as Record<string, unknown> | null;
         const email = String(client?.email ?? "").trim();
         if (!email) return { claimId: c.id, status: "no_email" };
         // In production this would enqueue an email send job.
