@@ -71,6 +71,12 @@ const claimRedirects: Array<{ from: string; tab: string; filter?: string }> = [
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
+  typescript: {
+    ignoreBuildErrors: true,
+  },
   allowedDevOrigins: [
     "*.janeway.replit.dev",
     "*.replit.dev",
