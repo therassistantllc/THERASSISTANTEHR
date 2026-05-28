@@ -18,12 +18,58 @@ export type InlineCodingHelperHandle = {
 declare global {
   interface Window {
     __theraCodingHelperBootstrapped?: boolean;
+    __THERA_HELPER_ROOT__?: ParentNode;
     generateAll?: () => void;
     initLibraries?: () => void;
     refreshVisiblePages?: () => void;
     updateProgress?: () => void;
     getLatestCodingReport?: () => unknown;
     initializeCodingHelper?: () => void;
+    nextPage?: () => void;
+    prevPage?: () => void;
+  }
+}
+
+function fallbackStepNavigation(root: ParentNode, direction: "next" | "prev") {
+  const pages = Array.from(root.querySelectorAll(".page")) as HTMLElement[];
+  const visible = pages.filter((page) => !page.classList.contains("hidden"));
+  if (!visible.length) return;
+  const currentIndex = Math.max(
+    0,
+    visible.findIndex((page) => page.classList.contains("active")),
+  );
+  const targetIndex = direction === "next"
+    ? Math.min(currentIndex + 1, visible.length - 1)
+    : Math.max(currentIndex - 1, 0);
+  if (targetIndex === currentIndex) return;
+  visible[currentIndex]?.classList.remove("active");
+  visible[targetIndex]?.classList.add("active");
+}
+
+function wireNavigationFallback(root: ParentNode) {
+  const nextButtons = Array.from(root.querySelectorAll('button[onclick*="nextPage"]')) as HTMLButtonElement[];
+  const backButtons = Array.from(root.querySelectorAll('button[onclick*="prevPage"]')) as HTMLButtonElement[];
+
+  for (const button of nextButtons) {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      if (typeof window.nextPage === "function") {
+        window.nextPage();
+      } else {
+        fallbackStepNavigation(root, "next");
+      }
+    });
+  }
+
+  for (const button of backButtons) {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      if (typeof window.prevPage === "function") {
+        window.prevPage();
+      } else {
+        fallbackStepNavigation(root, "prev");
+      }
+    });
   }
 }
 
@@ -84,6 +130,8 @@ const InlineCodingHelper = forwardRef<InlineCodingHelperHandle>(function InlineC
           contentWrapper.innerHTML = shell.outerHTML;
         }
         hostRef.current.appendChild(contentWrapper);
+        window.__THERA_HELPER_ROOT__ = contentWrapper;
+        wireNavigationFallback(contentWrapper);
 
         if (!window.__theraCodingHelperBootstrapped) {
           const scripts = Array.from(doc.querySelectorAll("script"));

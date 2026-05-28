@@ -6,6 +6,7 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireBillingAccess } from "@/lib/billing/requireBillingAccess";
+import { getProviderIdForUser } from "@/lib/rbac/auth";
 
 function str(v: unknown): string {
   return String(v ?? "").trim();
@@ -13,6 +14,12 @@ function str(v: unknown): string {
 function num(v: unknown): number {
   const n = Number(v ?? 0);
   return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0;
+}
+
+function isClinicianScoped(roles: string[]) {
+  const hasClinician = roles.includes("clinician");
+  const hasExpandedAccess = roles.some((r) => ["admin", "biller", "supervisor", "support"].includes(r));
+  return hasClinician && !hasExpandedAccess;
 }
 
 export async function GET(request: Request) {
@@ -23,6 +30,11 @@ export async function GET(request: Request) {
     });
     if (guard instanceof NextResponse) return guard;
     const { organizationId } = guard;
+    const practiceFilter = str(searchParams.get("practice"));
+    const clinicianOnly = isClinicianScoped(guard.roles ?? []);
+    const providerId = clinicianOnly && guard.userId
+      ? await getProviderIdForUser(guard.userId, organizationId)
+      : null;
 
     const supabase = createServerSupabaseAdminClient();
     if (!supabase)
@@ -39,7 +51,7 @@ export async function GET(request: Request) {
          created_at, updated_at,
          clients(id, first_name, last_name, email),
          payer_profiles(payer_name),
-         appointments(id, scheduled_start_at, provider_id,
+         appointments(id, scheduled_start_at, provider_id, provider_location_id,
                       providers(id, first_name, last_name, display_name))`,
       )
       .eq("organization_id", organizationId)
@@ -49,11 +61,37 @@ export async function GET(request: Request) {
 
     if (error) throw error;
 
-    const rows = (data ?? []).map((r) => {
+    const appointmentIds = (data ?? []).map((r) => str(r.appointment_id)).filter(Boolean);
+
+    const { data: serviceLineRows } = appointmentIds.length
+      ? await supabase
+          .from("professional_claim_service_lines")
+          .select("claim_id, procedure_code")
+          .eq("organization_id", organizationId)
+          .in("claim_id", (data ?? []).map((r) => str(r.id)).filter(Boolean))
+          .is("archived_at", null)
+      : { data: [] as Array<Record<string, unknown>> };
+
+    const procedureByClaimId = new Map<string, string>();
+    for (const line of (serviceLineRows ?? []) as Array<Record<string, unknown>>) {
+      const claimId = str(line.claim_id);
+      if (!claimId || procedureByClaimId.has(claimId)) continue;
+      procedureByClaimId.set(claimId, str(line.procedure_code) || "—");
+    }
+
+    const practiceSet = new Set<string>();
+
+    const rows = (data ?? []).flatMap((r) => {
       const client = r.clients as unknown as Record<string, unknown> | null;
       const payer = r.payer_profiles as unknown as Record<string, unknown> | null;
       const appt = r.appointments as unknown as Record<string, unknown> | null;
       const provider = appt?.providers as Record<string, unknown> | null;
+      const claimProviderId = str(appt?.provider_id);
+      const practiceId = str(appt?.provider_location_id) || null;
+      if (practiceId) practiceSet.add(practiceId);
+      if (clinicianOnly && providerId && claimProviderId !== providerId) return [];
+      if (practiceFilter && practiceId !== practiceFilter) return [];
+
       const providerName =
         str(provider?.display_name) ||
         [str(provider?.first_name), str(provider?.last_name)].filter(Boolean).join(" ") ||
@@ -63,7 +101,7 @@ export async function GET(request: Request) {
       const payerPaid = num(r.payer_responsibility_amount);
       const adjAmt = totalCharge - patientResp - payerPaid;
 
-      return {
+      return [{
         id: str(r.id),
         claimId: str(r.id),
         claimNumber: str(r.claim_number),
@@ -83,6 +121,8 @@ export async function GET(request: Request) {
         patientResponsibility: patientResp,
         payerPaid,
         amountPaid: 0,
+        cptCode: procedureByClaimId.get(str(r.id)) ?? "—",
+        practiceId,
         denialReasonCode: str(r.denial_reason_code) || null,
         denialReasonDescription: str(r.denial_reason_description) || null,
         appealDeadline: str(r.appeal_deadline_date) || null,
@@ -91,10 +131,17 @@ export async function GET(request: Request) {
         billingNotes: str(r.billing_notes) || null,
         submittedAt: str(r.submitted_at) || null,
         createdAt: str(r.created_at),
-      };
+      }];
     });
 
-    return NextResponse.json({ success: true, rows, total: rows.length });
+    return NextResponse.json({
+      success: true,
+      clinicianOnly,
+      canManage: !clinicianOnly,
+      practiceOptions: Array.from(practiceSet).sort().map((p) => ({ value: p, label: p })),
+      rows,
+      total: rows.length,
+    });
   } catch (e) {
     return NextResponse.json(
       { success: false, error: e instanceof Error ? e.message : "Failed" },

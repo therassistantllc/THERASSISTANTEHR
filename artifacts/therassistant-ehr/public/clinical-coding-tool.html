@@ -3705,7 +3705,8 @@ function initializeCodingHelper() {
   const icdCatEl = document.getElementById('icdCat');
   if (icdCatEl) icdCatEl.addEventListener('change', renderSymptomChecklist);
   renderSymptomChecklist();
-  pages = [...document.querySelectorAll('.page')];
+  const helperRoot = window.__THERA_HELPER_ROOT__ || document;
+  pages = [...helperRoot.querySelectorAll('.page')];
   ['screenUsed','substanceUse','plan_initial','plan_newFocus','plan_goalsRevised','mh_reassessment'].forEach(name => {
     document.querySelectorAll(`input[name="${name}"]`).forEach(el => {
       el.addEventListener('change', updateConditionalFollowUps);
