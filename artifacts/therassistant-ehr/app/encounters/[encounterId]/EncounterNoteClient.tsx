@@ -10,6 +10,7 @@ import ClaimReadinessSidebar, { ClaimReadinessCheck } from "@/components/encount
 import SignNoteModal from "@/components/encounter/SignNoteModal";
 import ClinicianJournalPanel, { ImportResult } from "@/components/encounter/ClinicianJournalPanel";
 import { DEFAULT_ORG_ID } from "@/lib/config";
+import { analyzeMedicaidDocumentation } from "@/lib/encounters/medicaidCodeDetection";
 import {
   CHECK_IN_SUBJECTIVE_MARKER,
   composeCheckInSubjectiveBlock,
@@ -20,6 +21,12 @@ type EncounterSummary = {
   success: boolean;
   error?: string;
   client?: { id: string; name: string; dateOfBirth?: string | null } | null;
+  coverage?: {
+    isMedicaid?: boolean;
+    primaryPayerName?: string | null;
+    primaryPayerType?: string | null;
+    primaryPlanName?: string | null;
+  } | null;
   encounter?: { id: string; appointment_id?: string | null; encounter_status?: string | null; service_date?: string | null; started_at?: string | null; ended_at?: string | null };
   appointment?: { appointment_type?: string | null; scheduled_start_at?: string | null; scheduled_end_at?: string | null; service_location?: string | null; telehealth_url?: string | null } | null;
   diagnoses?: Array<{ id: string; diagnosis_code?: string | null; diagnosis_description?: string | null; is_primary?: boolean | null }>;
@@ -128,6 +135,37 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
   // "finalized" = signed AND not currently being amended. Editor + Save/Sign
   // buttons read this; while amending, the editor unlocks for in-place edits.
   const finalized = isSigned && !amending;
+
+  const medicaidDocumentationText = useMemo(() => {
+    const sections = [
+      soapNote.subjective ? `Subjective: ${soapNote.subjective}` : "",
+      soapNote.objective ? `Objective: ${soapNote.objective}` : "",
+      soapNote.assessment ? `Assessment: ${soapNote.assessment}` : "",
+      soapNote.plan ? `Plan: ${soapNote.plan}` : "",
+      summary?.encounter?.service_date ? `Service date: ${summary.encounter.service_date}` : "",
+      summary?.encounter?.started_at ? `Start time: ${summary.encounter.started_at}` : "",
+      summary?.encounter?.ended_at ? `End time: ${summary.encounter.ended_at}` : "",
+      summary?.appointment?.service_location
+        ? `Location of Session: ${summary.appointment.service_location}`
+        : summary?.appointment?.telehealth_url
+          ? "Location of Session: Telehealth"
+          : "",
+    ];
+    return sections.filter(Boolean).join("\n");
+  }, [
+    soapNote,
+    summary?.encounter?.service_date,
+    summary?.encounter?.started_at,
+    summary?.encounter?.ended_at,
+    summary?.appointment?.service_location,
+    summary?.appointment?.telehealth_url,
+  ]);
+
+  const medicaidSuggestions = useMemo(() => {
+    if (!summary?.coverage?.isMedicaid) return null;
+    if (!medicaidDocumentationText.trim()) return null;
+    return analyzeMedicaidDocumentation(medicaidDocumentationText);
+  }, [summary?.coverage?.isMedicaid, medicaidDocumentationText]);
 
   const claimReadinessChecks = useMemo((): ClaimReadinessCheck[] => {
     return [
@@ -608,6 +646,12 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
             <h2>Visit Context</h2>
             <div className="detail-list">
               <p><strong>Client DOB:</strong> {formatDate(client?.dateOfBirth)}</p>
+              {summary.coverage?.isMedicaid ? (
+                <p>
+                  <strong>Coverage:</strong> Medicaid
+                  {summary.coverage.primaryPayerName ? ` (${summary.coverage.primaryPayerName})` : ""}
+                </p>
+              ) : null}
               <p><strong>Type:</strong> {appointment?.appointment_type ?? "Not listed"}</p>
               <p><strong>Start:</strong> {formatTime(encounter.started_at ?? appointment?.scheduled_start_at)}</p>
               <p><strong>End:</strong> {formatTime(encounter.ended_at ?? appointment?.scheduled_end_at)}</p>
@@ -615,6 +659,65 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
               <p><strong>Status:</strong> <span className={statusClass(encounter.encounter_status)}>{encounter.encounter_status ?? "not set"}</span></p>
             </div>
           </article>
+          {summary.coverage?.isMedicaid && medicaidSuggestions ? (
+            <article className="panel">
+              <h2>Medicaid Code Suggestions</h2>
+              <p className="muted" style={{ marginTop: 4 }}>
+                Live documentation cues shown only for Medicaid-covered clients.
+              </p>
+              {medicaidSuggestions.recommendations.filter((rec) => rec.action !== "do_not_suggest").length === 0 ? (
+                <p className="muted" style={{ marginBottom: 0 }}>
+                  No Medicaid assessment, screening, SUD assessment, or treatment-planning code is supported yet by the current note text.
+                </p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {medicaidSuggestions.recommendations
+                    .filter((rec) => rec.action !== "do_not_suggest")
+                    .map((rec) => (
+                      <div key={rec.code} style={{ borderTop: "1px solid var(--line)", paddingTop: 12 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+                          <strong>{rec.code} · {rec.label}</strong>
+                          <span className={rec.action === "suggest" ? "status status-green" : "status status-yellow"}>
+                            {rec.action === "suggest" ? "Suggest" : "Clarify"}
+                          </span>
+                        </div>
+                        <p style={{ margin: "6px 0 0 0", fontSize: 13 }}>
+                          {rec.explanation}
+                        </p>
+                        <p className="muted" style={{ margin: "6px 0 0 0", fontSize: 12 }}>
+                          Confidence: {rec.confidence.replaceAll("_", " ")} · Score: {rec.score}
+                        </p>
+                        {rec.missingElements.length > 0 ? (
+                          <p className="muted" style={{ margin: "6px 0 0 0", fontSize: 12 }}>
+                            Missing for higher confidence: {rec.missingElements.join(", ")}
+                          </p>
+                        ) : null}
+                        {rec.clarificationQuestion ? (
+                          <p style={{ margin: "6px 0 0 0", fontSize: 12 }}>
+                            <strong>Clarify:</strong> {rec.clarificationQuestion}
+                          </p>
+                        ) : null}
+                        {rec.documentationSuggestion ? (
+                          <p style={{ margin: "6px 0 0 0", fontSize: 12 }}>
+                            <strong>Document:</strong> {rec.documentationSuggestion}
+                          </p>
+                        ) : null}
+                      </div>
+                    ))}
+                </div>
+              )}
+              {medicaidSuggestions.globalWarnings.length > 0 ? (
+                <div style={{ marginTop: 12, borderTop: "1px solid var(--line)", paddingTop: 12 }}>
+                  <strong style={{ fontSize: 13 }}>Documentation warnings</strong>
+                  <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+                    {medicaidSuggestions.globalWarnings.map((warning) => (
+                      <li key={warning} style={{ fontSize: 12 }}>{warning}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </article>
+          ) : null}
           <ClaimReadinessSidebar checks={claimReadinessChecks} />
         </aside>
 

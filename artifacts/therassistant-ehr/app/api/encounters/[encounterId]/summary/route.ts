@@ -10,6 +10,10 @@ function fullName(client: DbRow | null | undefined) {
   return [first, last].filter(Boolean).join(" ") || "Unknown client";
 }
 
+function isMedicaidPayerType(value: unknown): boolean {
+  return typeof value === "string" && /medicaid|mcd/i.test(value);
+}
+
 export async function GET(request: Request, context: { params: Promise<{ encounterId: string }> }) {
   try {
     const supabase = createServerSupabaseAdminClient();
@@ -55,6 +59,27 @@ export async function GET(request: Request, context: { params: Promise<{ encount
           .maybeSingle()
       : { data: null };
 
+    const { data: policies } = await supabase
+      .from("insurance_policies")
+      .select("id, payer_id, plan_name, priority, active_flag, termination_date")
+      .eq("organization_id", organizationId)
+      .eq("client_id", encounter.client_id)
+      .is("archived_at", null)
+      .order("priority", { ascending: true })
+      .limit(5);
+
+    const primaryPolicy = (policies ?? []).find((policy) => policy.active_flag !== false) ?? policies?.[0] ?? null;
+
+    const { data: primaryPayer } = primaryPolicy?.payer_id
+      ? await supabase
+          .from("insurance_payers")
+          .select("id, payer_name, payer_type")
+          .eq("organization_id", organizationId)
+          .eq("id", primaryPolicy.payer_id)
+          .is("archived_at", null)
+          .maybeSingle()
+      : { data: null };
+
     const { data: diagnoses } = await supabase
       .from("encounter_diagnoses")
       .select("id, diagnosis_code, diagnosis_description, is_primary, sequence_number, present_on_claim")
@@ -93,6 +118,12 @@ export async function GET(request: Request, context: { params: Promise<{ encount
           }
         : null,
       appointment: appointment ?? null,
+      coverage: {
+        isMedicaid: isMedicaidPayerType(primaryPayer?.payer_type) || isMedicaidPayerType(primaryPayer?.payer_name) || isMedicaidPayerType(primaryPolicy?.plan_name),
+        primaryPayerName: primaryPayer?.payer_name ?? null,
+        primaryPayerType: primaryPayer?.payer_type ?? null,
+        primaryPlanName: primaryPolicy?.plan_name ?? null,
+      },
       diagnoses: diagnoses ?? [],
       serviceLines: serviceLines ?? [],
       clinicalNote: clinicalNote ?? null,
