@@ -241,12 +241,6 @@ const h0031Config: CodeConfig = {
   ],
   blockers: [
     {
-      label: "routine psychotherapy only",
-      category: "documentation_blocker",
-      weight: 100,
-      patterns: [regex("\\b(continue current interventions|no significant change since last session|maintained|on track)\\b")],
-    },
-    {
       label: "screening only",
       category: "documentation_blocker",
       weight: 100,
@@ -418,7 +412,7 @@ function buildExplanation(
   return `${config.code} was not recommended because documentation did not meet the conservative threshold for ${config.label}.${blockerText ? ` Limitation detected: ${blockerText}.` : ""}`;
 }
 
-function buildRecommendation(config: CodeConfig, sentences: string[], psychotherapyScore: number): CodeRecommendation {
+function buildRecommendation(config: CodeConfig, sentences: string[]): CodeRecommendation {
   const hardMatches = applyRules(sentences, config.hardTriggers);
   const softMatches = applyRules(sentences, config.softTriggers);
   const blockerMatches = applyRules(sentences, config.blockers);
@@ -429,10 +423,6 @@ function buildRecommendation(config: CodeConfig, sentences: string[], psychother
   const hasBlocker = blockerMatches.length > 0;
 
   let adjustedScore = rawScore;
-
-  if (!hasHardTrigger && psychotherapyScore >= 55 && ["H0031", "H0032"].includes(config.code)) {
-    adjustedScore -= 25;
-  }
 
   if (config.code === "H0032" && hasBlocker && !hasHardTrigger) {
     adjustedScore -= 30;
@@ -521,7 +511,7 @@ export function analyzeMedicaidDocumentation(inputText: string): MedicaidDetecti
   const psychotherapyScore = totalScore(psychotherapyIndicators);
 
   const recommendations = codeConfigs
-    .map((config) => buildRecommendation(config, sentences, psychotherapyScore))
+    .map((config) => buildRecommendation(config, sentences))
     .sort((a, b) => b.score - a.score);
 
   const globalWarnings: string[] = [];
