@@ -207,6 +207,39 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
     };
   }, [medicaidSuggestions]);
 
+  function buildCodingHelperReport() {
+    const recommendationLines =
+      medicaidSuggestions?.recommendations
+        .filter((rec) => rec.action !== "do_not_suggest")
+        .map((rec) => `${rec.code}: ${rec.explanation}`) ?? [];
+
+    return {
+      id: `encounter-${encounterId}-${Date.now()}`,
+      date: new Date().toISOString().slice(0, 10),
+      codes: codingHelperSummary.codes.join(", "),
+      auditSummary: codingHelperSummary.auditSummary,
+      formSummary: [
+        `Service date: ${summary?.encounter?.service_date ?? "not documented"}`,
+        `Primary diagnosis count: ${diagnoses.filter((d) => d.is_primary).length}`,
+        `Service lines coded: ${serviceLines.filter((s) => !!s.cpt_hcpcs_code).length}`,
+        recommendationLines.length > 0 ? `Recommendations:\n${recommendationLines.join("\n")}` : "",
+        soapNote.subjective ? `Subjective: ${soapNote.subjective}` : "",
+        soapNote.objective ? `Objective: ${soapNote.objective}` : "",
+        soapNote.assessment ? `Assessment: ${soapNote.assessment}` : "",
+        soapNote.plan ? `Plan: ${soapNote.plan}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+    };
+  }
+
+  useEffect(() => {
+    if (!showCodingHelper) return;
+    setGeneratedCodingReport(buildCodingHelperReport());
+    // Keep modal responsive to live note edits while open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showCodingHelper, soapNote, diagnoses, serviceLines, medicaidSuggestions]);
+
   const claimReadinessChecks = useMemo((): ClaimReadinessCheck[] => {
     return [
       { label: "Primary diagnosis selected", isComplete: diagnoses.some((d) => d.is_primary), required: true },
@@ -500,16 +533,15 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
     setMessage(null);
 
     try {
-      if (!generatedCodingReport) {
-        throw new Error("Generate the coding report first.");
-      }
+      const reportToSave = generatedCodingReport ?? buildCodingHelperReport();
+      if (!generatedCodingReport) setGeneratedCodingReport(reportToSave);
 
       const response = await fetch(`/api/encounters/${encounterId}/coding-report`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           organizationId,
-          report: generatedCodingReport,
+          report: reportToSave,
         }),
       });
 
@@ -537,29 +569,7 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
   }
 
   function generateCodingHelperReport() {
-    const recommendationLines =
-      medicaidSuggestions?.recommendations
-        .filter((rec) => rec.action !== "do_not_suggest")
-        .map((rec) => `${rec.code}: ${rec.explanation}`) ?? [];
-
-    const report = {
-      id: `encounter-${encounterId}-${Date.now()}`,
-      date: new Date().toISOString().slice(0, 10),
-      codes: codingHelperSummary.codes.join(", "),
-      auditSummary: codingHelperSummary.auditSummary,
-      formSummary: [
-        `Service date: ${summary?.encounter?.service_date ?? "not documented"}`,
-        `Primary diagnosis count: ${diagnoses.filter((d) => d.is_primary).length}`,
-        `Service lines coded: ${serviceLines.filter((s) => !!s.cpt_hcpcs_code).length}`,
-        recommendationLines.length > 0 ? `Recommendations:\n${recommendationLines.join("\n")}` : "",
-        soapNote.subjective ? `Subjective: ${soapNote.subjective}` : "",
-        soapNote.objective ? `Objective: ${soapNote.objective}` : "",
-        soapNote.assessment ? `Assessment: ${soapNote.assessment}` : "",
-        soapNote.plan ? `Plan: ${soapNote.plan}` : "",
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-    };
+    const report = buildCodingHelperReport();
 
     setGeneratedCodingReport(report);
     setMessage("Coding helper report generated. Review and save when ready.");
