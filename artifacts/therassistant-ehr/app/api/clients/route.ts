@@ -218,7 +218,7 @@ export async function GET(request: Request) {
     const organizationId = guard.organizationId;
     const q = value(searchParams.get("q")).toLowerCase();
 
-    const baseColumns = "id, first_name, last_name, preferred_name, email, phone, archived_at, deceased_at, updated_at";
+    const baseColumns = "id, first_name, last_name, preferred_name, email, phone, archived_at, deceased_at, updated_at, primary_clinician_user_id";
     const fullColumns = `${baseColumns}, intake_status`;
 
     let clients: Row[] | null;
@@ -385,6 +385,7 @@ export async function GET(request: Request) {
         nextAppointmentAt: nextAppointment.get(id) ?? null,
         openWorkqueueCount: workqueueCounts.get(id) ?? 0,
         claimIssueCount: claimIssueCounts.get(id) ?? 0,
+        primaryClinicianUserId: client.primary_clinician_user_id ? String(client.primary_clinician_user_id) : null,
       };
     });
 

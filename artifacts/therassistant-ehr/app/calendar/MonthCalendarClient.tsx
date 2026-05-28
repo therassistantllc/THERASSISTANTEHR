@@ -215,6 +215,7 @@ export default function MonthCalendarClient() {
   const [checkingIn, setCheckingIn] = useState(false);
   const checkingInRef = useRef(false);
 
+  const [calendarView, setCalendarView] = useState<"month" | "agenda">("month");
   const [collectOpen, setCollectOpen] = useState(false);
   const [collectPrefill, setCollectPrefill] = useState<{ amount: number; note: string; title: string } | null>(null);
   const [cancelOpen, setCancelOpen] = useState(false);
@@ -595,6 +596,41 @@ export default function MonthCalendarClient() {
               Clear
             </button>
           ) : null}
+          {/* View toggle */}
+          <div style={{ display: "flex", gap: 2, background: "#f1f5f9", borderRadius: 6, padding: 2 }}>
+            <button
+              type="button"
+              onClick={() => setCalendarView("month")}
+              style={{
+                padding: "4px 10px",
+                borderRadius: 4,
+                border: "none",
+                background: calendarView === "month" ? "#fff" : "transparent",
+                fontWeight: calendarView === "month" ? 600 : 400,
+                fontSize: 12,
+                cursor: "pointer",
+                boxShadow: calendarView === "month" ? "0 1px 2px rgba(0,0,0,.12)" : "none",
+              }}
+            >
+              Month
+            </button>
+            <button
+              type="button"
+              onClick={() => setCalendarView("agenda")}
+              style={{
+                padding: "4px 10px",
+                borderRadius: 4,
+                border: "none",
+                background: calendarView === "agenda" ? "#fff" : "transparent",
+                fontWeight: calendarView === "agenda" ? 600 : 400,
+                fontSize: 12,
+                cursor: "pointer",
+                boxShadow: calendarView === "agenda" ? "0 1px 2px rgba(0,0,0,.12)" : "none",
+              }}
+            >
+              Agenda
+            </button>
+          </div>
           <button className={styles.primaryBtn} onClick={() => setCreateOpen(true)}>
             + New appointment
           </button>
@@ -608,6 +644,17 @@ export default function MonthCalendarClient() {
           </div>
         ) : null}
 
+        {calendarView === "agenda" ? (
+          <AgendaView
+            appointments={visibleAppointments}
+            onSelectAppointment={setSelectedId}
+            onCollect={(appt) => {
+              setCollectPrefill({ amount: 0, note: "", title: `Collect — ${appt.clientName}` });
+              setCollectOpen(true);
+            }}
+          />
+        ) : (
+        <>
         <div className={styles.weekHeader}>
           {WEEKDAYS.map((d) => (
             <div key={d}>{d}</div>
@@ -688,6 +735,8 @@ export default function MonthCalendarClient() {
             );
           })}
         </div>
+        </>
+        )}
       </div>
 
       {selectedId ? (
@@ -1040,6 +1089,131 @@ export default function MonthCalendarClient() {
           }}
         />
       ) : null}
+    </div>
+  );
+}
+
+/* --- AgendaView component -------------------------------------------------- */
+
+function AgendaView({
+  appointments,
+  onSelectAppointment,
+  onCollect,
+}: {
+  appointments: ListAppointment[];
+  onSelectAppointment: (id: string) => void;
+  onCollect: (appt: ListAppointment) => void;
+}) {
+  const sorted = [...appointments].sort((a, b) =>
+    a.scheduledStartAt.localeCompare(b.scheduledStartAt),
+  );
+
+  // Group by date string YYYY-MM-DD
+  const groups: { dateLabel: string; items: ListAppointment[] }[] = [];
+  for (const appt of sorted) {
+    const dateStr = appt.scheduledStartAt.slice(0, 10);
+    const label = new Date(dateStr + "T00:00:00").toLocaleDateString(undefined, {
+      weekday: "long", month: "long", day: "numeric",
+    });
+    const last = groups[groups.length - 1];
+    if (last && last.dateLabel === label) {
+      last.items.push(appt);
+    } else {
+      groups.push({ dateLabel: label, items: [appt] });
+    }
+  }
+
+  if (groups.length === 0) {
+    return (
+      <div style={{ padding: "48px 24px", textAlign: "center", color: "#94A3B8", fontSize: 14 }}>
+        No appointments in view
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: "0 0 32px" }}>
+      {groups.map((g) => (
+        <div key={g.dateLabel}>
+          <div style={{
+            padding: "10px 16px",
+            fontSize: 12,
+            fontWeight: 700,
+            color: "#64748B",
+            textTransform: "uppercase",
+            letterSpacing: ".06em",
+            background: "#F8FAFC",
+            borderBottom: "1px solid #E2E8F0",
+            borderTop: "1px solid #E2E8F0",
+          }}>
+            {g.dateLabel}
+          </div>
+          {g.items.map((appt) => {
+            const typeLabel = apptTypeLabel(appt);
+            return (
+              <div
+                key={appt.id}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  padding: "10px 16px",
+                  borderBottom: "1px solid #F1F5F9",
+                  cursor: "pointer",
+                }}
+                onClick={() => onSelectAppointment(appt.id)}
+              >
+                <div style={{ minWidth: 70, fontSize: 13, fontWeight: 600, color: "#334155" }}>
+                  {fmtTime(appt.scheduledStartAt)}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, color: "#0F172A", fontSize: 14 }}>{appt.clientName}</div>
+                  <div style={{ fontSize: 12, color: "#64748B" }}>
+                    {[appt.providerName, typeLabel, appt.cptCode].filter(Boolean).join(" · ")}
+                  </div>
+                </div>
+                <span className={`${chipClassFor(appt.status)}`} style={{
+                  padding: "2px 8px",
+                  borderRadius: 999,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  background: "#F1F5F9",
+                  color: "#475569",
+                }}>
+                  {appt.status.replace(/_/g, " ")}
+                </span>
+                <div style={{ display: "flex", gap: 6 }} onClick={(e) => e.stopPropagation()}>
+                  {appt.encounterId ? (
+                    <a
+                      href={`/encounters/${appt.encounterId}`}
+                      style={{ fontSize: 12, padding: "3px 8px", borderRadius: 4, border: "1px solid #E2E8F0", color: "#334155", textDecoration: "none" }}
+                    >
+                      Open Note
+                    </a>
+                  ) : null}
+                  {appt.clientId ? (
+                    <button
+                      type="button"
+                      onClick={() => onCollect(appt)}
+                      style={{ fontSize: 12, padding: "3px 8px", borderRadius: 4, border: "1px solid #E2E8F0", background: "#fff", color: "#334155", cursor: "pointer" }}
+                    >
+                      Collect
+                    </button>
+                  ) : null}
+                  {appt.clientId ? (
+                    <a
+                      href={`/calendar?new=1&clientId=${appt.clientId}`}
+                      style={{ fontSize: 12, padding: "3px 8px", borderRadius: 4, border: "1px solid #E2E8F0", color: "#334155", textDecoration: "none" }}
+                    >
+                      Schedule Appointment
+                    </a>
+                  ) : null}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 }

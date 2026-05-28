@@ -426,7 +426,7 @@ export default function ClinicianAgendaClient() {
                       Collect
                     </a>
                   ) : null}
-                  {item.clientId ? <a className="button button-secondary" href={`/clients/${item.clientId}/appointments`}>Schedule Follow-up</a> : null}
+                  {item.clientId ? <a className="button button-secondary" href={`/clients/${item.clientId}/appointments`}>Schedule Appointment</a> : null}
                   {(item.serviceLocation === "telehealth" || item.telehealthUrl) ? (
                     <button
                       className="button button-primary"

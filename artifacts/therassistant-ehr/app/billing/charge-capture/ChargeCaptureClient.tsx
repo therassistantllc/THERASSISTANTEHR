@@ -216,6 +216,15 @@ function HeaderChildSuggestions({ parent, onPick }: { parent: string; onPick: (c
   );
 }
 
+function chargeStatusBadge(r: ListRow): { label: string; bg: string; color: string } {
+  if (r.tab === "held_charges") return { label: "Hold", bg: "#FFF7ED", color: "#C2410C" };
+  if (!r.encounter.noteSigned) return { label: "Unsigned", bg: "#FFFBEB", color: "#92400E" };
+  if (r.blockers.some((b) => /diag/i.test(String(b))) || r.codingAlerts.some((a) => /diag/i.test(a)) || !r.encounter.billingFieldsComplete) {
+    return { label: "Missing DX", bg: "#FEF2F2", color: "#991B1B" };
+  }
+  return { label: "Ready", bg: "#F0FDF4", color: "#166534" };
+}
+
 export default function ChargeCaptureClient() {
   const organizationId = useMemo(() => getOrganizationId(), []);
 
@@ -440,6 +449,18 @@ export default function ChargeCaptureClient() {
         header: "Charge amount",
         align: "right",
         cell: (r) => <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>{money(r.chargeAmount)}</span>,
+      },
+      {
+        id: "chargeBadge",
+        header: "Status",
+        cell: (r) => {
+          const s = chargeStatusBadge(r);
+          return (
+            <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: s.bg, color: s.color, whiteSpace: "nowrap" }}>
+              {s.label}
+            </span>
+          );
+        },
       },
       {
         id: "actionNeeded",

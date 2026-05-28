@@ -141,6 +141,22 @@ interface ClaimRow {
 // Each tab fetches from a different backend bucket. Adapters normalize
 // to the unified ClaimRow shape so the workspace UI stays consistent.
 
+/** Map raw API claim/clearinghouse statuses to user-facing labels. */
+function friendlyClaimStatus(raw: string | null | undefined): string {
+  switch ((raw ?? "").toLowerCase()) {
+    case "batched":       return "Submitted";
+    case "submitted":     return "Submitted";
+    case "accepted_oa":   return "Acknowledged";
+    case "rejected_oa":   return "Rejected";
+    case "accepted_payer": return "Processing";
+    case "adjudicated":   return "Adjudicated";
+    case "paid":          return "Adjudicated";
+    case "denied":        return "Denied";
+    case "partial":       return "Processing";
+    default:              return raw ? raw.replace(/_/g, " ") : "Submitted";
+  }
+}
+
 interface FetchContext {
   organizationId: string;
   chip?: ChipDef; // single active chip when applicable (for server-tab scoping)
@@ -193,7 +209,7 @@ async function fetchSubmitted(ctx: FetchContext): Promise<ClaimRow[]> {
       totalCharge: Number(r.chargeAmount ?? 0),
       balance: Number(r.chargeAmount ?? 0),
       daysOut: days,
-      issue: { label: r.clearinghouseStatus || r.claimStatus || "Submitted", tone: issueTone },
+      issue: { label: friendlyClaimStatus(r.clearinghouseStatus || r.claimStatus), tone: issueTone },
       lastAction: r.batchNumber ? `Batch ${r.batchNumber}` : `Submitted ${fmtRelative(r.submittedAt)}`,
       lastActionAt: r.submittedAt ?? null,
       assignee: null,

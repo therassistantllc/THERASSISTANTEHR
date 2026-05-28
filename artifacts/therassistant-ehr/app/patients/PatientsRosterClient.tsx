@@ -31,6 +31,7 @@ type ClientRecord = {
   nextAppointmentAt: string | null;
   openWorkqueueCount: number;
   claimIssueCount: number;
+  primaryClinicianUserId?: string | null;
 };
 
 type Metrics = {
@@ -149,6 +150,8 @@ export default function PatientsRosterClient({
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [needsFilter, setNeedsFilter] = useState<NeedsFilter>("all");
+  const [clinicianFilter, setClinicianFilter] = useState<string>("");
+  const [providerOptions, setProviderOptions] = useState<{ id: string; userId: string | null; name: string }[]>([]);
   const [payload, setPayload] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -200,6 +203,24 @@ export default function PatientsRosterClient({
   }, [organizationId]);
 
   useEffect(() => {
+    if (!organizationId) return;
+    fetch(`/api/providers?organizationId=${encodeURIComponent(organizationId)}`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((json) => {
+        if (json.success && Array.isArray(json.providers)) {
+          setProviderOptions(
+            (json.providers as { id: string; user_id?: string | null; provider_name?: string; display_name?: string }[]).map((p) => ({
+              id: p.id,
+              userId: p.user_id ?? null,
+              name: p.provider_name ?? p.display_name ?? p.id,
+            })),
+          );
+        }
+      })
+      .catch(() => { /* non-fatal */ });
+  }, [organizationId]);
+
+  useEffect(() => {
     function onDocClick(e: MouseEvent) {
       if (!menuRef.current) return;
       if (!menuRef.current.contains(e.target as Node)) setOpenMenuId(null);
@@ -214,6 +235,10 @@ export default function PatientsRosterClient({
   };
   const clients = payload?.clients ?? [];
   const filteredClients = clients.filter((c) => {
+    if (clinicianFilter) {
+      const provider = providerOptions.find((p) => p.id === clinicianFilter);
+      if (provider && provider.userId && c.primaryClinicianUserId !== provider.userId) return false;
+    }
     switch (needsFilter) {
       case "needs-eligibility": return c.eligibility.status === "none";
       case "stale-eligibility": return c.eligibility.status === "stale";
@@ -306,6 +331,33 @@ export default function PatientsRosterClient({
           Search
         </button>
       </div>
+
+      {/* ── Clinician filter ── */}
+      {providerOptions.length > 0 ? (
+        <div style={{ padding: "4px 0 8px", display: "flex", alignItems: "center", gap: 8 }}>
+          <label htmlFor="clinicianFilter" style={{ fontSize: 13, color: "#64748B", flexShrink: 0 }}>Clinician:</label>
+          <select
+            id="clinicianFilter"
+            value={clinicianFilter}
+            onChange={(e) => setClinicianFilter(e.target.value)}
+            style={{ padding: "4px 8px", fontSize: 13, borderRadius: 4, border: "1px solid #CBD5E1" }}
+          >
+            <option value="">All clinicians</option>
+            {providerOptions.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+          {clinicianFilter ? (
+            <button
+              type="button"
+              onClick={() => setClinicianFilter("")}
+              style={{ fontSize: 12, color: "#64748B", background: "none", border: "none", cursor: "pointer" }}
+            >
+              Clear
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       {error ? <div className={styles.errorBanner} role="alert">{error}</div> : null}
 

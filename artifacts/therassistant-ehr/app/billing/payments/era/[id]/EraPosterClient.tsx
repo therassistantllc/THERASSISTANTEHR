@@ -583,6 +583,12 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
             {batch.summary.blocked}
           </span>
         </div>
+        <div className={styles.summaryCell}>
+          <span className={styles.summaryLabel}>Pt responsibility</span>
+          <span className={styles.summaryValue}>
+            {currency(claimPayments.reduce((s, r) => s + (r.patientResponsibility || 0), 0))}
+          </span>
+        </div>
       </div>
 
       <div className={styles.posterBody}>
@@ -590,14 +596,15 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
           <table className={styles.postingTable}>
             <thead>
               <tr>
-                <th>Client / Claim</th>
-                <th>CLP01 / ICN</th>
+                <th>Patient / Claim</th>
                 <th>DOS</th>
+                <th>CPT/HCPCS</th>
                 <th className={styles.numCell}>Charge</th>
-                <th className={styles.numCell}>Paid</th>
+                <th className={styles.numCell}>Allowed</th>
+                <th className={styles.numCell}>Adjustment</th>
+                <th>CARC/RARC</th>
                 <th className={styles.numCell}>Pt resp</th>
-                <th>CAS</th>
-                <th>Suggestions</th>
+                <th className={styles.numCell}>Amt paid</th>
                 <th>Status</th>
                 <th>Actions</th>
               </tr>
@@ -630,21 +637,26 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                     }}
                   >
                     <td>
-                      {row.client?.displayName ?? <span className={styles.muted}>Unmatched client</span>}
+                      {row.client?.displayName ?? <span className={styles.muted}>Unmatched</span>}
                       <div className={`${styles.muted} ${styles.mono}`} style={{ fontSize: 10 }}>
-                        {row.professionalClaim?.claimNumber ?? "—"}
+                        {row.professionalClaim?.claimNumber ?? row.clp01ClaimControlNumber}
                       </div>
                     </td>
-                    <td>
-                      <div className={styles.mono}>{row.clp01ClaimControlNumber}</div>
-                      {row.payerClaimControlNumber ? (
-                        <div className={`${styles.muted} ${styles.mono}`} style={{ fontSize: 10 }}>
-                          ICN {row.payerClaimControlNumber}
-                        </div>
-                      ) : null}
-                    </td>
                     <td>{formatDate(row.professionalClaim?.dateOfServiceFrom)}</td>
+                    <td className={styles.mono} style={{ fontSize: 12 }}>
+                      {row.serviceLines.length > 0
+                        ? (row.serviceLines[0].procedureCode ?? row.serviceLines[0].procedure_code ?? "—")
+                        : "—"}
+                    </td>
                     <td className={styles.numCell}>{currency(row.totalCharge)}</td>
+                    <td className={styles.numCell}>
+                      {currency(row.serviceLines.length > 0 && row.serviceLines[0].allowed != null
+                        ? row.serviceLines[0].allowed
+                        : Math.max(0, row.paymentAmount + row.casAdjustments.reduce((s, a) => s + a.amount, 0)))}
+                    </td>
+                    <td className={styles.numCell}>
+                      {currency(row.casAdjustments.reduce((s, a) => s + a.amount, 0))}
+                    </td>
                     <td className={styles.numCell}>
                       <input
                         className={`${styles.inlineInput} ${
@@ -700,50 +712,10 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                         <span className={styles.muted}>—</span>
                       ) : (
                         row.casAdjustments.map((adj, i) => (
-                          <div key={i}>
-                            {adj.groupCode}-{adj.reasonCode} {currency(adj.amount)}
+                          <div key={i} title={adj.reasonCode ?? undefined}>
+                            {adj.groupCode}-{adj.reasonCode}
                           </div>
                         ))
-                      )}
-                    </td>
-                    <td>
-                      {row.suggestions.length === 0 ? (
-                        <span className={styles.muted}>—</span>
-                      ) : (
-                        <div className={styles.suggestionsList}>
-                          {row.suggestions.slice(0, 3).map((s, i) => (
-                            <div
-                              key={i}
-                              className={`${styles.suggestionRow} ${
-                                s.action === "review"
-                                  ? styles.review
-                                  : s.action === "block_until_acknowledged"
-                                  ? styles.block
-                                  : ""
-                              }`}
-                              title={s.reason}
-                            >
-                              <span className={styles.tinyLabel}>{s.category}</span>
-                              <span className={styles.mono} style={{ fontSize: 10 }}>
-                                {typeof s.suggestedValue === "number"
-                                  ? currency(s.suggestedValue)
-                                  : s.suggestedValue ?? ""}
-                              </span>
-                              <span className={styles.spacer} />
-                              {s.action !== "block_until_acknowledged" ? (
-                                <button
-                                  className={styles.btnGhost}
-                                  onClick={(ev) => {
-                                    ev.stopPropagation();
-                                    applySuggestion(rawRow, s);
-                                  }}
-                                >
-                                  Apply
-                                </button>
-                              ) : null}
-                            </div>
-                          ))}
-                        </div>
                       )}
                     </td>
                     <td>
@@ -768,15 +740,27 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                     <td>
                       <div className={styles.row}>
                         {row.claimMatchStatus !== "matched" ? (
-                          <button
-                            className={styles.btn}
-                            onClick={(ev) => {
-                              ev.stopPropagation();
-                              void openMatchModal(row.id);
-                            }}
-                          >
-                            Match…
-                          </button>
+                          <>
+                            <button
+                              className={styles.btn}
+                              onClick={(ev) => {
+                                ev.stopPropagation();
+                                void openMatchModal(row.id);
+                              }}
+                            >
+                              Match…
+                            </button>
+                            <button
+                              className={styles.btn}
+                              onClick={(ev) => {
+                                ev.stopPropagation();
+                                window.open(`/clients/new?prefill=era&eraClaimId=${row.id}`, "_blank");
+                              }}
+                              title="Create a new patient record for this ERA claim"
+                            >
+                              <Plus size={11} /> Add Patient
+                            </button>
+                          </>
                         ) : null}
                         {!isPosted ? (
                           <button
@@ -798,6 +782,31 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                 );
               })}
             </tbody>
+            <tfoot>
+              <tr style={{ background: "#F1F5F9", fontWeight: 600 }}>
+                <td colSpan={3} style={{ padding: "6px 8px", fontSize: 12 }}>Running Totals ({claimPayments.length} lines)</td>
+                <td className={styles.numCell} style={{ padding: "6px 4px", fontSize: 12 }}>{currency(claimPayments.reduce((s, r) => s + r.totalCharge, 0))}</td>
+                <td className={styles.numCell} style={{ padding: "6px 4px", fontSize: 12 }}>
+                  {currency(claimPayments.reduce((s, r) => s + (r.serviceLines[0]?.allowed ?? Math.max(0, r.paymentAmount + r.casAdjustments.reduce((a, c) => a + c.amount, 0))), 0))}
+                </td>
+                <td className={styles.numCell} style={{ padding: "6px 4px", fontSize: 12 }}>{currency(claimPayments.reduce((s, r) => s + r.casAdjustments.reduce((a, c) => a + c.amount, 0), 0))}</td>
+                <td />
+                <td className={styles.numCell} style={{ padding: "6px 4px", fontSize: 12 }}>{currency(claimPayments.reduce((s, r) => s + r.patientResponsibility, 0))}</td>
+                <td className={styles.numCell} style={{ padding: "6px 4px", fontSize: 12 }}>
+                  {(() => {
+                    const totalPaid = claimPayments.reduce((s, r) => s + r.paymentAmount, 0);
+                    const expectedTotal = batch.summary.totalPaymentAmount;
+                    const diff = Math.abs(totalPaid - expectedTotal);
+                    return (
+                      <span style={{ color: diff > 0.01 ? "#DC2626" : "#166534" }} title={diff > 0.01 ? `Balance warning: lines total ${currency(totalPaid)} vs ERA total ${currency(expectedTotal)}` : "Balanced"}>
+                        {currency(totalPaid)}{diff > 0.01 ? " ⚠" : ""}
+                      </span>
+                    );
+                  })()}
+                </td>
+                <td colSpan={2} />
+              </tr>
+            </tfoot>
           </table>
 
           <div className={styles.adjustmentsSection}>
