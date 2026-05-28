@@ -96,14 +96,20 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
     const suggestedCodes = parseCodes(report.codes);
     const auditSummary = typeof report.auditSummary === "string" ? report.auditSummary.trim() : "";
     const formSummary = typeof report.formSummary === "string" ? report.formSummary.trim() : "";
+    const hasStructuredAuditSummary = auditSummary.includes("\n");
+    const hasStructuredFormSummary = formSummary.includes("\n");
 
     const codingSupportBlock = [
       "",
       `Coding Support Report (${dateToken})`,
       `Report ID: ${reportId}`,
       suggestedCodes.length > 0 ? `Suggested codes: ${suggestedCodes.join(", ")}` : "Suggested codes: none",
-      auditSummary ? `Audit summary: ${auditSummary}` : "",
-      formSummary ? `Session summary:\n${formSummary}` : "",
+      auditSummary
+        ? (hasStructuredAuditSummary ? auditSummary : `Audit summary: ${auditSummary}`)
+        : "",
+      formSummary
+        ? (hasStructuredFormSummary ? formSummary : `Session summary:\n${formSummary}`)
+        : "",
     ]
       .filter(Boolean)
       .join("\n\n");

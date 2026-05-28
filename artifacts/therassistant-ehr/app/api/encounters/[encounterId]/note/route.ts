@@ -38,7 +38,10 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
     }
 
     const { encounterId } = await context.params;
-    const body = await request.json();
+    const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!body || typeof body !== "object") {
+      return NextResponse.json({ success: false, error: "Request body must be valid JSON" }, { status: 400 });
+    }
     const organizationId = body.organizationId ? String(body.organizationId) : "";
     const action = body.action ? String(body.action) : "save";
     const userId = body.userId ? String(body.userId) : null;

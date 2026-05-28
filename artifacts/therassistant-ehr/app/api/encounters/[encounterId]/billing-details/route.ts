@@ -84,7 +84,10 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
     if (!supabase) return NextResponse.json({ success: false, error: "Database connection not available" }, { status: 500 });
 
     const { encounterId } = await context.params;
-    const body = await request.json();
+    const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!body || typeof body !== "object") {
+      return NextResponse.json({ success: false, error: "Request body must be valid JSON" }, { status: 400 });
+    }
     const organizationId = text(body.organizationId);
     const diagnoses = Array.isArray(body.diagnoses) ? (body.diagnoses as DiagnosisInput[]) : [];
     const serviceLines = Array.isArray(body.serviceLines) ? (body.serviceLines as ServiceLineInput[]) : [];

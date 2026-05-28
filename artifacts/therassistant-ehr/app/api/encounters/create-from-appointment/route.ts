@@ -11,7 +11,10 @@ export async function POST(request: Request) {
     const supabase = createServerSupabaseAdminClient();
     if (!supabase) return NextResponse.json({ success: false, error: "Database connection not available" }, { status: 500 });
 
-    const body = await request.json();
+    const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!body || typeof body !== "object") {
+      return NextResponse.json({ success: false, error: "Request body must be valid JSON" }, { status: 400 });
+    }
     const appointmentId = body.appointmentId ? String(body.appointmentId) : "";
     const organizationId = body.organizationId ? String(body.organizationId) : "";
 

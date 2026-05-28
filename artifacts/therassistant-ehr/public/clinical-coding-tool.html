@@ -482,7 +482,7 @@ const CLINICIAN_ROLES = [];
     <section class="page" data-section="Functional Impact (Continued)" data-paths="mh integrated crisis case-management">
       <div class="page-card">
         <div class="page-body">
-          <div class="section-tag">Functional Impact</div>
+          <div class="section-tag">Functional Impact (Continued)</div>
 
           <div class="yn-row">
             <span class="yn-label">Did you ask about thoughts of harming themselves or others?</span>
@@ -566,7 +566,7 @@ const CLINICIAN_ROLES = [];
     <section class="page" data-section="Risk and Stability (Continued)" data-paths="mh integrated crisis case-management">
       <div class="page-card">
         <div class="page-body">
-          <div class="section-tag">Risk and Stability</div>
+          <div class="section-tag">Risk and Stability (Continued)</div>
 
           <div class="yn-row">
             <span class="yn-label">Did you update specific strategies — like CBT, mindfulness, skills training, etc.?</span>
@@ -1061,18 +1061,6 @@ const CLINICIAN_ROLES = [];
       <button class="btn modal-close" type="button" onclick="closeGuidanceModal()">Close</button>
     </div>
     <div id="guidanceModalBody"></div>
-  </div>
-</div>
-
-<div id="docToolModal" class="modal-backdrop" onclick="handleDocToolBackdrop(event)">
-  <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="docToolModalTitle">
-    <div class="modal-head">
-      <div>
-        <div id="docToolModalTitle" class="modal-title">Documentation Tool</div>
-      </div>
-      <button class="btn modal-close" type="button" onclick="closeDocToolModal()">Close</button>
-    </div>
-    <div id="docToolModalBody" class="result-copy">A standalone form is not available for this code yet. Review the guidance, then document the required elements in your note workflow.</div>
   </div>
 </div>
 
@@ -1801,6 +1789,17 @@ let visiblePages = [];
 let pageIndex = 0;
 let generatedCodeSet = new Set();
 let latestCodingReport = null;
+const CORE_QUESTION_SECTIONS = [
+  'Welcome',
+  'Session Intake',
+  'Presenting Issues',
+  'Functional Impact',
+  'Functional Impact (Continued)',
+  'Risk and Stability',
+  'Risk and Stability (Continued)',
+  'Review & Generate',
+  'Results'
+];
 
 function initLibraries(){
   const icdCat = document.getElementById('icdCat');
@@ -1836,17 +1835,11 @@ function getServicePath(){
 }
 
 function refreshVisiblePages(){
-  const path = getServicePath();
-  visiblePages = pages.filter(p => {
-    if(p.classList.contains('hidden')) return false;
-    const paths = p.dataset.paths;
-    if(!paths) return true;
-    return paths.split(/\s+/).includes(path);
-  });
+  visiblePages = pages.filter(p => CORE_QUESTION_SECTIONS.includes(p.dataset.section || ''));
   visiblePages.forEach(p => p.classList.remove('active'));
   if(pageIndex >= visiblePages.length) pageIndex = visiblePages.length - 1;
   if(pageIndex < 0) pageIndex = 0;
-  visiblePages[pageIndex].classList.add('active');
+  if(visiblePages[pageIndex]) visiblePages[pageIndex].classList.add('active');
   if(['Supporting Details','Review & Generate'].includes(visiblePages[pageIndex]?.dataset.section)){
     buildSummary();
   }
@@ -1858,7 +1851,7 @@ function updateProgress(){
   const current = pageIndex + 1;
   document.getElementById('progressText').textContent = `Question ${current} of ${total}`;
   document.getElementById('sectionText').textContent = visiblePages[pageIndex]?.dataset.section || '';
-  document.getElementById('progressBar').style.width = `${(current/total)*100}%`;
+  document.getElementById('progressBar').style.width = total ? `${(current/total)*100}%` : '0%';
 }
 
 function nextPage(){
@@ -1988,16 +1981,10 @@ function updateConditionalFollowUps(){
   const leadAnswers = leadPlanQuestions.map(name => radioVal(name));
   const leadAnswered = leadAnswers.every(Boolean);
   const noPlanChanges = leadAnswered && leadAnswers.every(answer => answer === 'no');
-  const showAdvancedPlan = !noPlanChanges;
+  const showAdvancedPlan = true;
 
   setQuestionRowVisible('plan_objectives', showAdvancedPlan);
   setSectionVisibleByName('Risk and Stability (Continued)', showAdvancedPlan);
-  if(!showAdvancedPlan){
-    ['plan_interventions','plan_frequency','plan_progress','plan_barriers','plan_collaboration','plan_reason']
-      .forEach(name => {
-        document.querySelectorAll(`input[name="${name}"]`).forEach(el => el.checked = false);
-      });
-  }
 
   const showAdvancedH0031 = mhReassessment !== 'no';
   const h0031MseBlock = document.getElementById('h0031_mse_appearance')?.closest('.logic-box');
@@ -2712,70 +2699,6 @@ function goToSection(sectionName){
   return true;
 }
 
-function getDocumentationToolLabel(code){
-  const map = {
-    H0031:'Open H0031 Documentation Tool',
-    H0032:'Open H0032 Documentation Tool',
-    H0001:'Open H0001 Documentation Tool',
-    H0002:'Open H0002 Documentation Tool',
-    PSYCH:'Open Psychotherapy Documentation Tool'
-  };
-  return map[code] || 'Open Documentation Tool';
-}
-
-function openEmbeddedDocumentation(sectionNames){
-  sectionNames.forEach(name => setSectionVisibleByName(name, true));
-  refreshVisiblePages();
-  return sectionNames.some(name => goToSection(name));
-}
-
-function openDocumentationTool(code){
-  const pageMap = {
-    'H0031': 'H0031.html',
-    'H0001': 'H0001.html',
-    'H0032': 'H0032.html',
-    'PSYCH': 'Psychotherapy.html'
-  };
-  const dest = pageMap[code];
-  if(dest){
-    try {
-      const state = captureFormState();
-      localStorage.setItem('docusistant_doc_session', JSON.stringify(state));
-    } catch(e){ console.warn('Could not save doc session:', e); }
-    window.location.href = dest;
-    return;
-  }
-  if(code === 'H0002'){
-    if(openEmbeddedDocumentation(['Screening Documentation','Care Direction','Supporting Details'])){
-      return;
-    }
-  }
-  // Fallback for codes without a dedicated tool yet
-  const title = document.getElementById('docToolModalTitle');
-  const body = document.getElementById('docToolModalBody');
-  if(title) title.textContent = getDocumentationToolLabel(code);
-  if(body) body.textContent = 'A standalone form is not available for this code yet. Review the guidance, then document the required elements in your note workflow.';
-  document.getElementById('docToolModal').classList.add('open');
-}
-
-function closeDocToolModal(){
-  document.getElementById('docToolModal').classList.remove('open');
-}
-
-function handleDocToolBackdrop(event){
-  if(event.target && event.target.id === 'docToolModal'){
-    closeDocToolModal();
-  }
-}
-
-function beginDocumentation(code){
-  openDocumentationTool(code);
-}
-
-function beginCombinedDocumentation(){
-  openDocumentationTool('H0001');
-}
-
 function buildResults(ruleResults, psych){
   const resultsList = document.getElementById('resultsList');
   resultsList.innerHTML = '';
@@ -2786,17 +2709,11 @@ function buildResults(ruleResults, psych){
 
   if(hasCombinedAssessmentPlan){
     anyRow = true;
-    const h0001Done = !!localStorage.getItem('docusistant_doc_completed_H0001');
-    const h0032Done = !!localStorage.getItem('docusistant_doc_completed_H0032');
     const combo = document.createElement('div');
     combo.className = 'combo-callout';
     combo.innerHTML = `
       <strong>H0001 and H0032 may both be supported.</strong>
-      <p>The coder identified both substance use assessment activity and treatment-plan activity. Open each documentation tool separately to complete service-specific documentation.</p>
-      <div style="display:flex;gap:10px;flex-wrap:wrap">
-        <button class="${h0001Done ? 'btn primary doc-completed' : 'btn primary'}" type="button" onclick="beginCombinedDocumentation()">${h0001Done ? '? H0001 Documented' : 'Open H0001 Documentation Tool'}</button>
-        <button class="${h0032Done ? 'btn primary doc-completed' : 'btn primary'}" type="button" onclick="openDocumentationTool('H0032')">${h0032Done ? '? H0032 Documented' : 'Open H0032 Documentation Tool'}</button>
-      </div>
+      <p>The coder identified both substance use assessment activity and treatment-plan activity. Use the code guidance details below to document each supported service in the encounter note.</p>
     `;
     resultsList.appendChild(combo);
   }
@@ -2890,9 +2807,7 @@ function buildResults(ruleResults, psych){
     const confidence = getConfidenceBadge(result);
     const risk = getDocumentationRisk(result);
     const tone = getCardTone(result, risk);
-    const missingNeeds = [...(result.requiredMissing || []).map(item => `${getConditionLabels([item])[0] || item}`), ...(result.complianceWarnings || [])];
     const supportGap = buildSupportGap(result);
-    const billingWarnings = getBillingWarnings(guidance);
     const topExplanation = result.status === 'blocked'
       ? getBlockedPlainLanguage(result)
       : buildTriggeredExplanation(result);
@@ -2912,7 +2827,7 @@ function buildResults(ruleResults, psych){
           <span class="result-kpi"><span class="metric-icon">R</span><span class="risk-pill ${risk.klass}">${escapeHtml(risk.label)}</span></span>
         </div>
         <div class="result-copy">${escapeHtml(topExplanation)}</div>
-        <div class="result-actions"><button class="${isDocCompleted ? 'btn primary doc-completed' : 'btn primary'}" type="button" onclick="openDocumentationTool('${result.code}')">${isDocCompleted ? '? ' + escapeHtml(getDocumentationToolLabel(result.code)) : escapeHtml(getDocumentationToolLabel(result.code))}</button><button class="btn" type="button" onclick="openCodeGuidance('${result.code}')">View Guidance</button></div>
+        <div class="result-actions"><button class="btn" type="button" onclick="openCodeGuidance('${result.code}')">View Guidance</button></div>
       </div>
       <details class="result-details">
         <summary>View Details</summary>
@@ -2920,14 +2835,6 @@ function buildResults(ruleResults, psych){
           <div class="detail-item">
             <div class="detail-title">Why It May Not Be Supported</div>
             <div class="result-copy">${escapeHtml(supportGap)}</div>
-          </div>
-          <div class="detail-item">
-            <div class="detail-title"><span class="metric-icon">M</span>Missing Documentation Needed</div>
-            <div class="result-copy">${escapeHtml(missingNeeds.length ? missingNeeds.join(' | ') : 'No missing documentation signals detected from the current answers.')}</div>
-          </div>
-          <div class="detail-item">
-            <div class="detail-title"><span class="metric-icon">W</span>Billing Compatibility Warnings</div>
-            <div class="result-copy">${escapeHtml(billingWarnings.join(' | '))}</div>
           </div>
           <div class="detail-item">
             <div class="detail-title">Legal Citations</div>
@@ -2969,25 +2876,11 @@ function buildResults(ruleResults, psych){
     resultsList.appendChild(group);
   }
 
-  const stronglySupported = allCodes.filter(r => r.status === 'suggest' && r.confidence === 'high');
-  const unsupported = allCodes.filter(r => r.status === 'blocked');
-  const hasExplicitDocGap = (r) => (r.requiredMissing || []).length > 0 || (r.complianceWarnings || []).length > 0;
-  const missingDocumentationNeeded = allCodes.filter(r =>
-    r.status !== 'blocked' && (
-      hasExplicitDocGap(r) ||
-      (r.status === 'suggest' && r.confidence === 'low')
-    )
-  );
-  const possibleAdditional = allCodes.filter(r =>
-    !stronglySupported.includes(r) &&
-    !unsupported.includes(r) &&
-    !missingDocumentationNeeded.includes(r)
-  );
+  const stronglySupported = allCodes.filter(r => r.status === 'suggest');
+  const possibleAdditional = [];
 
   addResultSection('Strongly Supported Codes', stronglySupported);
   addResultSection('Possible Additional Codes', possibleAdditional);
-  addResultSection('Unsupported / Blocked Codes', unsupported);
-  addResultSection('Missing Documentation Needed', missingDocumentationNeeded);
 
   if(psych && psych.code){
     anyRow = true;
@@ -2999,7 +2892,7 @@ function buildResults(ruleResults, psych){
         <span class="conf high">HIGH</span>
       </div>
       <div class="support"><span class="chip">Time-based psychotherapy code</span></div>
-      <div class="result-actions" style="margin-top:10px"><button class="${!!localStorage.getItem('docusistant_doc_completed_PSYCH') ? 'btn primary doc-completed' : 'btn primary'}" type="button" onclick="openDocumentationTool('PSYCH')">${!!localStorage.getItem('docusistant_doc_completed_PSYCH') ? '? Psychotherapy Documented' : 'Open Psychotherapy Documentation Tool'}</button></div>
+      <div class="result-actions" style="margin-top:10px"><button class="btn" type="button" onclick="openCodeGuidance('${psych.code}')">View Guidance</button></div>
     `;
     resultsList.appendChild(item);
   }
@@ -3014,12 +2907,8 @@ function buildResults(ruleResults, psych){
 
 function buildCodingAuditSummary(ruleResults, psych){
   const suggested = ruleResults.filter(r => r.status === 'suggest').map(r => r.code);
-  const blocked = ruleResults.filter(r => r.status === 'blocked').map(r => r.code);
-  const missing = ruleResults.filter(r => (r.requiredMissing || []).length || (r.complianceWarnings || []).length).map(r => r.code);
   const summary = [
-    `Suggested additional codes: ${suggested.length ? suggested.join(', ') : 'None'}`,
-    `Blocked codes: ${blocked.length ? blocked.join(', ') : 'None'}`,
-    `Codes with documentation gaps: ${missing.length ? [...new Set(missing)].join(', ') : 'None'}`,
+    `Supported codes: ${suggested.length ? suggested.join(', ') : 'None'}`,
     `Psychotherapy time-based code: ${psych && psych.code ? psych.code : 'Not supported by entered minutes'}`
   ].join('\n');
   const auditEl = document.getElementById('codingAuditSummary');
@@ -3171,298 +3060,71 @@ function buildComplianceWarningsPanel(ruleResults, flags){
   `;
 }
 
-/* ------------------------------------------------------------------
-   MISSED REVENUE OPPORTUNITIES PANEL
------------------------------------------------------------------- */
-function buildMissedRevenuePanel(ruleResults, flags){
-  const panel = document.getElementById('missedRevenuePanel');
-  if(!panel) return;
+function buildSupportedCodeNarrative(ruleResults, psych){
+  const supported = ruleResults.filter(r => r.status === 'suggest');
+  const sections = [];
 
-  const nameMap = {
-    H0002:'H0002 — Behavioral Health Screening',
-    H0031:'H0031 — Behavioral Health Assessment',
-    H0001:'H0001 — Alcohol / Drug Assessment',
-    H0032:'H0032 — Treatment Plan Development or Review',
-    T1016:'T1016 — Case Management / Crisis Services',
-    H0038:'H0038 — Peer Support Specialist Services',
-    H2017:'H2017 — Psychoeducational Services'
-  };
+  supported.forEach(result => {
+    const guidance = FORMAL_CODING_GUIDANCE[result.code];
+    if(!guidance) return;
 
-  // Codes the user was borderline on or were 1–3 points below threshold
-  const opportunities = ruleResults.filter(r => {
-    if(r.status === 'suggest') return false; // already captured
-    const rule = RULE_BY_CODE[r.code];
-    if(!rule) return false;
-    const threshold = rule.triggerThreshold || rule.highConfidenceThreshold || 5;
-    const ptsBelow = threshold - (r.score || 0);
-    return ptsBelow > 0 && ptsBelow <= 5 && r.status !== 'blocked';
+    const matchedSignals = [...new Set((result.support || []).map(signal => String(signal).replace(/\s*\(\+\d+\)$/, '')))].slice(0, 4);
+    const labels = getConditionLabels(matchedSignals).map(item => item.toLowerCase());
+    const supportLine = labels.length
+      ? `${result.code} is strongly supported because ${joinPretty(labels)} were documented.`
+      : `${result.code} is strongly supported based on documented session findings.`;
+
+    sections.push([
+      'Supported Codes',
+      `${guidance.code} \u2014 ${guidance.title}`,
+      guidance.potentialValue,
+      supportLine,
+      '',
+      'Legal Citations',
+      ...guidance.legalCitations,
+      '',
+      'Required Documentation',
+      ...guidance.requiredDocumentation,
+      '',
+      'Common Deficiencies',
+      ...guidance.commonDeficiencies,
+      '',
+      'Suggested Documentation Language',
+      guidance.suggestedDocumentationLanguage,
+      '',
+      'Medical Necessity Standard',
+      guidance.medicalNecessityStandard
+    ].join('\n'));
   });
 
-  // Also flag codes not evaluated at all because service path didn't include them
-  const path = getServicePath();
-  const unevaluated = [];
-  if(path === 'mh' && !flags.has('noSubstanceAssessment') && !flags.has('h0001_core_positive')) {
-    const h0001Rule = RULE_BY_CODE['H0001'];
-    if(h0001Rule && !ruleResults.find(r => r.code === 'H0001' && r.status === 'suggest')) {
-      unevaluated.push({ code:'H0001', reason:'If substance use assessment was also performed, H0001 may be billable alongside H0031. Answer the substance use questions on prior pages to evaluate.' });
+  if(psych && psych.code){
+    const psychGuidance = FORMAL_CODING_GUIDANCE[psych.code];
+    if(psychGuidance){
+      sections.push([
+        'Supported Codes',
+        `${psychGuidance.code} \u2014 ${psychGuidance.title}`,
+        psychGuidance.potentialValue,
+        `${psychGuidance.code} is strongly supported because documented session duration supports this psychotherapy time band.`,
+        '',
+        'Legal Citations',
+        ...psychGuidance.legalCitations,
+        '',
+        'Required Documentation',
+        ...psychGuidance.requiredDocumentation,
+        '',
+        'Common Deficiencies',
+        ...psychGuidance.commonDeficiencies,
+        '',
+        'Suggested Documentation Language',
+        psychGuidance.suggestedDocumentationLanguage,
+        '',
+        'Medical Necessity Standard',
+        psychGuidance.medicalNecessityStandard
+      ].join('\n'));
     }
   }
-  if(!ruleResults.find(r => r.code === 'H0002' && r.status === 'suggest') && !flags.has('validatedScreeningToolCompleted')) {
-    unevaluated.push({ code:'H0002', reason:'If a validated screening tool (PHQ-9, GAD-7, AUDIT, DAST, C-SSRS, etc.) was administered, H0002 may also be billable. Confirm and document the tool used, score, and clinical use.' });
-  }
 
-  if(opportunities.length === 0 && unevaluated.length === 0){
-    panel.style.display = 'none';
-    return;
-  }
-
-  panel.style.display = 'block';
-  let html = `
-    <div class="results-panel">
-      <div class="results-panel-head warn">
-        <span class="panel-icon">??</span>
-        Missed Revenue Opportunities
-      </div>
-      <div class="results-panel-body">
-  `;
-
-  opportunities.forEach(r => {
-    const guidance = FORMAL_CODING_GUIDANCE[r.code];
-    const rule = RULE_BY_CODE[r.code];
-    const threshold = rule ? (rule.triggerThreshold || rule.highConfidenceThreshold || 5) : 5;
-    const ptsBelow = threshold - (r.score || 0);
-    const matchedSignals = [...new Set((r.support || []).map(s => String(s).replace(/\s*\(\+\d+\)$/, '')))];
-    const labeledSignals = getConditionLabels(matchedSignals).slice(0, 3);
-    const suggestPrompts = (rule ? rule.suggestedQuestionPrompts : []).slice(0, 2);
-
-    html += `
-      <div class="missed-item">
-        <div class="missed-item-head">
-          <span class="missed-item-code">${escapeHtml(nameMap[r.code] || r.code)}</span>
-          ${guidance ? `<span class="missed-item-rev">${escapeHtml(guidance.potentialValue)}</span>` : ''}
-        </div>
-        <div class="missed-item-body">
-          Score was <strong>${r.score || 0}</strong> — threshold is <strong>${threshold}</strong> (${ptsBelow} point${ptsBelow !== 1 ? 's' : ''} away from recommendation).
-          ${labeledSignals.length ? ` Already documented: ${escapeHtml(labeledSignals.join(', '))}.` : ''}
-        </div>
-        ${suggestPrompts.length ? `
-          <div class="missed-gap">
-            <div class="missed-gap-title">Documentation that could close this gap</div>
-            <div class="missed-gap-items">
-              ${suggestPrompts.map(p => `<span class="gap-chip">${escapeHtml(p)}</span>`).join('')}
-            </div>
-          </div>` : ''}
-      </div>
-    `;
-  });
-
-  unevaluated.forEach(item => {
-    const guidance = FORMAL_CODING_GUIDANCE[item.code];
-    html += `
-      <div class="missed-item">
-        <div class="missed-item-head">
-          <span class="missed-item-code">${escapeHtml(nameMap[item.code] || item.code)}</span>
-          ${guidance ? `<span class="missed-item-rev">${escapeHtml(guidance.potentialValue)}</span>` : ''}
-        </div>
-        <div class="missed-item-body">${escapeHtml(item.reason)}</div>
-      </div>
-    `;
-  });
-
-  html += `</div></div>`;
-  panel.innerHTML = html;
-}
-
-/* ------------------------------------------------------------------
-   ICD-10 CO-OCCURRENCE SUGGESTIONS PANEL
------------------------------------------------------------------- */
-const ICD_RELATED = {
-  'F20–F29 Psychotic Disorders': [
-    { code:'F32.1', desc:'Major depressive disorder, single episode, moderate', reason:'Depressive episodes frequently co-occur with psychotic spectrum disorders.' },
-    { code:'F41.1', desc:'Generalized anxiety disorder', reason:'Anxiety is common in psychotic disorders and affects functioning and prognosis.' },
-    { code:'Z91.19', desc:'Patient\'s noncompliance with medical treatment', reason:'Medication non-adherence is a common clinical challenge in this population.' }
-  ],
-  'F30–F39 Mood Disorders': [
-    { code:'F41.1', desc:'Generalized anxiety disorder', reason:'Anxiety-depression comorbidity is highly prevalent and affects treatment response.' },
-    { code:'F43.10', desc:'Post-traumatic stress disorder, unspecified', reason:'Trauma history is common in mood disorder presentations.' },
-    { code:'R45.851', desc:'Suicidal ideation', reason:'If suicidal ideation was addressed, this symptom code should be documented separately.' },
-    { code:'Z63.5', desc:'Disruption of family by separation or divorce', reason:'Psychosocial stressors directly affect mood disorder severity and course.' }
-  ],
-  'F40–F48 Anxiety / Trauma / Stressor Disorders': [
-    { code:'F32.1', desc:'Major depressive disorder, single episode, moderate', reason:'Depression frequently co-occurs with anxiety and PTSD diagnoses.' },
-    { code:'F43.25', desc:'Adjustment disorder with mixed disturbance of emotions and conduct', reason:'Adjustment features may be present alongside primary anxiety diagnosis.' },
-    { code:'R45.7', desc:'State of emotional shock and stress, unspecified', reason:'If acute stress reaction elements were documented.' }
-  ],
-  'F10–F19 Substance-Related Disorders': [
-    { code:'F32.1', desc:'Major depressive disorder, single episode, moderate', reason:'Depression is highly comorbid with substance use disorders.' },
-    { code:'F41.1', desc:'Generalized anxiety disorder', reason:'Anxiety disorders frequently co-occur with substance use.' },
-    { code:'F43.10', desc:'PTSD, unspecified', reason:'Trauma is a common driver of substance use and should be documented separately.' },
-    { code:'Z87.891', desc:'Personal history of nicotine dependence', reason:'Tobacco history is relevant comorbidity in SUD treatment contexts.' }
-  ],
-  'F50–F59 Behavioral Syndromes': [
-    { code:'F32.1', desc:'Major depressive disorder, single episode, moderate', reason:'Eating disorders are significantly comorbid with depression.' },
-    { code:'F41.9', desc:'Anxiety disorder, unspecified', reason:'Anxiety comorbidity is common in behavioral syndrome presentations.' },
-    { code:'R45.88', desc:'Nonsuicidal self-harm', reason:'Self-injurious behavior should be coded separately from the eating disorder.' }
-  ],
-  'F60–F69 Personality / Behavioral': [
-    { code:'F32.1', desc:'MDD, single episode, moderate', reason:'Mood episodes frequently co-occur with personality disorder diagnoses.' },
-    { code:'F43.10', desc:'PTSD, unspecified', reason:'Trauma history is strongly associated with personality disorder diagnoses.' },
-    { code:'R45.851', desc:'Suicidal ideation', reason:'If SI was assessed, document it separately for accuracy and compliance.' }
-  ],
-  'F90–F98 Childhood / Neurodevelopmental': [
-    { code:'F32.1', desc:'MDD (if present)', reason:'Depressive comorbidity affects ADHD and ODD treatment planning.' },
-    { code:'F41.1', desc:'Generalized anxiety disorder', reason:'Anxiety commonly co-presents with ADHD.' },
-    { code:'Z62.820', desc:'Parent-child relational problem', reason:'Family dynamics often drive behavioral presentations in youth.' }
-  ],
-  'R45 Symptom Codes': [
-    { code:'F41.9', desc:'Anxiety disorder, unspecified', reason:'When symptom codes are primary, consider whether a full DSM-5 diagnosis is also supportable.' },
-    { code:'F32.0', desc:'MDD, single episode, mild', reason:'Mood symptoms may warrant a diagnosable condition code alongside symptom coding.' }
-  ]
-};
-
-function buildIcdSuggestionsPanel(){
-  const panel = document.getElementById('icdSuggestionsPanel');
-  if(!panel) return;
-
-  const icdCat = val('icdCat') || document.getElementById('icdCat')?.value || '';
-  const icdCode = val('icdCode') || document.getElementById('icdCode')?.value || '';
-  const sdoh = val('sdoh') || document.getElementById('sdoh')?.value || '';
-  const related = ICD_RELATED[icdCat] || [];
-
-  const suggestions = [];
-
-  // Related codes
-  related.forEach(r => {
-    if(icdCode && icdCode.startsWith(r.code.split('.')[0])) return; // Skip if already selected
-    suggestions.push(r);
-  });
-
-  // Z-code suggestion if SDOH not documented
-  if(sdoh.startsWith('None') || !sdoh){
-    suggestions.push({
-      code: 'Z56.9 / Z59./ Z63.',
-      desc: 'Psychosocial stressor / Z code not documented',
-      reason: 'If any housing, employment, relationship, legal, or financial stressor was discussed, a Z-code should be added to the claim to support medical necessity and demonstrate contextual factors.'
-    });
-  }
-
-  if(suggestions.length === 0){
-    panel.style.display = 'none';
-    return;
-  }
-
-  panel.style.display = 'block';
-  panel.innerHTML = `
-    <div class="results-panel">
-      <div class="results-panel-head info">
-        <span class="panel-icon">???</span>
-        ICD-10 Co-Occurrence &amp; Specifier Suggestions
-      </div>
-      <div class="results-panel-body">
-        ${suggestions.slice(0, 5).map(s => `
-          <div class="icd-suggestion-row">
-            <span class="icd-code">${escapeHtml(s.code)}</span>
-            <div>
-              <div class="icd-desc">${escapeHtml(s.desc)}</div>
-              <div class="icd-reason">${escapeHtml(s.reason)}</div>
-            </div>
-          </div>
-        `).join('')}
-        <div style="font-size:.6875rem;color:var(--muted);margin-top:6px">These suggestions are informational. Clinical judgment is required before adding any diagnosis code. Verify DSM-5 criteria are met.</div>
-      </div>
-    </div>
-  `;
-}
-
-/* ------------------------------------------------------------------
-   MODIFIER RECOMMENDATIONS PANEL
------------------------------------------------------------------- */
-const MODIFIERS = [
-  { code:'GT',  label:'Interactive Audio-Visual Telehealth',       desc:'Use when services were delivered via real-time, two-way audio-video technology. Required for synchronous telehealth on most Colorado Medicaid BH claims.', paths:['mh','sud','integrated','crisis','case-management','peer-support','psychoeducation'], priority:'high', compat:'All BH service codes' },
-  { code:'95',  label:'Synchronous Telehealth (CY2023+ Parity)',    desc:'Alternative to GT for some payers under telehealth parity. Verify payer preference — use GT or 95, not both.', paths:['mh','sud','integrated','crisis','case-management','peer-support','psychoeducation'], priority:'medium', compat:'Payer-dependent' },
-  { code:'HO',  label:'Master\'s Level',                            desc:'Required when services are provided by a master\'s-level clinician (LCSW, LPC, LMFT). Colorado Medicaid requires credential-level modifiers for BH billing.', paths:['mh','sud','integrated','crisis','psychoeducation'], priority:'high', compat:'H0031, H0032, H0001, H0002, 90837/90834/90832' },
-  { code:'HP',  label:'Doctoral Level',                             desc:'Required when services are provided by a doctoral-level clinician (PhD, PsyD, EdD). Use in place of HO.', paths:['mh','sud','integrated','crisis','psychoeducation'], priority:'high', compat:'H0031, H0032, H0001, H0002, 90837/90834/90832' },
-  { code:'HN',  label:'Bachelor\'s Level',                          desc:'Required when services are provided by a bachelor\'s-level staff under supervision. Reimbursement may differ from master\'s-level services.', paths:['mh','sud','integrated','case-management','peer-support'], priority:'high', compat:'H0031, H0032, H0001, T1016, H0038' },
-  { code:'HF',  label:'Substance Abuse Program',                    desc:'Required when the service is delivered within a certified substance abuse program context.', paths:['sud','integrated'], priority:'high', compat:'H0001, H0031, H0032' },
-  { code:'HA',  label:'Child / Adolescent Program',                 desc:'Use when services are delivered in a child or adolescent program context. May affect reimbursement rate.', paths:['mh','integrated'], priority:'medium', compat:'H0031, H0032, 90837/90834' },
-  { code:'HQ',  label:'Group Setting',                              desc:'Required when services are furnished in a group setting. Do not use for individual sessions.', paths:['mh','sud','integrated','psychoeducation','peer-support'], priority:'medium', compat:'H0031, H2017, H0038' },
-  { code:'HV',  label:'Family with Identified Client',              desc:'Use when a session includes the identified client together with family members or a significant other.', paths:['mh','integrated'], priority:'medium', compat:'90837, H0031' },
-  { code:'HT',  label:'Multi-Disciplinary Team',                    desc:'Use when services are delivered as part of a multi-disciplinary treatment team (e.g., ACT team, PACT model).', paths:['integrated','crisis','case-management'], priority:'medium', compat:'T1016, H0031' },
-  { code:'HW',  label:'Residential Setting',                        desc:'Use when services are furnished in a residential program or residential treatment facility.', paths:['sud','integrated','mh'], priority:'medium', compat:'H0001, H0031, H0032' },
-  { code:'U1',  label:'Co-Occurring MH/SUD (Colorado-Specific)',    desc:'Colorado-specific modifier for services addressing co-occurring mental health and substance use disorder. Verify current HCPF guidance before using.', paths:['integrated','sud'], priority:'medium', compat:'H0031, H0001' }
-];
-
-function buildModifierSuggestionsPanel(){
-  const panel = document.getElementById('modifierPanel');
-  if(!panel) return;
-
-  const path = getServicePath();
-
-  // Pull session context to detect telehealth
-  let isTelehealth = false;
-  try {
-    const ctx = JSON.parse(localStorage.getItem('docusistant_new_session') || '{}');
-    isTelehealth = (ctx.workflowPath || '').toLowerCase().includes('telehealth') ||
-                   (ctx.serviceModality || '').toLowerCase().includes('telehealth') ||
-                   (ctx.location || '').toLowerCase().includes('telehealth');
-  } catch(e) {}
-
-  const applicable = MODIFIERS.filter(m => {
-    if(!m.paths.includes(path) && !m.paths.includes('all')) return false;
-    // Always show provider-level modifiers (HO/HP/HN)
-    if(['HO','HP','HN'].includes(m.code)) return true;
-    // GT/95 only if telehealth is indicated or unknown (remind them)
-    if(m.code === 'GT' || m.code === '95') return true;
-    // SUD-specific
-    if(m.code === 'HF' && (path === 'sud' || path === 'integrated')) return true;
-    // Group only if relevant
-    if(m.code === 'HQ') return path === 'psychoeducation' || path === 'peer-support';
-    return m.paths.includes(path);
-  });
-
-  if(applicable.length === 0){
-    panel.style.display = 'none';
-    return;
-  }
-
-  const high = applicable.filter(m => m.priority === 'high');
-  const medium = applicable.filter(m => m.priority === 'medium');
-
-  panel.style.display = 'block';
-  panel.innerHTML = `
-    <div class="results-panel">
-      <div class="results-panel-head neutral">
-        <span class="panel-icon">???</span>
-        Colorado Medicaid Modifier Recommendations
-      </div>
-      <div class="results-panel-body">
-        ${high.length ? `<div style="font-size:.6875rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Required / High Priority</div>` : ''}
-        <div class="modifier-grid">
-          ${high.map(m => renderModifierCard(m)).join('')}
-        </div>
-        ${medium.length ? `
-          <div style="font-size:.6875rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:14px 0 6px">Situational Modifiers</div>
-          <div class="modifier-grid">
-            ${medium.map(m => renderModifierCard(m)).join('')}
-          </div>
-        ` : ''}
-        <div style="font-size:.6875rem;color:var(--muted);margin-top:8px">Modifier requirements vary by payer. Always verify with Colorado HCPF billing guidelines and your organization's credentialing specifications.</div>
-      </div>
-    </div>
-  `;
-}
-
-function renderModifierCard(m){
-  return `
-    <div class="modifier-card">
-      <div class="modifier-card-head">
-        <span class="modifier-code ${m.priority === 'high' ? 'modifier-priority-high' : 'modifier-priority-medium'}">${escapeHtml(m.code)}</span>
-        <span class="modifier-compat">${escapeHtml(m.compat)}</span>
-      </div>
-      <div class="modifier-label">${escapeHtml(m.label)}</div>
-      <div class="modifier-desc">${escapeHtml(m.desc)}</div>
-    </div>
-  `;
+  return sections.join('\n\n\n');
 }
 
 function generateAll(){
@@ -3511,13 +3173,26 @@ function generateAll(){
     buildEstimatedRevenue(ruleResults);
     const auditSummary = buildCodingAuditSummary(ruleResults, psych);
     buildComplianceWarningsPanel(ruleResults, flags);
-    buildMissedRevenuePanel(ruleResults, flags);
-    buildIcdSuggestionsPanel();
-    buildModifierSuggestionsPanel();
+    const missedRevenuePanel = document.getElementById('missedRevenuePanel');
+    if(missedRevenuePanel){
+      missedRevenuePanel.style.display = 'none';
+      missedRevenuePanel.innerHTML = '';
+    }
+    const icdSuggestionsPanel = document.getElementById('icdSuggestionsPanel');
+    if(icdSuggestionsPanel){
+      icdSuggestionsPanel.style.display = 'none';
+      icdSuggestionsPanel.innerHTML = '';
+    }
+    const modifierPanel = document.getElementById('modifierPanel');
+    if(modifierPanel){
+      modifierPanel.style.display = 'none';
+      modifierPanel.innerHTML = '';
+    }
 
     const suggestedCodes = ruleResults.filter(r => r.status === 'suggest').map(r => r.code);
     if(psych && psych.code) suggestedCodes.push(psych.code);
     const selectedCodesText = suggestedCodes.join(', ');
+    const supportedNarrative = buildSupportedCodeNarrative(ruleResults, psych);
 
     const codeDetails = ruleResults.filter(r => r.status === 'suggest').map(r => {
       const guidance = FORMAL_CODING_GUIDANCE[r.code];
@@ -3571,8 +3246,8 @@ function generateAll(){
       revenue: document.getElementById('estimatedRevenue')?.textContent || '',
       status: 'Draft',
       provider: '',
-      auditSummary,
-      formSummary,
+      auditSummary: supportedNarrative || auditSummary,
+      formSummary: '',
       codeDetails
     };
 
