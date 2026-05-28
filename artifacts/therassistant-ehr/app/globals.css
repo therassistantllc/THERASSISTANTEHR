@@ -2,18 +2,18 @@
 
 :root {
   color-scheme: light;
-  --navy: #5f7f69;
-  --navy-soft: #6d8f78;
-  --sage: #6f927a;
-  --sage-soft: #f2f7f3;
-  --sage-mid: #d7e4da;
-  --line: #d6e1d9;
-  --text: #31463a;
-  --muted: #658173;
+  --navy: #2f4858;
+  --navy-soft: #6b9080;
+  --sage: #6b9080;
+  --sage-soft: #d9e4dd;
+  --sage-mid: #d9e4dd;
+  --line: #d9e4dd;
+  --text: #2f4858;
+  --muted: #6b9080;
   --danger: #b02020;
   --warning: #7a5000;
-  --success: #3f6f52;
-  --background: #f5f8f5;
+  --success: #6b9080;
+  --background: #f7faf9;
   --card: #fcfefd;
   --nav-height: 44px;
   --font-sans: var(--font-inter), "Inter", "Segoe UI", "Helvetica Neue", sans-serif;
