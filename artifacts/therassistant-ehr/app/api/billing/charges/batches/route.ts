@@ -105,7 +105,7 @@ export async function GET(request: Request) {
     const { data: claimRows } = claimIds.length
         ? await supabase
           .from("professional_claims")
-          .select("id, claim_number, claim_status, total_charge, payer_profile_id, appointment_id")
+        .select("id, claim_number, claim_status, total_charge, payer_profile_id, appointment_id, patient_id, client_id")
           .eq("organization_id", guard.organizationId)
           .in("id", claimIds)
           .is("archived_at", null)
@@ -113,6 +113,7 @@ export async function GET(request: Request) {
 
     const claims = (claimRows ?? []) as DbRow[];
     const appointmentIds = [...new Set(claims.map((c) => text(c.appointment_id)).filter(Boolean))];
+    const clientIds = [...new Set(claims.map((c) => text(c.patient_id) || text(c.client_id)).filter(Boolean))];
 
     const { data: appointmentRows } = appointmentIds.length
         ? await supabase
@@ -120,6 +121,33 @@ export async function GET(request: Request) {
           .select("id, provider_id, provider_location_id")
           .eq("organization_id", guard.organizationId)
           .in("id", appointmentIds)
+      : { data: [] as DbRow[] };
+
+    const providerIds = [...new Set(((appointmentRows ?? []) as DbRow[]).map((a) => text(a.provider_id)).filter(Boolean))];
+
+    const { data: providerRows } = providerIds.length
+      ? await supabase
+          .from("providers")
+          .select("id, first_name, last_name, display_name")
+          .eq("organization_id", guard.organizationId)
+          .in("id", providerIds)
+      : { data: [] as DbRow[] };
+
+    const { data: clientRows } = clientIds.length
+      ? await supabase
+          .from("clients")
+          .select("id, first_name, last_name")
+          .eq("organization_id", guard.organizationId)
+          .in("id", clientIds)
+      : { data: [] as DbRow[] };
+
+    const { data: serviceLineRows } = claimIds.length
+      ? await supabase
+          .from("professional_claim_service_lines")
+          .select("id, claim_id, line_number, service_date_from, procedure_code, charge_amount")
+          .eq("organization_id", guard.organizationId)
+          .in("claim_id", claimIds)
+          .is("archived_at", null)
       : { data: [] as DbRow[] };
 
     const { data: payerRows } = await supabase
@@ -130,7 +158,18 @@ export async function GET(request: Request) {
 
     const claimById = new Map<string, DbRow>(claims.map((c) => [text(c.id), c]));
     const appointmentById = new Map<string, DbRow>(((appointmentRows ?? []) as DbRow[]).map((a) => [text(a.id), a]));
+    const providerById = new Map<string, DbRow>(((providerRows ?? []) as DbRow[]).map((p) => [text(p.id), p]));
+    const clientById = new Map<string, DbRow>(((clientRows ?? []) as DbRow[]).map((c) => [text(c.id), c]));
     const payerNameById = new Map<string, string>(((payerRows ?? []) as DbRow[]).map((p) => [text(p.id), text(p.payer_name) || "Payer"]));
+    const serviceLinesByClaimId = new Map<string, DbRow[]>();
+
+    for (const line of (serviceLineRows ?? []) as DbRow[]) {
+      const claimId = text(line.claim_id);
+      if (!claimId) continue;
+      const group = serviceLinesByClaimId.get(claimId) ?? [];
+      group.push(line);
+      serviceLinesByClaimId.set(claimId, group);
+    }
 
     const practiceSet = new Set<string>();
 
@@ -140,6 +179,15 @@ export async function GET(request: Request) {
       status: string;
       totalCharge: number;
       practiceId: string | null;
+      patientName: string;
+      providerName: string;
+      serviceLines: Array<{
+        id: string;
+        lineNumber: number;
+        dateOfService: string | null;
+        procedureCode: string;
+        chargeAmount: number;
+      }>;
     }>>();
 
     for (const link of (linkRows ?? []) as DbRow[]) {
@@ -149,6 +197,26 @@ export async function GET(request: Request) {
       const appt = appointmentById.get(text(claim.appointment_id));
       const claimProviderId = text(appt?.provider_id);
       const practiceId = text(appt?.provider_location_id) || null;
+      const provider = providerById.get(claimProviderId);
+      const providerName =
+        text(provider?.display_name)
+        || [text(provider?.first_name), text(provider?.last_name)].filter(Boolean).join(" ")
+        || "—";
+
+      const client = clientById.get(text(claim.patient_id) || text(claim.client_id));
+      const patientName = client
+        ? [text(client.first_name), text(client.last_name)].filter(Boolean).join(" ") || "Unknown Client"
+        : "Unknown Client";
+
+      const serviceLines = (serviceLinesByClaimId.get(text(claim.id)) ?? [])
+        .map((line) => ({
+          id: text(line.id) || `${text(claim.id)}-${text(line.line_number) || "1"}`,
+          lineNumber: Number(line.line_number ?? 0) || 0,
+          dateOfService: text(line.service_date_from) || null,
+          procedureCode: text(line.procedure_code) || "—",
+          chargeAmount: money(line.charge_amount),
+        }))
+        .sort((a, b) => a.lineNumber - b.lineNumber);
 
       if (practiceId) practiceSet.add(practiceId);
       if (clinicianOnly && providerId && claimProviderId !== providerId) continue;
@@ -161,6 +229,9 @@ export async function GET(request: Request) {
         status: text(claim.claim_status),
         totalCharge: money(claim.total_charge),
         practiceId,
+        patientName,
+        providerName,
+        serviceLines,
       });
       claimsByBatch.set(batchId, out);
     }
@@ -188,11 +259,62 @@ export async function GET(request: Request) {
       })
       .filter((b) => b.claimCount > 0);
 
+    const chargeRows = outBatches.flatMap((batch) =>
+      batch.claims.flatMap((claim) => {
+        if (!claim.serviceLines.length) {
+          return [
+            {
+              chargeId: `${claim.id}-1`,
+              claimId: claim.id,
+              patientName: claim.patientName,
+              dateOfService: null,
+              providerName: claim.providerName,
+              cptCode: "—",
+              billedAmount: claim.totalCharge,
+              status: claim.status,
+              batchId: batch.batchNumber,
+              submitDate: batch.submittedAt,
+              notes: "Auto-batched by payer/TIN",
+            },
+          ];
+        }
+
+        return claim.serviceLines.map((line) => ({
+          chargeId: line.id,
+          claimId: claim.id,
+          patientName: claim.patientName,
+          dateOfService: line.dateOfService,
+          providerName: claim.providerName,
+          cptCode: line.procedureCode,
+          billedAmount: line.chargeAmount,
+          status: claim.status,
+          batchId: batch.batchNumber,
+          submitDate: batch.submittedAt,
+          notes: "Auto-batched by payer/TIN",
+        }));
+      }),
+    );
+
+    const totalUnbilledCharges = Math.round(
+      chargeRows
+        .filter((row) => !batches.some((b) => text(b.batch_number) === row.batchId && ["submitted", "accepted"].includes(text(b.batch_status).toLowerCase())))
+        .reduce((sum, row) => sum + Number(row.billedAmount ?? 0), 0)
+      * 100,
+    ) / 100;
+    const pendingBatches = outBatches.filter((b) => !["submitted", "accepted"].includes((b.status || "").toLowerCase())).length;
+    const readyToSubmit = outBatches.filter((b) => ["generated", "ready_to_generate"].includes((b.status || "").toLowerCase())).length;
+
     return NextResponse.json({
       success: true,
       clinicianOnly,
       canManage: !clinicianOnly,
       practiceOptions: Array.from(practiceSet).sort().map((p) => ({ value: p, label: p })),
+      totals: {
+        totalUnbilledCharges,
+        pendingBatches,
+        readyToSubmit,
+      },
+      chargeRows,
       batches: outBatches,
     });
   } catch (error) {

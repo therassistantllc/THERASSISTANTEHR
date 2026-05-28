@@ -3692,6 +3692,14 @@ function getSelectedSymptoms() {
 }
 
 function initializeCodingHelper() {
+  // Reset global wizard state on every mount/re-open so navigation handlers
+  // never target stale page nodes from a prior render.
+  pages = [];
+  visiblePages = [];
+  pageIndex = 0;
+  generatedCodeSet = new Set();
+  latestCodingReport = null;
+
   if (typeof initDashboard === 'function') initDashboard(CLINICIAN_ROLES);
   initLibraries();
   const icdCatEl = document.getElementById('icdCat');
