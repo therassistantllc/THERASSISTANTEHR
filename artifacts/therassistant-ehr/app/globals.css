@@ -16,7 +16,8 @@
   --background: #f5f8f5;
   --card: #fcfefd;
   --nav-height: 44px;
-  --font-sans: "Segoe UI", "Avenir Next", "Helvetica Neue", sans-serif;
+  --font-sans: var(--font-inter), "Inter", "Segoe UI", "Helvetica Neue", sans-serif;
+  --font-heading: var(--font-manrope), "Manrope", "Segoe UI", "Helvetica Neue", sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
@@ -44,6 +45,15 @@ h2,
 h3,
 p {
   margin-top: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-heading);
 }
 
 a {

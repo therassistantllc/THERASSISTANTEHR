@@ -1,7 +1,18 @@
 // File: app/layout.tsx
 import type { Metadata } from "next";
+import { Inter, Manrope } from "next/font/google";
 import AppShell from "@/components/layout/AppShell";
 import "./globals.css";
+
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
+});
+
+const manrope = Manrope({
+  subsets: ["latin"],
+  variable: "--font-manrope",
+});
 
 export const metadata: Metadata = {
   title: "THERASSISTANT EHR",
@@ -15,7 +26,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>
+      <body className={`${inter.variable} ${manrope.variable}`}>
         <AppShell>{children}</AppShell>
       </body>
     </html>
