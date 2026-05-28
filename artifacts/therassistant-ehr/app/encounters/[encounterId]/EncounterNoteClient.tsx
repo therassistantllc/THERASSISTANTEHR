@@ -9,6 +9,7 @@ import CptCodePanel, { ServiceLine } from "@/components/encounter/CptCodePanel";
 import ClaimReadinessSidebar, { ClaimReadinessCheck } from "@/components/encounter/ClaimReadinessSidebar";
 import SignNoteModal from "@/components/encounter/SignNoteModal";
 import ClinicianJournalPanel, { ImportResult } from "@/components/encounter/ClinicianJournalPanel";
+import InlineCodingHelper, { CodingHelperReport, InlineCodingHelperHandle } from "@/components/encounter/InlineCodingHelper";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 import { analyzeMedicaidDocumentation } from "@/lib/encounters/medicaidCodeDetection";
 import {
@@ -104,14 +105,8 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
   const [showJournalModal, setShowJournalModal] = useState(false);
   const [showCodingHelper, setShowCodingHelper] = useState(false);
   const [savingCodingHelperReport, setSavingCodingHelperReport] = useState(false);
-  const [generatedCodingReport, setGeneratedCodingReport] = useState<{
-    id: string;
-    date: string;
-    codes: string;
-    auditSummary: string;
-    formSummary: string;
-  } | null>(null);
-  const codingHelperFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const [generatedCodingReport, setGeneratedCodingReport] = useState<CodingHelperReport | null>(null);
+  const codingHelperRef = useRef<InlineCodingHelperHandle | null>(null);
 
   const personalTemplates = useMemo(
     () => templates.filter((t) => t.provider_id !== null),
@@ -207,35 +202,6 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
         "No coding support signals detected from the current documentation.",
     };
   }, [medicaidSuggestions]);
-
-  function readGeneratedReportFromHelper(): {
-    id: string;
-    date: string;
-    codes: string;
-    auditSummary: string;
-    formSummary: string;
-  } | null {
-    const helperWindow = codingHelperFrameRef.current?.contentWindow as (Window & {
-      latestCodingReport?: {
-        id?: string;
-        date?: string;
-        codes?: string;
-        auditSummary?: string;
-        formSummary?: string;
-      };
-    }) | null;
-
-    if (!helperWindow?.latestCodingReport) return null;
-
-    const report = helperWindow.latestCodingReport;
-    return {
-      id: String(report.id ?? `encounter-${encounterId}-${Date.now()}`),
-      date: String(report.date ?? new Date().toISOString().slice(0, 10)),
-      codes: String(report.codes ?? ""),
-      auditSummary: String(report.auditSummary ?? ""),
-      formSummary: String(report.formSummary ?? ""),
-    };
-  }
 
   const claimReadinessChecks = useMemo((): ClaimReadinessCheck[] => {
     return [
@@ -571,22 +537,13 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
   }
 
   async function generateCodingHelperReport() {
-    const helperWindow = codingHelperFrameRef.current?.contentWindow as (Window & {
-      generateAll?: () => void;
-    }) | null;
-
-    if (!helperWindow) {
+    const helper = codingHelperRef.current;
+    if (!helper || !helper.isReady()) {
       setError("Coding helper is still loading. Please try again in a moment.");
       return null;
     }
 
-    try {
-      helperWindow.generateAll?.();
-    } catch {
-      // Best effort: report may already be present.
-    }
-
-    const report = readGeneratedReportFromHelper();
+    const report = helper.generateReport();
     if (!report) {
       setError("The coding helper did not return a report. Complete the questions and click Generate Report again.");
       return null;
@@ -1026,13 +983,8 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
               ) : null}
             </div>
 
-            <div style={{ marginTop: 12, border: "1px solid var(--line)", borderRadius: 8, overflow: "hidden", background: "#fff" }}>
-              <iframe
-                ref={codingHelperFrameRef}
-                title="Clinical Coding Helper"
-                src="/clinical-coding-tool.html"
-                style={{ width: "100%", minHeight: "70vh", border: "none" }}
-              />
+            <div style={{ marginTop: 12, border: "1px solid var(--line)", borderRadius: 8, overflow: "auto", background: "#fff", maxHeight: "72vh", padding: 12 }}>
+              <InlineCodingHelper ref={codingHelperRef} />
             </div>
 
             {generatedCodingReport ? (
