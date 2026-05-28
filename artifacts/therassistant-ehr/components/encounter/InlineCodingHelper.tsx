@@ -17,7 +17,6 @@ export type InlineCodingHelperHandle = {
 
 declare global {
   interface Window {
-    __theraCodingHelperBootstrapped?: boolean;
     __THERA_HELPER_ROOT__?: ParentNode;
     generateAll?: () => void;
     initLibraries?: () => void;
@@ -133,28 +132,24 @@ const InlineCodingHelper = forwardRef<InlineCodingHelperHandle>(function InlineC
         window.__THERA_HELPER_ROOT__ = contentWrapper;
         wireNavigationFallback(contentWrapper);
 
-        if (!window.__theraCodingHelperBootstrapped) {
-          const scripts = Array.from(doc.querySelectorAll("script"));
-          for (const script of scripts) {
-            const scriptNode = document.createElement("script");
-            const src = script.getAttribute("src");
-            if (src) {
-              scriptNode.src = src;
-              scriptNode.async = false;
-            } else {
-              scriptNode.textContent = script.textContent || "";
-            }
-            scriptNode.setAttribute("data-inline-coding-helper", "script");
-            hostRef.current.appendChild(scriptNode);
+        const scripts = Array.from(doc.querySelectorAll("script"));
+        for (const script of scripts) {
+          const scriptNode = document.createElement("script");
+          const src = script.getAttribute("src");
+          if (src) {
+            scriptNode.src = src;
+            scriptNode.async = false;
+          } else {
+            scriptNode.textContent = script.textContent || "";
           }
-
-          const accessorNode = document.createElement("script");
-          accessorNode.setAttribute("data-inline-coding-helper", "accessor");
-          accessorNode.textContent = `window.getLatestCodingReport = function(){ try { return latestCodingReport || null; } catch { return null; } };`;
-          hostRef.current.appendChild(accessorNode);
-
-          window.__theraCodingHelperBootstrapped = true;
+          scriptNode.setAttribute("data-inline-coding-helper", "script");
+          hostRef.current.appendChild(scriptNode);
         }
+
+        const accessorNode = document.createElement("script");
+        accessorNode.setAttribute("data-inline-coding-helper", "accessor");
+        accessorNode.textContent = `window.getLatestCodingReport = function(){ try { return latestCodingReport || null; } catch { return null; } };`;
+        hostRef.current.appendChild(accessorNode);
 
         // Re-initialize helper state for the freshly mounted DOM.
         window.initializeCodingHelper?.();
