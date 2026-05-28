@@ -46,6 +46,9 @@ const InlineCodingHelper = forwardRef<InlineCodingHelperHandle>(function InlineC
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, "text/html");
         const shell = doc.querySelector(".dashboard-main .shell") ?? doc.querySelector(".shell") ?? doc.body;
+        const wrap = doc.querySelector(".wrap");
+        const header = wrap?.querySelector(".header");
+        header?.remove();
         const styleText = Array.from(doc.querySelectorAll("style"))
           .map((node) => node.textContent || "")
           .join("\n");
@@ -54,12 +57,31 @@ const InlineCodingHelper = forwardRef<InlineCodingHelperHandle>(function InlineC
 
         const styleNode = document.createElement("style");
         styleNode.setAttribute("data-inline-coding-helper", "styles");
-        styleNode.textContent = `${styleText}\n.dashboard-main,.dashboard-shell,.dashboard-body{background:transparent !important;} .shell{max-width:none !important; padding:0 !important;} .wrap{padding:0 !important;}`;
+        styleNode.textContent = `${styleText}
+          .thera-inline-helper{font-family:var(--font-sans) !important; font-size:var(--text-md) !important; color:var(--text) !important;}
+          .thera-inline-helper{--bg:var(--background) !important; --panel:var(--card) !important; --line:var(--line) !important; --line-soft:var(--line) !important; --ink:var(--text) !important; --ink-2:var(--text) !important; --muted:var(--muted) !important; --green:var(--sage) !important; --green-dark:var(--navy) !important; --blue:var(--navy) !important; --cream:var(--sage-soft) !important;}
+          .dashboard-main,.dashboard-shell,.dashboard-body{background:transparent !important;}
+          .dashboard-sidebar,.sidebar-logo,.sidebar-product,.clinician-badge{display:none !important;}
+          .shell{max-width:none !important; padding:0 !important; margin:0 !important;}
+          .wrap{padding:0 !important; margin:0 !important; border:0 !important; border-radius:0 !important; background:transparent !important; box-shadow:none !important;}
+          .header{display:none !important;}
+          .page-card,.results-shell{border:0 !important; border-radius:0 !important; box-shadow:none !important; background:transparent !important;}
+          .page-body,.results-shell{padding-left:0 !important; padding-right:0 !important;}
+          .thera-inline-helper .btn,.thera-inline-helper button{font-family:var(--font-sans) !important;}
+          .thera-inline-helper .section-tag,.thera-inline-helper .eyebrow{font-family:var(--font-heading) !important;}
+        `;
         hostRef.current.appendChild(styleNode);
 
         const contentWrapper = document.createElement("div");
         contentWrapper.setAttribute("data-inline-coding-helper", "content");
-        contentWrapper.innerHTML = shell.outerHTML;
+        contentWrapper.className = "thera-inline-helper";
+        if (wrap) {
+          contentWrapper.innerHTML = Array.from(wrap.children)
+            .map((node) => (node as HTMLElement).outerHTML)
+            .join("");
+        } else {
+          contentWrapper.innerHTML = shell.outerHTML;
+        }
         hostRef.current.appendChild(contentWrapper);
 
         if (!window.__theraCodingHelperBootstrapped) {

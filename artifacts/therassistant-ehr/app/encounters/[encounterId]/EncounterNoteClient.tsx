@@ -983,7 +983,7 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
               ) : null}
             </div>
 
-            <div style={{ marginTop: 12, border: "1px solid var(--line)", borderRadius: 8, overflow: "auto", background: "#fff", maxHeight: "72vh", padding: 12 }}>
+            <div style={{ marginTop: 12, overflow: "auto", maxHeight: "72vh" }}>
               <InlineCodingHelper ref={codingHelperRef} />
             </div>
 
