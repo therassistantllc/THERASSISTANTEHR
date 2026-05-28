@@ -1,0 +1,63 @@
+<!DOCTYPE html>');
+if (start === -1) throw new Error('DOCTYPE not found');
+const end = text.indexOf('</html>', start);
+if (end === -1) throw new Error('closing html not found');
+let html = text.slice(start, end + '</html>'.length);
+html = html
+  .replace(/<link rel="stylesheet" href="style\.css">\n?/g, '')
+  .replace(/<script src="shared\.js\?v=2"><\/script>\n?/g, '')
+  .replace(/<script src="signal-library\.js\?v=1"><\/script>\n?/g, '')
+  .replace(/<script src="sidebar\.js\?v=2"><\/script>\n?/g, '')
+  .replace(/<script src="chat-widget\.js\?v=1"><\/script>\n?/g, '');
+
+const shims = `\n<script>\nfunction getStoredCoderReports(){\n  try { return JSON.parse(localStorage.getItem('docusistant_saved_reports') || '[]'); } catch { return []; }\n}\nfunction setStoredCoderReports(reports){\n  localStorage.setItem('docusistant_saved_reports', JSON.stringify(reports));\n}\nconst CLINICIAN_ROLES = []\n</script>\n`;
+html = html.replace('
+<script>
+function getStoredCoderReports(){
+  try { return JSON.parse(localStorage.getItem('docusistant_saved_reports') || '[]'); } catch { return []; }
+}
+function setStoredCoderReports(reports){
+  localStorage.setItem('docusistant_saved_reports', JSON.stringify(reports));
+}
+const CLINICIAN_ROLES = []
+</script>
+</head>', `${shims}</head>`);
+
+fs.writeFileSync(out, html, 'utf8');
+console.log('Wrote', out, 'bytes:', Buffer.byteLength(html));
+NODE
+Wrote /workspaces/THERASSISTANTREPLIT/artifacts/therassistant-ehr/public/clinical-coding-tool.html bytes: 112
+@therassistantllc ➜ /workspaces/THERASSISTANTREPLIT/artifacts/therassistant-ehr (main) $  node - <<'NODE'
+const fs = require('fs');
+const p='/home/codespace/.vscode-remote/data/User/workspaceStorage/-52c4e617/GitHub.copilot-chat/transcripts/0dc0d31d-c7c8-41a3-ac16-71b003f04b54.jsonl';
+const lines=fs.readFileSync(p,'utf8').split('\n');
+for (const line of lines.slice(-80)) {
+  if (line.includes('THERASSISTANT\u2122') || line.includes('<!DOCTYPE html') || line.includes('can you add a button')) {
+    console.log(line.slice(0,300));
+  }
+}
+NODE
+{"type":"user.message","data":{"content":"can you add a button on the clinical note page that the clinician can click on to bring up this tool?  <!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\" />\n  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n  <
+{"type":"assistant.message","data":{"messageId":"959f377c-e05b-47ab-9427-0cafe420506d","content":"I can wire this exactly by extracting the full HTML you pasted into a static page, then adding a launch button on the clinical note hero actions to open it in a new tab. I’m doing that now.","toolReques
+{"type":"tool.execution_start","data":{"toolCallId":"call_VXOuCBGqVKV783Yf831OT9Zx","toolName":"run_in_terminal","arguments":{"command":"node - <<'NODE'\nconst fs = require('fs');\nconst path = '/home/codespace/.vscode-remote/data/User/workspaceStorage/-52c4e617/GitHub.copilot-chat/transcripts/0dc0d
+{"type":"assistant.message","data":{"messageId":"d7ef2e0b-3897-4703-8c25-4731c36fa7ce","content":"","toolRequests":[{"toolCallId":"call_zgIBAcWdmz3eajYbTpKqtpY1","name":"run_in_terminal","arguments":"{\"command\":\"node - <<'NODE'\\nconst fs = require('fs');\\nconst p='/home/codespace/.vscode-remote
+@therassistantllc ➜ /workspaces/THERASSISTANTREPLIT/artifacts/therassistant-ehr (main) $  node - <<'NODE'
+const fs = require('fs');
+const src='/home/codespace/.vscode-remote/data/User/workspaceStorage/-52c4e617/GitHub.copilot-chat/transcripts/0dc0d31d-c7c8-41a3-ac16-71b003f04b54.jsonl';
+const out='/workspaces/THERASSISTANTREPLIT/artifacts/therassistant-ehr/public/clinical-coding-tool.html';
+const lines=fs.readFileSync(src,'utf8').split('\n').filter(Boolean);
+let content='';
+for (let i=lines.length-1;i>=0;i--) {
+  try {
+    const row=JSON.parse(lines[i]);
+    if (row.type==='user.message' && typeof row.data?.content==='string' && row.data.content.includes('<!DOCTYPE html>')) {
+      content=row.data.content;
+      break;
+    }
+  } catch {}
+}
+if (!content) throw new Error('Could not find user html message');
+const start=content.indexOf('<!DOCTYPE html>');
+const end=content.lastIndexOf('</html>');
+if (start===-1||end===-1) throw new Error('Could not delimit html');
+let html=content.slice(start,end+'</html>
