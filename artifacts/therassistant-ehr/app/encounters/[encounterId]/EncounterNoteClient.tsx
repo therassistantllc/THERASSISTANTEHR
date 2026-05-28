@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import SoapNoteEditor, { SoapNoteData } from "@/components/encounter/SoapNoteEditor";
 import DiagnosisPicker, { Diagnosis } from "@/components/encounter/DiagnosisPicker";
 import CptCodePanel, { ServiceLine } from "@/components/encounter/CptCodePanel";
@@ -104,7 +104,6 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
   const [showJournalModal, setShowJournalModal] = useState(false);
   const [showCodingHelper, setShowCodingHelper] = useState(false);
   const [savingCodingHelperReport, setSavingCodingHelperReport] = useState(false);
-  const codingHelperFrameRef = useRef<HTMLIFrameElement | null>(null);
 
   const personalTemplates = useMemo(
     () => templates.filter((t) => t.provider_id !== null),
@@ -178,6 +177,27 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
         code: rec.code,
         className: rec.action === "suggest" ? "status status-green" : "status status-yellow",
       }));
+  }, [medicaidSuggestions]);
+
+  const codingHelperSummary = useMemo(() => {
+    if (!medicaidSuggestions) {
+      return {
+        codes: [] as string[],
+        auditSummary: "No coding support signals detected from the current documentation.",
+      };
+    }
+
+    const actionable = medicaidSuggestions.recommendations.filter(
+      (rec) => rec.action === "suggest" || rec.action === "clarify_before_suggesting",
+    );
+    const codes = Array.from(new Set(actionable.map((rec) => rec.code)));
+
+    return {
+      codes,
+      auditSummary:
+        medicaidSuggestions.auditSummary.join(" ") ||
+        "No coding support signals detected from the current documentation.",
+    };
   }, [medicaidSuggestions]);
 
   const claimReadinessChecks = useMemo((): ClaimReadinessCheck[] => {
@@ -473,22 +493,23 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
     setMessage(null);
 
     try {
-      type HelperWindow = Window & {
-        latestCodingReport?: unknown;
-        generateAll?: () => void;
+      const report = {
+        id: `encounter-${encounterId}-${Date.now()}`,
+        date: new Date().toISOString().slice(0, 10),
+        codes: codingHelperSummary.codes.join(", "),
+        auditSummary: codingHelperSummary.auditSummary,
+        formSummary: [
+          `Service date: ${summary?.encounter?.service_date ?? "not documented"}`,
+          `Primary diagnosis count: ${diagnoses.filter((d) => d.is_primary).length}`,
+          `Service lines coded: ${serviceLines.filter((s) => !!s.cpt_hcpcs_code).length}`,
+          soapNote.subjective ? `Subjective: ${soapNote.subjective}` : "",
+          soapNote.objective ? `Objective: ${soapNote.objective}` : "",
+          soapNote.assessment ? `Assessment: ${soapNote.assessment}` : "",
+          soapNote.plan ? `Plan: ${soapNote.plan}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
       };
-
-      const helperWindow = codingHelperFrameRef.current?.contentWindow as HelperWindow | null;
-      if (!helperWindow) throw new Error("Coding helper is not loaded yet. Try again in a moment.");
-
-      if (!helperWindow.latestCodingReport && typeof helperWindow.generateAll === "function") {
-        helperWindow.generateAll();
-      }
-
-      const report = helperWindow.latestCodingReport;
-      if (!report || typeof report !== "object") {
-        throw new Error("No coding report found. Click Generate Output in the helper first.");
-      }
 
       const response = await fetch(`/api/encounters/${encounterId}/coding-report`, {
         method: "POST",
@@ -675,9 +696,9 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
             <button
               className="button button-secondary"
               type="button"
-              onClick={() => setShowCodingHelper(true)}
+              onClick={() => setShowCodingHelper((prev) => !prev)}
             >
-              Coding Helper
+              {showCodingHelper ? "Hide Coding Helper" : "Coding Helper"}
             </button>
           ) : null}
           {isSigned && !amending ? (
@@ -873,80 +894,46 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
               ))}
             </div>
           ) : null}
-        </main>
-      </section>
 
-      <SignNoteModal isOpen={showSignModal} onClose={() => setShowSignModal(false)} onConfirm={signNote} isLoading={saving} />
-
-      {showCodingHelper ? (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(11, 20, 39, 0.45)",
-            zIndex: 80,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "1rem",
-          }}
-          onClick={() => setShowCodingHelper(false)}
-        >
-          <div
-            style={{
-              width: "min(940px, 96vw)",
-              height: "min(82vh, 760px)",
-              background: "var(--surface)",
-              border: "1px solid var(--line)",
-              borderRadius: "16px",
-              boxShadow: "0 18px 60px rgba(11, 20, 39, 0.28)",
-              overflow: "hidden",
-              display: "grid",
-              gridTemplateRows: "auto 1fr",
-            }}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: "0.75rem",
-                padding: "0.75rem 0.9rem",
-                borderBottom: "1px solid var(--line)",
-                background: "var(--surface-subtle)",
-              }}
-            >
-              <div style={{ display: "grid", gap: 2 }}>
-                <strong style={{ fontSize: 14 }}>Clinical Coding Helper</strong>
-                <span className="muted" style={{ fontSize: 12 }}>
-                  Medicaid documentation and coding support for this encounter.
-                </span>
-              </div>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {summary.coverage?.isMedicaid && showCodingHelper ? (
+            <article className="panel" style={{ marginTop: "0.75rem" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <div>
+                  <h2 style={{ margin: 0 }}>Coding Helper</h2>
+                  <p className="muted" style={{ margin: "4px 0 0 0", fontSize: 13 }}>
+                    Integrated coding support based on this encounter&apos;s live note content.
+                  </p>
+                </div>
                 <button
                   className="button"
                   type="button"
                   onClick={saveCodingHelperReportToChart}
                   disabled={savingCodingHelperReport}
                 >
-                  {savingCodingHelperReport ? "Saving…" : "Save To Chart"}
-                </button>
-                <button className="button button-secondary" type="button" onClick={() => setShowCodingHelper(false)}>
-                  Close
+                  {savingCodingHelperReport ? "Saving…" : "Save To Encounter Note"}
                 </button>
               </div>
-            </div>
 
-            <iframe
-              ref={codingHelperFrameRef}
-              title="Clinical Coding Helper"
-              src="/clinical-coding-tool.html"
-              style={{ width: "100%", height: "100%", border: "none", background: "#fff" }}
-            />
-          </div>
-        </div>
-      ) : null}
+              <div className="detail-list" style={{ marginTop: "0.75rem" }}>
+                <p>
+                  <strong>Suggested codes:</strong>{" "}
+                  {codingHelperSummary.codes.length > 0 ? codingHelperSummary.codes.join(", ") : "None yet"}
+                </p>
+                <p>
+                  <strong>Audit summary:</strong> {codingHelperSummary.auditSummary}
+                </p>
+                {medicaidSuggestions?.globalWarnings.length ? (
+                  <p>
+                    <strong>Documentation warnings:</strong> {medicaidSuggestions.globalWarnings.join(" | ")}
+                  </p>
+                ) : null}
+              </div>
+            </article>
+          ) : null}
+        </main>
+      </section>
+
+      <SignNoteModal isOpen={showSignModal} onClose={() => setShowSignModal(false)} onConfirm={signNote} isLoading={saving} />
 
       {showJournalModal && summary?.client?.id ? (
         <div
