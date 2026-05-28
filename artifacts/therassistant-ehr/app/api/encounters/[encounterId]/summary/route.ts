@@ -73,7 +73,7 @@ export async function GET(request: Request, context: { params: Promise<{ encount
     const { data: primaryPayer } = primaryPolicy?.payer_id
       ? await supabase
           .from("insurance_payers")
-          .select("id, payer_name, payer_type")
+        .select("id, payer_name, payer_category")
           .eq("organization_id", organizationId)
           .eq("id", primaryPolicy.payer_id)
           .is("archived_at", null)
@@ -119,9 +119,12 @@ export async function GET(request: Request, context: { params: Promise<{ encount
         : null,
       appointment: appointment ?? null,
       coverage: {
-        isMedicaid: isMedicaidPayerType(primaryPayer?.payer_type) || isMedicaidPayerType(primaryPayer?.payer_name) || isMedicaidPayerType(primaryPolicy?.plan_name),
+        isMedicaid:
+          isMedicaidPayerType(primaryPayer?.payer_category) ||
+          isMedicaidPayerType(primaryPayer?.payer_name) ||
+          isMedicaidPayerType(primaryPolicy?.plan_name),
         primaryPayerName: primaryPayer?.payer_name ?? null,
-        primaryPayerType: primaryPayer?.payer_type ?? null,
+        primaryPayerType: primaryPayer?.payer_category ?? null,
         primaryPlanName: primaryPolicy?.plan_name ?? null,
       },
       diagnoses: diagnoses ?? [],
