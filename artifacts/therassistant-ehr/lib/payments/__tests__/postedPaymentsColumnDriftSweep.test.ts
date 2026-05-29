@@ -22,6 +22,7 @@
  * tables should be accompanied by a focused captured-select test.
  */
 import { strict as assert } from "node:assert";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,7 +52,6 @@ const TABLES = [
  * `app/` to skip generated types, tests, fixtures, and node_modules.
  */
 function listSourceFiles(): string[] {
-  const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
   const pattern = `from\\(['"\`](${TABLES.join("|")})['"\`]\\)`;
   const res = spawnSync(
     "rg",

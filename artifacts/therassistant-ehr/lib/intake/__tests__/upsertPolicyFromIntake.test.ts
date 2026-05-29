@@ -116,8 +116,8 @@ test("upsertPolicyFromIntake: two concurrent intake submits converge on a single
   // Both callers run their SELECT before either runs their INSERT,
   // mirroring the production race where two intake POSTs land within
   // a few ms of each other.
-  let pendingSelect: Array<() => void> = [];
-  let pendingInsert: Array<() => void> = [];
+  const pendingSelect: Array<() => void> = [];
+  const pendingInsert: Array<() => void> = [];
 
   const selectGate = () => new Promise<void>((resolve) => pendingSelect.push(resolve));
   const insertGate = () => new Promise<void>((resolve) => pendingInsert.push(resolve));
