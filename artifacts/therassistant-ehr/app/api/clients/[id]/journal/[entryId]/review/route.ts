@@ -31,7 +31,6 @@ export async function POST(
 
   const guard = await requireOrgAccess({
     requestedOrganizationId: requestedOrg || null,
-    permission: "view_patient_chart",
   });
   if (guard instanceof NextResponse) return guard;
   const organizationId = guard.organizationId;

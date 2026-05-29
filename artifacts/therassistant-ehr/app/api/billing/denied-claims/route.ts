@@ -18,6 +18,12 @@ function isClinicianScoped(roles: string[]) {
   return hasClinician && !hasExpandedAccess;
 }
 
+function isMissingRpcError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && code === "PGRST202";
+}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -59,10 +65,60 @@ export async function GET(request: Request) {
       p_limit: limit,
       p_offset: offset,
     });
-    if (error) throw error;
 
-    const rpcRows = (data ?? []) as Array<Record<string, unknown>>;
-    const totalCount = rpcRows.length > 0 ? Number(rpcRows[0].total_count ?? 0) : 0;
+    let rpcRows = (data ?? []) as Array<Record<string, unknown>>;
+    let totalCount = rpcRows.length > 0 ? Number(rpcRows[0].total_count ?? 0) : 0;
+
+    if (error) {
+      if (!isMissingRpcError(error)) throw error;
+
+      console.warn("billing_denied_claims_page_v2 RPC not available; using fallback denied-claims query");
+      const fallback = await (supabase as any)
+        .from("professional_claims")
+        .select(
+          "id, claim_number, claim_status, total_charge, patient_responsibility_amount, payer_responsibility_amount, billing_notes, created_at, client_id, clients(first_name,last_name), payer_profiles(payer_name)",
+          { count: "exact" },
+        )
+        .eq("organization_id", organizationId)
+        .eq("claim_status", "denied")
+        .is("archived_at", null)
+        .order("created_at", { ascending: false })
+        .range(offset, offset + limit - 1);
+
+      if (fallback.error) throw fallback.error;
+
+      totalCount = Number(fallback.count ?? 0);
+      rpcRows = ((fallback.data ?? []) as Array<Record<string, unknown>>).map((r) => {
+        const client = r.clients as Record<string, unknown> | null;
+        const clientName = [str(client?.first_name), str(client?.last_name)].filter(Boolean).join(" ") || "—";
+        const payer = r.payer_profiles as Record<string, unknown> | null;
+
+        return {
+          id: str(r.id),
+          claim_number: str(r.claim_number),
+          claim_status: str(r.claim_status),
+          client_id: str(r.client_id),
+          client_name: clientName,
+          payer_name: str(payer?.payer_name) || "—",
+          provider_name: null,
+          date_of_service: null,
+          total_charge: Number(r.total_charge ?? 0),
+          patient_responsibility: Number(r.patient_responsibility_amount ?? 0),
+          payer_paid: Number(r.payer_responsibility_amount ?? 0),
+          cpt_code: "—",
+          practice_id: null,
+          denial_reason_code: null,
+          denial_reason_description: null,
+          appeal_deadline_date: null,
+          correction_status: null,
+          correction_type: null,
+          billing_notes: str(r.billing_notes) || null,
+          submitted_at: null,
+          created_at: str(r.created_at),
+          total_count: totalCount,
+        };
+      });
+    }
 
     const practiceSet = new Set<string>();
     const rows = rpcRows.map((r) => {

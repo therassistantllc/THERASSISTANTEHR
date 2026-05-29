@@ -13,6 +13,10 @@ function itemDto(row: DbRow) {
     id: clean(row.id),
     organizationId: clean(row.organization_id),
     clientId: clean(row.client_id),
+    clientName: clean(row.client_name) || null,
+    workqueueItemId: clean(row.workqueue_item_id) || null,
+    assignedToUserId: clean(row.assigned_to_user_id) || null,
+    assigneeName: clean(row.assignee_name) || null,
     fileName: clean(row.file_name),
     mimeType: clean(row.mime_type),
     storagePath: clean(row.storage_path),
@@ -65,7 +69,73 @@ export async function GET(request: Request) {
     const { data, error } = await query;
     if (error) return NextResponse.json({ success: false, error: error.message }, { status: 422 });
 
-    return NextResponse.json({ success: true, items: ((data ?? []) as DbRow[]).map(itemDto) });
+    const rows = ((data ?? []) as DbRow[]);
+    const clientIds = [...new Set(rows.map((r) => clean(r.client_id)).filter(Boolean))];
+    const workqueueIds = [...new Set(rows.map((r) => clean(r.workqueue_item_id)).filter(Boolean))];
+
+    const [{ data: clients }, { data: workqueueRows }] = await Promise.all([
+      clientIds.length
+        ? supabase
+            .from("clients")
+            .select("id, first_name, last_name")
+            .in("id", clientIds)
+            .eq("organization_id", organizationId)
+        : Promise.resolve({ data: [] as DbRow[] }),
+      workqueueIds.length
+        ? supabase
+            .from("workqueue_items")
+            .select("id, assigned_to_user_id")
+            .in("id", workqueueIds)
+            .eq("organization_id", organizationId)
+        : Promise.resolve({ data: [] as DbRow[] }),
+    ]);
+
+    const clientById = new Map<string, DbRow>(((clients ?? []) as DbRow[]).map((c) => [clean(c.id), c]));
+    const workqueueById = new Map<string, DbRow>(((workqueueRows ?? []) as DbRow[]).map((w) => [clean(w.id), w]));
+
+    const assigneeAuthUserIds = [
+      ...new Set(
+        ((workqueueRows ?? []) as DbRow[])
+          .map((w) => clean(w.assigned_to_user_id))
+          .filter(Boolean),
+      ),
+    ];
+
+    const { data: assignees } = assigneeAuthUserIds.length
+      ? await supabase
+          .from("staff_profiles")
+          .select("auth_user_id, first_name, last_name, email")
+          .eq("organization_id", organizationId)
+          .is("archived_at", null)
+          .in("auth_user_id", assigneeAuthUserIds)
+      : { data: [] as DbRow[] };
+
+    const assigneeByAuthUserId = new Map<string, DbRow>(
+      ((assignees ?? []) as DbRow[]).map((s) => [clean(s.auth_user_id), s]),
+    );
+
+    const enriched = rows.map((row) => {
+      const clientId = clean(row.client_id);
+      const workqueueId = clean(row.workqueue_item_id);
+      const client = clientById.get(clientId);
+      const workqueue = workqueueById.get(workqueueId);
+      const assignedToUserId = clean(workqueue?.assigned_to_user_id);
+      const assignee = assigneeByAuthUserId.get(assignedToUserId);
+      const assigneeName = assignee
+        ? [clean(assignee.first_name), clean(assignee.last_name)].filter(Boolean).join(" ") || clean(assignee.email)
+        : "";
+
+      return itemDto({
+        ...row,
+        client_name: client
+          ? [clean(client.first_name), clean(client.last_name)].filter(Boolean).join(" ")
+          : null,
+        assigned_to_user_id: assignedToUserId || null,
+        assignee_name: assigneeName || null,
+      });
+    });
+
+    return NextResponse.json({ success: true, items: enriched });
   } catch (error) {
     console.error("Mailroom items API error:", error);
     return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "Mailroom items failed" }, { status: 500 });

@@ -59,6 +59,55 @@ function deriveEligibilityState(latest: Row | null | undefined): {
   return { status, checkedAt, daysSinceChecked: days, copayAmount, isStale };
 }
 
+function isRpcUnavailable(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && code === "PGRST202";
+}
+
+async function listClientsFallback(params: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any;
+  organizationId: string;
+  q: string;
+  limit: number;
+  offset: number;
+}) {
+  const { supabase, organizationId, q, limit, offset } = params;
+
+  let countQuery = (supabase as any)
+    .from("clients")
+    .select("id", { count: "exact", head: true })
+    .eq("organization_id", organizationId)
+    .is("archived_at", null);
+
+  let dataQuery = (supabase as any)
+    .from("clients")
+    .select("id, first_name, last_name, preferred_name, email, phone, status, intake_status, updated_at")
+    .eq("organization_id", organizationId)
+    .is("archived_at", null)
+    .order("last_name", { ascending: true })
+    .order("first_name", { ascending: true })
+    .range(offset, offset + limit - 1);
+
+  if (q) {
+    const escaped = q.replace(/[%_]/g, "");
+    const ilike = `%${escaped}%`;
+    const filter = `first_name.ilike.${ilike},last_name.ilike.${ilike},email.ilike.${ilike}`;
+    countQuery = countQuery.or(filter);
+    dataQuery = dataQuery.or(filter);
+  }
+
+  const [{ count, error: countError }, { data, error: dataError }] = await Promise.all([countQuery, dataQuery]);
+  if (countError) throw countError;
+  if (dataError) throw dataError;
+
+  return {
+    rows: (data ?? []) as Row[],
+    totalCount: Number(count ?? 0),
+  };
+}
+
 export async function POST(request: Request) {
   try {
     const payload = (await request.json().catch(() => null)) as Row | null;
@@ -195,10 +244,22 @@ export async function GET(request: Request) {
       p_limit: limit,
       p_offset: offset,
     });
-    if (error) throw error;
+    let rows = (data ?? []) as Row[];
+    let totalCount = rows.length > 0 ? Number(rows[0].total_count ?? 0) : 0;
 
-    const rows = (data ?? []) as Row[];
-    const totalCount = rows.length > 0 ? Number(rows[0].total_count ?? 0) : 0;
+    if (error) {
+      if (!isRpcUnavailable(error)) throw error;
+      console.warn("billing_clients_roster_page RPC not available; using fallback clients list");
+      const fallback = await listClientsFallback({
+        supabase,
+        organizationId,
+        q,
+        limit,
+        offset,
+      });
+      rows = fallback.rows;
+      totalCount = fallback.totalCount;
+    }
 
     const records = rows.map((client) => {
       const eligibility = deriveEligibilityState({

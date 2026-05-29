@@ -12,6 +12,111 @@ function parseIso(input: string | null) {
   return date;
 }
 
+type AppointmentRow = {
+  id: string;
+  client_id: string | null;
+  provider_id: string | null;
+  scheduled_start_at: string | null;
+  scheduled_end_at: string | null;
+  appointment_status: string | null;
+  appointment_type: string | null;
+  cpt_code: string | null;
+};
+
+async function listAppointmentsFallback(params: {
+  supabase: any;
+  organizationId: string;
+  fromIso: string;
+  toIso: string;
+  limit: number;
+  offset: number;
+}) {
+  const { supabase, organizationId, fromIso, toIso, limit, offset } = params;
+
+  const [{ count, error: countError }, { data: appointmentRows, error: appointmentsError }] = await Promise.all([
+    (supabase as any)
+      .from("appointments")
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", organizationId)
+      .is("archived_at", null)
+      .gte("scheduled_start_at", fromIso)
+      .lt("scheduled_start_at", toIso),
+    (supabase as any)
+      .from("appointments")
+      .select(
+        "id, client_id, provider_id, scheduled_start_at, scheduled_end_at, appointment_status, appointment_type, cpt_code",
+      )
+      .eq("organization_id", organizationId)
+      .is("archived_at", null)
+      .gte("scheduled_start_at", fromIso)
+      .lt("scheduled_start_at", toIso)
+      .order("scheduled_start_at", { ascending: true })
+      .range(offset, offset + limit - 1),
+  ]);
+
+  if (countError) throw countError;
+  if (appointmentsError) throw appointmentsError;
+
+  const rows = (appointmentRows ?? []) as AppointmentRow[];
+  const clientIds = Array.from(new Set(rows.map((r) => r.client_id).filter((id): id is string => Boolean(id))));
+  const providerIds = Array.from(new Set(rows.map((r) => r.provider_id).filter((id): id is string => Boolean(id))));
+
+  const [clientsResult, providersResult] = await Promise.all([
+    clientIds.length > 0
+      ? (supabase as any).from("clients").select("id, first_name, last_name").in("id", clientIds)
+      : Promise.resolve({ data: [], error: null }),
+    providerIds.length > 0
+      ? (supabase as any)
+          .from("providers")
+          .select("id, display_name, first_name, last_name")
+          .in("id", providerIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+
+  if (clientsResult.error) throw clientsResult.error;
+  if (providersResult.error) throw providersResult.error;
+
+  const clientById = new Map<string, { first_name?: string | null; last_name?: string | null }>(
+    (clientsResult.data ?? []).map((c: any) => [String(c.id), c]),
+  );
+  const providerById = new Map<string, { display_name?: string | null; first_name?: string | null; last_name?: string | null }>(
+    (providersResult.data ?? []).map((p: any) => [String(p.id), p]),
+  );
+
+  const appointments = rows.map((r) => {
+    const client = r.client_id ? clientById.get(r.client_id) : null;
+    const provider = r.provider_id ? providerById.get(r.provider_id) : null;
+    const clientName = [client?.first_name, client?.last_name].filter(Boolean).join(" ").trim() || "Unknown client";
+    const providerName =
+      provider?.display_name?.trim() ||
+      [provider?.first_name, provider?.last_name].filter(Boolean).join(" ").trim() ||
+      "Unassigned";
+
+    const apptType = typeof r.appointment_type === "string" ? r.appointment_type : "";
+    const cptCode =
+      (typeof r.cpt_code === "string" && r.cpt_code) ||
+      (/^9\d{4}$/.test(apptType) ? apptType : null);
+
+    return {
+      id: String(r.id),
+      clientId: r.client_id ? String(r.client_id) : null,
+      clientName,
+      providerId: r.provider_id ? String(r.provider_id) : null,
+      providerName,
+      scheduledStartAt: r.scheduled_start_at,
+      scheduledEndAt: r.scheduled_end_at,
+      status: r.appointment_status,
+      appointmentType: r.appointment_type,
+      cptCode,
+    };
+  });
+
+  return {
+    appointments,
+    totalCount: Number(count ?? 0),
+  };
+}
+
 export async function GET(request: Request) {
   try {
     const supabase = createServerSupabaseAdminClient();
@@ -74,11 +179,40 @@ export async function GET(request: Request) {
     });
 
     if (error) {
-      console.error("Appointments list query failed", error);
-      return NextResponse.json(
-        { success: false, error: "Failed to load appointments" },
-        { status: 500 },
-      );
+      const errorCode = typeof (error as { code?: unknown })?.code === "string" ? (error as { code: string }).code : "";
+      const isRpcMissing = errorCode === "PGRST202";
+      if (!isRpcMissing) {
+        console.error("Appointments list query failed", error);
+        return NextResponse.json(
+          { success: false, error: "Failed to load appointments" },
+          { status: 500 },
+        );
+      }
+
+      console.warn("scheduling_appointments_page RPC not available; using fallback query path");
+      const fallback = await listAppointmentsFallback({
+        supabase,
+        organizationId,
+        fromIso: fromDate.toISOString(),
+        toIso: toDate.toISOString(),
+        limit,
+        offset,
+      });
+
+      return NextResponse.json({
+        success: true,
+        organizationId,
+        from,
+        to,
+        pagination: {
+          limit,
+          offset,
+          returned: fallback.appointments.length,
+          totalCount: fallback.totalCount,
+          hasMore: offset + fallback.appointments.length < fallback.totalCount,
+        },
+        appointments: fallback.appointments,
+      });
     }
 
     const rows = (data ?? []) as Array<Record<string, unknown>>;

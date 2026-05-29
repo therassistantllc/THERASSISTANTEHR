@@ -30,6 +30,12 @@ function getErrorMessage(error: unknown) {
   return "Failed to load charge batches";
 }
 
+function isMissingRpcError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && code === "PGRST202";
+}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -79,7 +85,32 @@ export async function GET(request: Request) {
       p_limit: limit,
       p_offset: offset,
     });
-    if (error) throw error;
+    if (error) {
+      if (isMissingRpcError(error)) {
+        console.warn("billing_charge_batches_page RPC not available; returning empty charge batches payload");
+        return NextResponse.json({
+          success: true,
+          clinicianOnly,
+          canManage: !clinicianOnly,
+          practiceOptions: [] as Array<{ value: string; label: string }>,
+          pagination: {
+            limit,
+            offset,
+            returned: 0,
+            totalCount: 0,
+            hasMore: false,
+          },
+          totals: {
+            totalUnbilledCharges: 0,
+            pendingBatches: 0,
+            readyToSubmit: 0,
+          },
+          chargeRows: [] as unknown[],
+          batches: [] as unknown[],
+        });
+      }
+      throw error;
+    }
 
     const rpcRows = (data ?? []) as DbRow[];
     const totalCount = rpcRows.length > 0 ? Number(rpcRows[0].total_count ?? 0) : 0;

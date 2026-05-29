@@ -63,6 +63,80 @@ function buildOccurrenceStarts(
   return starts;
 }
 
+async function resolveProviderId(params: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any;
+  organizationId: string;
+  providerSelector: string;
+}) {
+  const { supabase, organizationId, providerSelector } = params;
+  if (!providerSelector) return null;
+
+  const { data: providerById } = await supabase
+    .from("providers")
+    .select("id")
+    .eq("organization_id", organizationId)
+    .eq("id", providerSelector)
+    .is("archived_at", null)
+    .maybeSingle();
+  if (providerById?.id) return String(providerById.id);
+
+  const { data: providerByUser } = await supabase
+    .from("providers")
+    .select("id")
+    .eq("organization_id", organizationId)
+    .eq("user_id", providerSelector)
+    .is("archived_at", null)
+    .maybeSingle();
+  if (providerByUser?.id) return String(providerByUser.id);
+
+  const { data: staff } = await supabase
+    .from("staff_profiles")
+    .select("auth_user_id, first_name, last_name, email")
+    .eq("organization_id", organizationId)
+    .eq("auth_user_id", providerSelector)
+    .eq("is_active", true)
+    .is("archived_at", null)
+    .maybeSingle();
+
+  if (!staff) return null;
+
+  const firstName = String(staff.first_name ?? "").trim() || "Provider";
+  const lastName = String(staff.last_name ?? "").trim() || "User";
+  const displayName = [String(staff.first_name ?? "").trim(), String(staff.last_name ?? "").trim()]
+    .filter(Boolean)
+    .join(" ");
+
+  const insertedId = generateUuid();
+  const { error: insertErr } = await supabase.from("providers").insert({
+    id: insertedId,
+    organization_id: organizationId,
+    user_id: providerSelector,
+    first_name: firstName,
+    last_name: lastName,
+    display_name: displayName || `${firstName} ${lastName}`,
+    email: staff.email ?? null,
+    provider_type: "clinician",
+    is_active: true,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  });
+
+  if (!insertErr) return insertedId;
+
+  const isDuplicate = String((insertErr as { code?: string } | null)?.code ?? "") === "23505";
+  if (!isDuplicate) return null;
+
+  const { data: afterRace } = await supabase
+    .from("providers")
+    .select("id")
+    .eq("organization_id", organizationId)
+    .eq("user_id", providerSelector)
+    .is("archived_at", null)
+    .maybeSingle();
+  return afterRace?.id ? String(afterRace.id) : null;
+}
+
 export async function POST(request: Request) {
   try {
     const supabase = createServerSupabaseServiceRoleClient();
@@ -104,7 +178,7 @@ export async function POST(request: Request) {
     const organizationId = guard.organizationId;
 
     const clientId = String(body.clientId ?? "").trim();
-    const providerId = String(body.providerId ?? "").trim();
+    const providerSelector = String(body.providerId ?? "").trim();
     const scheduledStartAt = String(body.scheduledStartAt ?? "").trim();
     const durationMinutes = Math.max(15, Number(body.durationMinutes ?? 60));
     const appointmentType = String(body.appointmentType ?? "").trim();
@@ -112,9 +186,22 @@ export async function POST(request: Request) {
     const memo = memoRaw.length > 0 ? memoRaw : null;
     const serviceLocation = body.serviceLocation ?? (appointmentType.toLowerCase().includes("tele") ? "telehealth" : "office");
 
-    if (!clientId || !providerId || !scheduledStartAt || !appointmentType) {
+    if (!clientId || !providerSelector || !scheduledStartAt || !appointmentType) {
       return NextResponse.json(
         { success: false, error: "Client, provider, start time, and classification are required." },
+        { status: 400 },
+      );
+    }
+
+    const providerId = await resolveProviderId({
+      supabase,
+      organizationId,
+      providerSelector,
+    });
+
+    if (!providerId) {
+      return NextResponse.json(
+        { success: false, error: "Selected provider could not be resolved to an active provider profile." },
         { status: 400 },
       );
     }

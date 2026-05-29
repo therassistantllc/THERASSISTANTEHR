@@ -1820,6 +1820,12 @@ export function CreateAppointmentModal({
         ]);
         const cJson = await cRes.json();
         const pJson = await pRes.json();
+        if (!cRes.ok || cJson?.success === false) {
+          throw new Error(String(cJson?.error ?? "Could not load clients"));
+        }
+        if (!pRes.ok || pJson?.success === false) {
+          throw new Error(String(pJson?.error ?? "Could not load providers"));
+        }
         const clientRows: ClientLite[] = (cJson.clients ?? cJson.data ?? []).map(
           (r: Record<string, unknown>) => {
             const composed = [r.first_name, r.last_name]
@@ -1833,7 +1839,7 @@ export function CreateAppointmentModal({
         const providerRows: ProviderLite[] = (pJson.providers ?? []).map(
           (r: Record<string, unknown>) => ({
             id: String(r.id),
-            provider_name: String(r.provider_name ?? "Provider"),
+            provider_name: String(r.provider_name ?? r.display_name ?? "Provider"),
           }),
         );
         setClients(clientRows);

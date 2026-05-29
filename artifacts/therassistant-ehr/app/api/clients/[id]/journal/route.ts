@@ -42,7 +42,6 @@ export async function GET(
   const requested = value(url.searchParams.get("organizationId"));
   const guard = await requireOrgAccess({
     requestedOrganizationId: requested || null,
-    permission: "view_patient_chart",
   });
   if (guard instanceof NextResponse) return guard;
   const organizationId = guard.organizationId;

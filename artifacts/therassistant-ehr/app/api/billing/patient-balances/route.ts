@@ -15,6 +15,63 @@ function num(v: unknown): number {
   return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0;
 }
 
+function isRecoverableQueryError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: unknown }).code;
+  // PostgREST missing relation/function/schema-cache drift.
+  return typeof code === "string" && (code === "PGRST200" || code === "PGRST202");
+}
+
+function isMissingColumn(error: unknown, columnName: string) {
+  if (!error || typeof error !== "object") return false;
+  const code = str((error as { code?: unknown }).code);
+  const message = str((error as { message?: unknown }).message).toLowerCase();
+  return code === "42703" && message.includes(columnName.toLowerCase());
+}
+
+function toErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (!error || typeof error !== "object") return "Failed";
+  const e = error as { code?: unknown; message?: unknown; details?: unknown; hint?: unknown };
+  const code = str(e.code);
+  const message = str(e.message);
+  const details = str(e.details);
+  const hint = str(e.hint);
+  return [code, message, details, hint].filter(Boolean).join(" | ") || "Failed";
+}
+
+function toIsoDateOrNull(value: unknown): string | null {
+  const raw = str(value);
+  if (!raw) return null;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString().split("T")[0];
+}
+
+async function queryClaims(params: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any;
+  organizationId: string;
+  selectClause: string;
+  includeWriteOffFilter: boolean;
+}) {
+  const { supabase, organizationId, selectClause, includeWriteOffFilter } = params;
+  let query = supabase
+    .from("professional_claims")
+    .select(selectClause)
+    .eq("organization_id", organizationId)
+    .gt("patient_responsibility_amount", 0)
+    .is("archived_at", null)
+    .not("claim_status", "in", '("draft","archived")')
+    .order("created_at", { ascending: false });
+
+  if (includeWriteOffFilter) {
+    query = query.is("write_off_at", null);
+  }
+
+  return query;
+}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -28,10 +85,7 @@ export async function GET(request: Request) {
     if (!supabase)
       return NextResponse.json({ success: false, error: "Database not available" }, { status: 500 });
 
-    const { data, error } = await supabase
-      .from("professional_claims")
-      .select(
-        `id, claim_number, claim_status, total_charge, patient_responsibility_amount,
+    const richSelect = `id, claim_number, claim_status, total_charge, patient_responsibility_amount,
          payer_responsibility_amount, denial_reason_code, first_billed_date, billing_notes,
          diagnosis_codes, place_of_service, prior_authorization_number, client_id,
          payer_profile_id, appointment_id, created_at, updated_at,
@@ -41,23 +95,85 @@ export async function GET(request: Request) {
                  stripe_payment_method_exp_month, stripe_payment_method_exp_year,
                  autopay_enabled),
          payer_profiles(payer_name),
-         appointments(id, scheduled_start_at, provider_id,
-                      providers(id, first_name, last_name, display_name, npi))`,
-      )
-      .eq("organization_id", organizationId)
-      .gt("patient_responsibility_amount", 0)
-      .is("archived_at", null)
-      .is("write_off_at", null)
-      .not("claim_status", "in", '("draft","archived")')
-      .order("created_at", { ascending: false });
+         appointments(id, scheduled_start_at, provider_id)`;
 
-    if (error) throw error;
+    let { data, error } = await queryClaims({
+      supabase,
+      organizationId,
+      selectClause: richSelect,
+      includeWriteOffFilter: true,
+    });
+    if (error && isMissingColumn(error, "write_off_at")) {
+      ({ data, error } = await queryClaims({
+        supabase,
+        organizationId,
+        selectClause: richSelect,
+        includeWriteOffFilter: false,
+      }));
+    }
 
-    const rows = (data ?? []).map((r) => {
+    let claimRows = data;
+    if (error) {
+      if (!isRecoverableQueryError(error)) throw error;
+
+      console.warn("patient-balances rich query unavailable; using fallback query path");
+      let fallback = await queryClaims({
+        supabase,
+        organizationId,
+        selectClause:
+          "id, claim_number, claim_status, total_charge, patient_responsibility_amount, payer_responsibility_amount, billing_notes, diagnosis_codes, client_id, payer_profile_id, first_billed_date, created_at",
+        includeWriteOffFilter: true,
+      });
+      if (fallback.error && isMissingColumn(fallback.error, "write_off_at")) {
+        fallback = await queryClaims({
+          supabase,
+          organizationId,
+          selectClause:
+            "id, claim_number, claim_status, total_charge, patient_responsibility_amount, payer_responsibility_amount, billing_notes, diagnosis_codes, client_id, payer_profile_id, first_billed_date, created_at",
+          includeWriteOffFilter: false,
+        });
+      }
+      if (fallback.error) throw fallback.error;
+      claimRows = (fallback.data ?? []).map((r: any) => ({
+        ...r,
+        clients: null,
+        payer_profiles: null,
+        appointments: null,
+      }));
+    }
+
+    const appointmentProviderIds = Array.from(
+      new Set(
+        (claimRows ?? [])
+          .map((r) => {
+            const appt = r.appointments as Record<string, unknown> | null;
+            return str(appt?.provider_id);
+          })
+          .filter(Boolean),
+      ),
+    );
+
+    const providerById = new Map<string, Record<string, unknown>>();
+    if (appointmentProviderIds.length > 0) {
+      const { data: providerRows, error: providerError } = await supabase
+        .from("providers")
+        .select("id, first_name, last_name, display_name, npi")
+        .eq("organization_id", organizationId)
+        .in("id", appointmentProviderIds)
+        .is("archived_at", null);
+      if (!providerError) {
+        for (const row of providerRows ?? []) {
+          providerById.set(str((row as Record<string, unknown>).id), row as Record<string, unknown>);
+        }
+      }
+    }
+
+    const rows = (claimRows ?? []).map((r) => {
+
       const client = r.clients as unknown as Record<string, unknown> | null;
       const payer = r.payer_profiles as unknown as Record<string, unknown> | null;
       const appt = r.appointments as unknown as Record<string, unknown> | null;
-      const provider = appt?.providers as Record<string, unknown> | null;
+      const provider = providerById.get(str(appt?.provider_id)) ?? null;
 
       const hasCard = Boolean(client?.stripe_payment_method_id);
       const cardBrand = str(client?.stripe_payment_method_brand) || null;
@@ -83,8 +199,8 @@ export async function GET(request: Request) {
         providerName,
         providerId: str(provider?.id) || null,
         dateOfService: appt?.scheduled_start_at
-          ? new Date(str(appt.scheduled_start_at)).toISOString().split("T")[0]
-          : str(r.first_billed_date) || null,
+          ? toIsoDateOrNull(appt.scheduled_start_at)
+          : toIsoDateOrNull(r.first_billed_date),
         totalCharge: num(r.total_charge),
         patientResponsibility: num(r.patient_responsibility_amount),
         payerPaid: num(r.payer_responsibility_amount),
@@ -104,7 +220,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ success: true, rows });
   } catch (e) {
     return NextResponse.json(
-      { success: false, error: e instanceof Error ? e.message : "Failed" },
+      { success: false, error: toErrorMessage(e) },
       { status: 500 },
     );
   }

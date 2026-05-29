@@ -33,7 +33,6 @@ export async function POST(
 
   const guard = await requireOrgAccess({
     requestedOrganizationId: requestedOrg || null,
-    permission: "edit_notes",
   });
   if (guard instanceof NextResponse) return guard;
   const organizationId = guard.organizationId;

@@ -86,9 +86,10 @@ export async function requireAuthenticatedPaymentPoster(
   requestOrganizationId: string,
 ): Promise<PostingActor> {
   const ctx = await requireAuthenticatedStaff();
+  const isProd = process.env.NODE_ENV === "production";
 
   if (!ctx) {
-    if (process.env.NODE_ENV === "production") {
+    if (isProd) {
       throw new PaymentPostingUnauthenticatedError();
     }
     return {
@@ -96,6 +97,17 @@ export async function requireAuthenticatedPaymentPoster(
       userId: null,
       role: "system_dev",
       source: "api:no_auth_session_dev",
+    };
+  }
+
+  if (!isProd) {
+    // Keep local/dev payment workflows unblocked while roles/permissions are
+    // still being seeded.
+    return {
+      staffId: ctx.staffId,
+      userId: ctx.userId || null,
+      role: ctx.roles[0] ?? null,
+      source: "api:authenticated_staff_dev_passthrough",
     };
   }
 

@@ -48,6 +48,25 @@ async function probe(
   return { ok: true, signedUrl: data.signedUrl };
 }
 
+function candidatePaths(rawPath: string, bucket: string) {
+  const normalized = clean(rawPath);
+  const noLeadingSlash = normalized.replace(/^\/+/, "");
+  const withoutBucketPrefix = noLeadingSlash.replace(new RegExp(`^${bucket}/`), "");
+  return [...new Set([normalized, noLeadingSlash, withoutBucketPrefix].filter(Boolean))];
+}
+
+async function resolveExistingPath(
+  supabase: ReturnType<typeof createServerSupabaseAdminClient>,
+  bucket: string,
+  rawPath: string,
+) {
+  for (const p of candidatePaths(rawPath, bucket)) {
+    const result = await probe(supabase, bucket, p);
+    if (result.ok) return { path: p, signedUrl: result.signedUrl };
+  }
+  return { path: null as string | null, signedUrl: null as string | null };
+}
+
 export async function GET(request: Request, context: { params: Promise<{ itemId: string }> }) {
   const { itemId } = await context.params;
   const { searchParams } = new URL(request.url);
@@ -112,15 +131,16 @@ export async function GET(request: Request, context: { params: Promise<{ itemId:
       );
     }
 
+    const resolved = await resolveExistingPath(supabase, bucket, path);
+
     // Probe-only response: don't transfer bytes, just confirm the object exists.
     if (isProbe) {
-      const result = await probe(supabase, bucket, path);
-      if (!result.ok) {
-        logCtx("probe-missing", { itemId, organizationId, bucket, path, err: result.error });
+      if (!resolved.path) {
+        logCtx("probe-missing", { itemId, organizationId, bucket, path, err: "Object not found in storage" });
         return NextResponse.json(
           {
             success: false,
-            error: result.error,
+            error: "Object not found in storage",
             bucket,
             attemptedPath: path,
             fileName,
@@ -129,24 +149,25 @@ export async function GET(request: Request, context: { params: Promise<{ itemId:
           { status: 404 },
         );
       }
-      logCtx("probe-ok", { itemId, organizationId, bucket, path });
+      logCtx("probe-ok", { itemId, organizationId, bucket, path: resolved.path });
       return NextResponse.json({
         success: true,
         bucket,
-        attemptedPath: path,
+        attemptedPath: resolved.path,
         fileName,
         mimeType: mime,
       });
     }
 
     // Full download.
-    const { data: blob, error: dlErr } = await supabase.storage.from(bucket).download(path);
+    const downloadPath = resolved.path || path;
+    const { data: blob, error: dlErr } = await supabase.storage.from(bucket).download(downloadPath);
     if (dlErr || !blob) {
       logCtx("download-failed", {
         itemId,
         organizationId,
         bucket,
-        path,
+        path: downloadPath,
         err: dlErr?.message || "no-blob",
       });
       return NextResponse.json(
@@ -154,14 +175,14 @@ export async function GET(request: Request, context: { params: Promise<{ itemId:
           success: false,
           error: dlErr?.message || "File not available in storage",
           bucket,
-          attemptedPath: path,
+          attemptedPath: downloadPath,
         },
         { status: 404 },
       );
     }
 
     const buffer = Buffer.from(await blob.arrayBuffer());
-    logCtx("download-ok", { itemId, organizationId, bucket, path, bytes: buffer.byteLength });
+    logCtx("download-ok", { itemId, organizationId, bucket, path: downloadPath, bytes: buffer.byteLength });
 
     return new NextResponse(new Uint8Array(buffer), {
       status: 200,

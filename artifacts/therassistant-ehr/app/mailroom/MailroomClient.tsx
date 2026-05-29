@@ -19,6 +19,13 @@ interface MailroomDoc {
   createdAt: string;
   source: string;
   storagePath?: string;
+  assignedToUserId?: string | null;
+  assigneeName?: string | null;
+}
+
+interface Assignee {
+  userId: string;
+  name: string;
 }
 
 interface Comment {
@@ -89,6 +96,9 @@ export default function MailroomClient() {
   const [commentsLoading, setCommentsLoading] = useState(false);
   const [newComment, setNewComment] = useState("");
   const [postingComment, setPostingComment] = useState(false);
+  const [assignees, setAssignees] = useState<Assignee[]>([]);
+  const [assignmentTarget, setAssignmentTarget] = useState<string>("");
+  const [assigning, setAssigning] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [filing, setFiling] = useState(false);
@@ -120,6 +130,8 @@ export default function MailroomClient() {
           createdAt: String(item.createdAt ?? item.created_at ?? ""),
           source: String(item.source ?? "uploaded"),
           storagePath: item.storagePath ? String(item.storagePath) : undefined,
+          assignedToUserId: item.assignedToUserId ? String(item.assignedToUserId) : null,
+          assigneeName: item.assigneeName ? String(item.assigneeName) : null,
         })));
       } else {
         setDocs([]);
@@ -133,6 +145,26 @@ export default function MailroomClient() {
   useEffect(() => {
     void loadDocs();
   }, [loadDocs]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadAssignees() {
+      try {
+        const res = await fetch(`/api/mailroom/assignees?organizationId=${encodeURIComponent(orgId)}`);
+        const json = (await res.json()) as { success?: boolean; assignees?: Array<{ userId: string; name: string }> };
+        if (cancelled) return;
+        if (json.success && Array.isArray(json.assignees)) {
+          setAssignees(json.assignees.map((a) => ({ userId: String(a.userId), name: String(a.name) })));
+        }
+      } catch {
+        // ignore
+      }
+    }
+    void loadAssignees();
+    return () => {
+      cancelled = true;
+    };
+  }, [orgId]);
 
   const filtered = useMemo(() => {
     let list = docs;
@@ -186,6 +218,10 @@ export default function MailroomClient() {
     return () => { cancelled = true; };
   }, [selectedId, orgId]);
 
+  useEffect(() => {
+    setAssignmentTarget(selected?.assignedToUserId ?? "");
+  }, [selected?.id, selected?.assignedToUserId]);
+
   async function addComment() {
     if (!selectedId || !newComment.trim() || postingComment) return;
     setPostingComment(true);
@@ -209,6 +245,42 @@ export default function MailroomClient() {
       // ignore — input retained so user can retry
     }
     setPostingComment(false);
+  }
+
+  async function assignSelected() {
+    if (!selected || assigning) return;
+    setAssigning(true);
+    try {
+      const res = await fetch(`/api/mailroom/items/${encodeURIComponent(selected.id)}/assign`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ organizationId: orgId, assignedToUserId: assignmentTarget || null }),
+      });
+      const json = (await res.json()) as {
+        success?: boolean;
+        error?: string;
+        assignedToUserId?: string | null;
+        assigneeName?: string | null;
+      };
+      if (!res.ok || !json.success) {
+        setFilingError(json.error || "Unable to assign document.");
+      } else {
+        setDocs((prev) =>
+          prev.map((d) =>
+            d.id === selected.id
+              ? {
+                  ...d,
+                  assignedToUserId: json.assignedToUserId ?? null,
+                  assigneeName: json.assigneeName ?? null,
+                }
+              : d,
+          ),
+        );
+      }
+    } catch (err) {
+      setFilingError(err instanceof Error ? err.message : "Unable to assign document.");
+    }
+    setAssigning(false);
   }
 
   const probePreview = useCallback(async () => {
@@ -441,6 +513,10 @@ export default function MailroomClient() {
                     <span className={styles.fieldValue}>{selected.source}</span>
                   </div>
                   <div className={styles.docCardField}>
+                    <span className={styles.fieldLabel}>Assigned To</span>
+                    <span className={styles.fieldValue}>{selected.assigneeName ?? "Unassigned"}</span>
+                  </div>
+                  <div className={styles.docCardField}>
                     <span className={styles.fieldLabel}>Linked Client</span>
                     <span className={styles.fieldValue}>
                       {selected.clientId ? (
@@ -578,6 +654,30 @@ export default function MailroomClient() {
               <div className={styles.attachSection}>
                 <div className={styles.attachHeader}>File or Attach</div>
                 {filingError ? <div style={{ color: "#DC2626", fontSize: 12.5, marginBottom: 8 }}>{filingError}</div> : null}
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+                  <select
+                    className={styles.commentInput}
+                    style={{ maxWidth: 300 }}
+                    value={assignmentTarget}
+                    onChange={(e) => setAssignmentTarget(e.target.value)}
+                    disabled={assigning}
+                  >
+                    <option value="">Unassigned</option>
+                    {assignees.map((a) => (
+                      <option key={a.userId} value={a.userId}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className={styles.attachBtn}
+                    onClick={() => void assignSelected()}
+                    disabled={assigning}
+                  >
+                    {assigning ? "Assigning…" : "Assign"}
+                  </button>
+                </div>
                 <div className={styles.attachActions}>
                   {selected.clientId ? (
                     <button

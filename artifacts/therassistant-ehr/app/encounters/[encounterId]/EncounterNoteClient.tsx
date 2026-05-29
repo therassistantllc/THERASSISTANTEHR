@@ -704,15 +704,13 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
         <div className="hero-actions">
           {client?.id ? <Link className="button button-secondary" href={`/clients/${client.id}`}>Client Chart</Link> : null}
           <Link className="button button-secondary" href="/clinician/agenda">Agenda</Link>
-          {summary?.coverage?.isMedicaid ? (
-            <button
-              className="button button-secondary"
-              type="button"
-              onClick={() => setShowCodingHelper(true)}
-            >
-              Coding Helper
-            </button>
-          ) : null}
+          <button
+            className="button button-secondary"
+            type="button"
+            onClick={() => setShowCodingHelper(true)}
+          >
+            Coding Helper
+          </button>
           {isSigned && !amending ? (
             <button
               className="button button-secondary"

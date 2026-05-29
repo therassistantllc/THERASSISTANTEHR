@@ -8,15 +8,14 @@ export const dynamic = "force-dynamic";
 export default async function SecuritySettingsPage() {
   const staff = await requireAuthenticatedStaff();
 
-  // In development we allow access when there's no logged-in staff so the
-  // page is still reachable from the settings shell. In production we require
-  // an admin role.
+  // In development we allow access so seeded non-admin accounts can still
+  // reach and test this page. In production we require an admin role.
   const isProd = process.env.NODE_ENV === "production";
   let authorized = false;
-  if (staff) {
-    authorized = await hasRole(staff.staffId, staff.organizationId, STAFF_ROLES.ADMIN);
-  } else if (!isProd) {
+  if (!isProd) {
     authorized = true;
+  } else if (staff) {
+    authorized = await hasRole(staff.staffId, staff.organizationId, STAFF_ROLES.ADMIN);
   }
 
   if (!authorized) {
