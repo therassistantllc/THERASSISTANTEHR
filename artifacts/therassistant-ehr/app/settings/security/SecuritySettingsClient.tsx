@@ -1031,7 +1031,7 @@ function Alert({ kind, children }: { kind: "error" | "success"; children: React.
     kind === "error"
       ? { bg: "#fdecec", border: "#f5c2c2", color: "#8a1c1c" }
       : { bg: "#e8f6ee", border: "#b6e1c4", color: "#1a663a" };
-return <SecuritySettingsClient />;
+  return (
     <div
       role="alert"
       style={{
