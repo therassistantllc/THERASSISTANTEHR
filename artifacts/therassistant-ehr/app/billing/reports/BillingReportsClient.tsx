@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 import { generateBillingInsights, type Insight } from "@/lib/billing/reportInsights";
+import { supabase } from "@/lib/supabase/client";
 import { Sparkline, LineChart, HBarChart, StackedBar, Donut } from "./charts";
 
 type MonthlyHeadline = {
@@ -319,7 +320,14 @@ export default function BillingReportsClient() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/auth/me", { cache: "no-store" });
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        const token = session?.access_token ?? null;
+        const res = await fetch("/api/auth/me?includeOrganization=1", {
+          cache: "no-store",
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
         if (!res.ok) return;
         const json = (await res.json()) as {
           roles?: string[];

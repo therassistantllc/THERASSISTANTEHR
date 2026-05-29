@@ -7,28 +7,39 @@
  */
 
 import { NextResponse } from "next/server";
-import { requireAuthentication } from "@/lib/rbac/middleware";
-import { getAuthenticatedUser, getProviderIdForUser } from "@/lib/rbac/auth";
+import { getProviderIdForUser, requireAuthenticatedStaffFromAccessToken } from "@/lib/rbac/auth";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 
-export async function GET() {
-  const contextOrError = await requireAuthentication();
+function parseBooleanFlag(value: string | null): boolean {
+  return value === "1" || value === "true" || value === "yes";
+}
 
-  if (contextOrError instanceof NextResponse) {
-    return contextOrError;
+export async function GET(request: Request) {
+  const authHeader = request.headers.get("authorization") || "";
+  const token = authHeader.toLowerCase().startsWith("bearer ")
+    ? authHeader.slice(7).trim()
+    : null;
+  const contextOrError = await requireAuthenticatedStaffFromAccessToken(token);
+  if (!contextOrError) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
   const { staffId, organizationId, email, firstName, lastName, roles, permissions } = contextOrError;
+  const url = new URL(request.url);
+  const includeProvider = parseBooleanFlag(url.searchParams.get("includeProvider"));
+  const includeOrganization = parseBooleanFlag(url.searchParams.get("includeOrganization"));
 
-  const authUser = await getAuthenticatedUser();
-  const providerId = authUser
-    ? await getProviderIdForUser(authUser.userId, organizationId)
-    : null;
+  let providerId: string | null = null;
+  if (includeProvider) {
+    providerId = contextOrError.userId
+      ? await getProviderIdForUser(contextOrError.userId, organizationId)
+      : null;
+  }
 
   let organizationName: string | null = null;
   let organizationLogoUrl: string | null = null;
   const supabase = createServerSupabaseAdminClient();
-  if (supabase && organizationId) {
+  if (includeOrganization && supabase && organizationId) {
     const { data } = await supabase
       .from("organizations")
       .select("name")

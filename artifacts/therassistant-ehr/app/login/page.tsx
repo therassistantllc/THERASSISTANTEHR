@@ -2,10 +2,28 @@
 
 import { useState } from "react";
 import { supabase } from "@/lib/supabase/client";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+
+function normalizeAuthError(raw: string): string {
+  const message = (raw || "").toLowerCase();
+  if (message.includes("rate limit") || message.includes("too many")) {
+    return "Too many attempts. Please wait and try again.";
+  }
+  if (message.includes("invalid login credentials")) {
+    return "Invalid email or password.";
+  }
+  if (message.includes("already registered") || message.includes("already been registered")) {
+    return "This email is already registered.";
+  }
+  if (message.includes("email not confirmed") || message.includes("email_not_confirmed")) {
+    return "This account cannot sign in yet. Use hard reset below.";
+  }
+  return "Invalid email or password.";
+}
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -14,6 +32,33 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  async function completeServerLogin(nextPath: string): Promise<boolean> {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const accessToken = session?.access_token ?? null;
+
+    // Retry once to handle eventual consistency between auth cookie write and server gate read.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const res = await fetch(`/api/auth/login/complete?next=${encodeURIComponent(nextPath)}`, {
+        method: "GET",
+        cache: "no-store",
+        headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
+      });
+      if (!res.ok) continue;
+      const json = (await res.json().catch(() => null)) as { success?: boolean; next?: string } | null;
+      if (json?.success) {
+        router.push(json.next || nextPath || "/calendar");
+        return true;
+      }
+    }
+
+    await supabase.auth.signOut();
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+    setError("Unable to sign in to this workspace.");
+    return false;
+  }
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -24,11 +69,14 @@ export default function LoginPage() {
       email,
       password,
     });
-    setLoading(false);
+
     if (error) {
-      setError(error.message);
+      setLoading(false);
+      setError(normalizeAuthError(error.message));
     } else {
-      router.push("/");
+      const next = searchParams.get("next") || "/calendar";
+      const ok = await completeServerLogin(next);
+      if (!ok) setLoading(false);
     }
   }
 
@@ -47,32 +95,146 @@ export default function LoginPage() {
     }
 
     setLoading(true);
-    const { data, error } = await supabase.auth.signUp({
+    const registerRes = await fetch("/api/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email,
+        password,
+        fullName,
+      }),
+    });
+    const registerJson = (await registerRes.json().catch(() => null)) as
+        | { success?: boolean; error?: string; created?: boolean; message?: string }
+      | null;
+
+    if (!registerRes.ok || !registerJson?.success) {
+      setLoading(false);
+      const normalized = normalizeAuthError(registerJson?.error || "Failed to create account");
+      if (normalized.toLowerCase().includes("already registered")) {
+        setMode("login");
+        setPassword("");
+        setConfirmPassword("");
+        setMessage("Account already exists for this email. Please sign in or reset your password.");
+      }
+      setError(normalized);
+      return;
+    }
+
+    const loginAfterRegister = await supabase.auth.signInWithPassword({
       email,
       password,
+    });
+
+    if (loginAfterRegister.error) {
+      setLoading(false);
+      setError(normalizeAuthError(loginAfterRegister.error.message));
+      return;
+    }
+
+    if (registerJson?.created === false) {
+      setMessage("Existing account recovered. Your password has been reset.");
+    }
+
+    const next = searchParams.get("next") || "/calendar";
+    const ok = await completeServerLogin(next);
+    if (!ok) setLoading(false);
+  }
+
+  async function sendPasswordReset() {
+    setError(null);
+    setMessage(null);
+    if (!email.trim()) {
+      setError("Enter your email first, then click reset password.");
+      return;
+    }
+
+    setLoading(true);
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+      redirectTo: typeof window !== "undefined" ? `${window.location.origin}/login` : undefined,
+    });
+    setLoading(false);
+
+    if (error) {
+      setError(normalizeAuthError(error.message));
+      return;
+    }
+    setMessage("Password reset email sent. Check your inbox.");
+  }
+
+  async function sendMagicLink() {
+    setError(null);
+    setMessage(null);
+    if (!email.trim()) {
+      setError("Enter your email first, then request a magic link.");
+      return;
+    }
+
+    setLoading(true);
+    const { error } = await supabase.auth.signInWithOtp({
+      email: email.trim(),
       options: {
-        data: {
-          full_name: fullName || null,
-        },
+        shouldCreateUser: false,
+        emailRedirectTo: typeof window !== "undefined" ? `${window.location.origin}/` : undefined,
       },
     });
     setLoading(false);
 
     if (error) {
-      setError(error.message);
+      setError(normalizeAuthError(error.message));
+      return;
+    }
+    setMessage("Magic link sent. Open the email to sign in.");
+  }
+
+  async function hardResetAndLogin() {
+    setError(null);
+    setMessage(null);
+
+    if (!email.trim()) {
+      setError("Enter your email first.");
+      return;
+    }
+    if (password.length < 8) {
+      setError("Enter a new password with at least 8 characters, then click hard reset.");
       return;
     }
 
-    const hasSession = Boolean(data.session);
-    if (hasSession) {
-      router.push("/");
+    setLoading(true);
+    const registerRes = await fetch("/api/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password, fullName }),
+    });
+    const registerJson = (await registerRes.json().catch(() => null)) as
+      | { success?: boolean; error?: string; created?: boolean }
+      | null;
+
+    if (!registerRes.ok || !registerJson?.success) {
+      setLoading(false);
+      setError(normalizeAuthError(registerJson?.error || "Failed to reset account"));
       return;
     }
 
-    setMessage("Account created. Check your email to confirm your account before signing in.");
-    setMode("login");
-    setPassword("");
-    setConfirmPassword("");
+    const { error: loginError } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (loginError) {
+      setLoading(false);
+      setError(normalizeAuthError(loginError.message));
+      return;
+    }
+
+    setMessage(
+      registerJson.created === false
+        ? "Account recovered and password reset. You are now signed in."
+        : "Account created and signed in.",
+    );
+    const next = searchParams.get("next") || "/calendar";
+    const ok = await completeServerLogin(next);
+    if (!ok) setLoading(false);
   }
 
   function switchMode(next: "login" | "register") {
@@ -278,6 +440,63 @@ export default function LoginPage() {
               ? mode === "login" ? "Signing in..." : "Creating account..."
               : mode === "login" ? "Sign in" : "Create account"}
           </button>
+
+          {mode === "login" && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
+              <button
+                type="button"
+                onClick={() => void sendPasswordReset()}
+                disabled={loading}
+                style={{
+                  padding: "9px 10px",
+                  borderRadius: 6,
+                  border: "1px solid #d1d5db",
+                  background: "#fff",
+                  color: "#10243f",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: loading ? "not-allowed" : "pointer",
+                }}
+              >
+                Reset password
+              </button>
+              <button
+                type="button"
+                onClick={() => void sendMagicLink()}
+                disabled={loading}
+                style={{
+                  padding: "9px 10px",
+                  borderRadius: 6,
+                  border: "1px solid #d1d5db",
+                  background: "#fff",
+                  color: "#10243f",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: loading ? "not-allowed" : "pointer",
+                }}
+              >
+                Send magic link
+              </button>
+              <button
+                type="button"
+                onClick={() => void hardResetAndLogin()}
+                disabled={loading}
+                style={{
+                  gridColumn: "1 / span 2",
+                  padding: "9px 10px",
+                  borderRadius: 6,
+                  border: "1px solid #10243f",
+                  background: "#f8fafc",
+                  color: "#10243f",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: loading ? "not-allowed" : "pointer",
+                }}
+              >
+                Hard reset account (no email link)
+              </button>
+            </div>
+          )}
         </form>
       </div>
     </div>

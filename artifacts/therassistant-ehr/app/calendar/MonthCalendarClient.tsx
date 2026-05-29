@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import styles from "./monthCalendar.module.css";
 import { DEFAULT_ORG_ID } from "@/lib/config";
+import { supabase } from "@/lib/supabase/client";
 
 const ORG_ID =
   (typeof process !== "undefined" &&
@@ -298,7 +299,14 @@ export default function MonthCalendarClient() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/auth/me", { cache: "no-store" });
+          const {
+            data: { session },
+          } = await supabase.auth.getSession();
+          const token = session?.access_token ?? null;
+          const res = await fetch("/api/auth/me?includeProvider=1", {
+            cache: "no-store",
+            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          });
         if (!res.ok) return;
         const json = (await res.json()) as MePayload;
         if (cancelled) return;

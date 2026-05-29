@@ -13,7 +13,38 @@ import { PermissionCode, StaffRoleCode } from "./constants";
 export interface AuthenticatedUser {
   userId: string;
   email: string | null;
-  organizationId: string | null;
+}
+
+async function getAuthenticatedUserInternal(
+  accessToken?: string,
+): Promise<AuthenticatedUser | null> {
+  const supabase = createServerSupabaseAdminClient();
+  if (!supabase) return null;
+
+  try {
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.getUser(accessToken);
+
+    if (error || !user) {
+      // Development bypass is opt-in only.
+      if (process.env.NODE_ENV === "development" && process.env.ALLOW_DEV_AUTH_BYPASS === "true") {
+        const devUserId = process.env.DEV_AUTH_USER_ID ?? null;
+        if (devUserId) {
+          return { userId: devUserId, email: null };
+        }
+      }
+      return null;
+    }
+
+    return {
+      userId: user.id,
+      email: user.email ?? null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -37,36 +68,17 @@ export interface StaffAuthContext {
  * Returns null if not authenticated
  */
 export async function getAuthenticatedUser(): Promise<AuthenticatedUser | null> {
-  const supabase = createServerSupabaseAdminClient();
-  if (!supabase) return null;
+  return getAuthenticatedUserInternal();
+}
 
-  try {
-    const {
-      data: { user },
-      error,
-    } = await supabase.auth.getUser();
-
-    if (error || !user) {
-      // Development bypass: return the configured org's default admin user
-      // so API routes work without a browser session during local development.
-      if (process.env.NODE_ENV === "development") {
-        const orgId = process.env.NEXT_PUBLIC_ORGANIZATION_ID ?? null;
-        const devUserId = process.env.DEV_AUTH_USER_ID ?? null;
-        if (orgId && devUserId) {
-          return { userId: devUserId, email: null, organizationId: orgId };
-        }
-      }
-      return null;
-    }
-
-    return {
-      userId: user.id,
-      email: user.email ?? null,
-      organizationId: (user.user_metadata?.organization_id as string) || null,
-    };
-  } catch {
-    return null;
-  }
+/**
+ * Get authenticated user from explicit bearer token when available.
+ */
+export async function getAuthenticatedUserFromAccessToken(
+  accessToken: string | null | undefined,
+): Promise<AuthenticatedUser | null> {
+  const token = typeof accessToken === "string" ? accessToken.trim() : "";
+  return getAuthenticatedUserInternal(token || undefined);
 }
 
 /**
@@ -333,8 +345,14 @@ export function assertSameOrganization(
  * Returns null if not authenticated or validation fails
  */
 export async function requireAuthenticatedStaff(): Promise<StaffAuthContext | null> {
-  const user = await getAuthenticatedUser();
-  if (!user || !user.organizationId) {
+  return requireAuthenticatedStaffFromAccessToken(undefined);
+}
+
+export async function requireAuthenticatedStaffFromAccessToken(
+  accessToken: string | null | undefined,
+): Promise<StaffAuthContext | null> {
+  const user = await getAuthenticatedUserFromAccessToken(accessToken);
+  if (!user) {
     return null;
   }
 
@@ -343,6 +361,11 @@ export async function requireAuthenticatedStaff(): Promise<StaffAuthContext | nu
     return null;
   }
 
-  const context = await loadStaffAuthContext(staffProfile.id, user.organizationId);
+  const organizationId = staffProfile.organization_id;
+  if (!organizationId) {
+    return null;
+  }
+
+  const context = await loadStaffAuthContext(staffProfile.id, organizationId);
   return context;
 }

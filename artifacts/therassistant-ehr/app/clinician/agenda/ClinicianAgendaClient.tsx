@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DEFAULT_ORG_ID } from "@/lib/config";
+import { supabase } from "@/lib/supabase/client";
 
 type AgendaItem = {
   appointmentId: string;
@@ -273,7 +274,14 @@ export default function ClinicianAgendaClient() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/auth/me", { cache: "no-store" });
+          const {
+            data: { session },
+          } = await supabase.auth.getSession();
+          const token = session?.access_token ?? null;
+          const res = await fetch("/api/auth/me?includeProvider=1", {
+            cache: "no-store",
+            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          });
         if (!res.ok) return;
         const json = (await res.json()) as MePayload;
         if (!cancelled) setMe(json);
