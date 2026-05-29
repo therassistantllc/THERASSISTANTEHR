@@ -76,7 +76,7 @@ export async function GET(request: Request) {
       const fallback = await (supabase as any)
         .from("professional_claims")
         .select(
-          "id, claim_number, claim_status, total_charge, patient_responsibility_amount, payer_responsibility_amount, billing_notes, created_at, client_id, clients(first_name,last_name), payer_profiles(payer_name)",
+          "id, claim_number, claim_status, total_charge, patient_responsibility_amount, payer_responsibility_amount, billing_notes, created_at, client_id, clients(first_name,last_name), payer_profiles!professional_claims_payer_profile_id_fkey(payer_name)",
           { count: "exact" },
         )
         .eq("organization_id", organizationId)

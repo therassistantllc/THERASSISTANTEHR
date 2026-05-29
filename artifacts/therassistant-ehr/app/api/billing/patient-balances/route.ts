@@ -94,7 +94,7 @@ export async function GET(request: Request) {
                  stripe_payment_method_brand, stripe_payment_method_last4,
                  stripe_payment_method_exp_month, stripe_payment_method_exp_year,
                  autopay_enabled),
-         payer_profiles(payer_name),
+         payer_profiles!professional_claims_payer_profile_id_fkey(payer_name),
          appointments(id, scheduled_start_at, provider_id)`;
 
     let { data, error } = await queryClaims({
