@@ -2,14 +2,14 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import SoapNoteEditor, { SoapNoteData } from "@/components/encounter/SoapNoteEditor";
 import DiagnosisPicker, { Diagnosis } from "@/components/encounter/DiagnosisPicker";
 import CptCodePanel, { ServiceLine } from "@/components/encounter/CptCodePanel";
 import ClaimReadinessSidebar, { ClaimReadinessCheck } from "@/components/encounter/ClaimReadinessSidebar";
 import SignNoteModal from "@/components/encounter/SignNoteModal";
 import ClinicianJournalPanel, { ImportResult } from "@/components/encounter/ClinicianJournalPanel";
-import InlineCodingHelper, { CodingHelperReport, InlineCodingHelperHandle } from "@/components/encounter/InlineCodingHelper";
+import CodingHelperPanel, { CodingHelperReport } from "@/components/encounter/CodingHelperPanel";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 import { analyzeMedicaidDocumentation } from "@/lib/encounters/medicaidCodeDetection";
 import {
@@ -104,9 +104,7 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
   const [savingPersonal, setSavingPersonal] = useState(false);
   const [showJournalModal, setShowJournalModal] = useState(false);
   const [showCodingHelper, setShowCodingHelper] = useState(false);
-  const [savingCodingHelperReport, setSavingCodingHelperReport] = useState(false);
-  const [generatedCodingReport, setGeneratedCodingReport] = useState<CodingHelperReport | null>(null);
-  const codingHelperRef = useRef<InlineCodingHelperHandle | null>(null);
+  const [, setGeneratedCodingReport] = useState<CodingHelperReport | null>(null);
 
   const personalTemplates = useMemo(
     () => templates.filter((t) => t.provider_id !== null),
@@ -180,27 +178,6 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
         code: rec.code,
         className: rec.action === "suggest" ? "status status-green" : "status status-yellow",
       }));
-  }, [medicaidSuggestions]);
-
-  const codingHelperSummary = useMemo(() => {
-    if (!medicaidSuggestions) {
-      return {
-        codes: [] as string[],
-        auditSummary: "No coding support signals detected from the current documentation.",
-      };
-    }
-
-    const actionable = medicaidSuggestions.recommendations.filter(
-      (rec) => rec.action === "suggest" || rec.action === "clarify_before_suggesting",
-    );
-    const codes = Array.from(new Set(actionable.map((rec) => rec.code)));
-
-    return {
-      codes,
-      auditSummary:
-        medicaidSuggestions.auditSummary.join(" ") ||
-        "No coding support signals detected from the current documentation.",
-    };
   }, [medicaidSuggestions]);
 
   const claimReadinessChecks = useMemo((): ClaimReadinessCheck[] => {
@@ -485,25 +462,16 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
     }
   }
 
-  async function saveCodingHelperReportToChart() {
+  async function saveCodingHelperReportToChart(reportToSave: CodingHelperReport) {
     if (!organizationId) {
       setError("Missing organizationId. Add ?organizationId=... to the URL or configure NEXT_PUBLIC_ORGANIZATION_ID.");
       return;
     }
 
-    setSavingCodingHelperReport(true);
     setError(null);
     setMessage(null);
 
     try {
-      let reportToSave = generatedCodingReport;
-      if (!reportToSave) {
-        reportToSave = await generateCodingHelperReport();
-      }
-      if (!reportToSave) {
-        throw new Error("Generate the coding report first.");
-      }
-
       const response = await fetch(`/api/encounters/${encounterId}/coding-report`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -517,7 +485,6 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
         success?: boolean;
         error?: string;
         title?: string;
-        noteUpdated?: boolean;
       };
 
       if (!response.ok || !json.success) {
@@ -525,34 +492,11 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
       }
 
       setMessage(
-        json.noteUpdated
-          ? `Saved coding support into this encounter note${json.title ? ` and chart document: ${json.title}` : "."}`
-          : `Saved coding report to chart${json.title ? `: ${json.title}` : "."}`,
+        `Saved coding report to chart${json.title ? `: ${json.title}` : "."}`,
       );
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Failed to save coding report to chart");
-    } finally {
-      setSavingCodingHelperReport(false);
     }
-  }
-
-  async function generateCodingHelperReport() {
-    const helper = codingHelperRef.current;
-    if (!helper || !helper.isReady()) {
-      setError("Coding helper is still loading. Please try again in a moment.");
-      return null;
-    }
-
-    const report = helper.generateReport();
-    if (!report) {
-      setError("The coding helper did not return a report. Complete the questions and click Generate Report again.");
-      return null;
-    }
-
-    setGeneratedCodingReport(report);
-    setMessage("Coding helper report generated. Review and save when ready.");
-    setError(null);
-    return report;
   }
 
   async function signNote() {
@@ -910,7 +854,7 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
 
       <SignNoteModal isOpen={showSignModal} onClose={() => setShowSignModal(false)} onConfirm={signNote} isLoading={saving} />
 
-      {summary.coverage?.isMedicaid && showCodingHelper ? (
+      {showCodingHelper ? (
         <div
           role="dialog"
           aria-modal="true"
@@ -945,60 +889,41 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
               <div>
                 <h2 style={{ margin: 0 }}>Coding Helper</h2>
                 <p className="muted" style={{ margin: "4px 0 0 0", fontSize: 13 }}>
-                  Generates an encounter coding support report from current note content.
+                  Native encounter coding support that uses live SOAP, diagnosis, and service line state.
                 </p>
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <button className="button button-secondary" type="button" onClick={generateCodingHelperReport}>
-                  Generate Report
-                </button>
-                <button
-                  className="button"
-                  type="button"
-                  onClick={saveCodingHelperReportToChart}
-                  disabled={savingCodingHelperReport || !generatedCodingReport}
-                >
-                  {savingCodingHelperReport ? "Saving…" : "Save To Encounter Note"}
-                </button>
                 <button className="button button-secondary" type="button" onClick={() => setShowCodingHelper(false)}>
                   Close
                 </button>
               </div>
             </div>
 
-            <div className="detail-list" style={{ marginTop: 8 }}>
-              <p>
-                <strong>Suggested codes:</strong>{" "}
-                {codingHelperSummary.codes.length > 0 ? codingHelperSummary.codes.join(", ") : "None yet"}
-              </p>
-              <p>
-                <strong>Audit summary:</strong> {codingHelperSummary.auditSummary}
-              </p>
-              {medicaidSuggestions?.globalWarnings.length ? (
-                <p>
-                  <strong>Documentation warnings:</strong> {medicaidSuggestions.globalWarnings.join(" | ")}
-                </p>
-              ) : null}
-            </div>
-
             <div style={{ marginTop: 12, overflow: "auto", maxHeight: "72vh" }}>
-              <InlineCodingHelper ref={codingHelperRef} />
+              <CodingHelperPanel
+                encounterId={encounterId}
+                organizationId={organizationId}
+                clientName={client?.name}
+                payerName={summary.coverage?.primaryPayerName}
+                isMedicaid={!!summary.coverage?.isMedicaid}
+                soapNote={soapNote}
+                diagnoses={diagnoses}
+                serviceLines={serviceLines}
+                onApplySuggestedCodes={(codes) => {
+                  setServiceLines((prev) =>
+                    prev.length
+                      ? prev.map((line, i) =>
+                          i === 0 ? { ...line, cpt_hcpcs_code: codes[0] ?? line.cpt_hcpcs_code } : line,
+                        )
+                      : prev,
+                  );
+                }}
+                onSaveReport={async (report) => {
+                  setGeneratedCodingReport(report);
+                  await saveCodingHelperReportToChart(report);
+                }}
+              />
             </div>
-
-            {generatedCodingReport ? (
-              <article className="panel" style={{ marginTop: 12, padding: 12 }}>
-                <h3 style={{ marginTop: 0 }}>Generated Report Preview</h3>
-                <p style={{ marginBottom: 8 }}><strong>Report date:</strong> {generatedCodingReport.date}</p>
-                <p style={{ marginBottom: 8 }}><strong>Codes:</strong> {generatedCodingReport.codes || "None"}</p>
-                <p style={{ marginBottom: 8 }}><strong>Summary:</strong> {generatedCodingReport.auditSummary}</p>
-                <details>
-                  <summary>View full report details</summary>
-                  <pre style={{ whiteSpace: "pre-wrap", marginTop: 8, fontSize: 12 }}>
-                    {generatedCodingReport.formSummary}
-                  </pre>
-                </details>
-              </article>
-            ) : null}
           </div>
         </div>
       ) : null}
