@@ -35,6 +35,7 @@ type IncomingUpdates = {
   sourceClientId?: string | null;
   emergencyContactName?: string | null;
   emergencyContactPhone?: string | null;
+  primaryClinicianUserId?: string | null;
 };
 
 const FIELD_MAP: Record<keyof IncomingUpdates, string> = {
@@ -58,6 +59,7 @@ const FIELD_MAP: Record<keyof IncomingUpdates, string> = {
   sourceClientId: "external_client_ref",
   emergencyContactName: "emergency_contact_name",
   emergencyContactPhone: "emergency_contact_phone",
+  primaryClinicianUserId: "primary_clinician_user_id",
 };
 
 const COLUMN_LABELS: Record<string, string> = {
@@ -81,6 +83,7 @@ const COLUMN_LABELS: Record<string, string> = {
   external_client_ref: "Source client ID",
   emergency_contact_name: "Emergency contact name",
   emergency_contact_phone: "Emergency contact phone",
+  primary_clinician_user_id: "Assigned clinician",
 };
 
 const AUDIT_COLUMNS = Object.values(FIELD_MAP);
@@ -241,6 +244,45 @@ export async function PATCH(
     const validationError = validate(allowed);
     if (validationError) {
       return NextResponse.json({ success: false, error: validationError }, { status: 400 });
+    }
+
+    // Enforce that assigned clinician points to an active user in this org
+    // with a clinician-like role.
+    if ("primary_clinician_user_id" in allowed && allowed.primary_clinician_user_id) {
+      const clinicianUserId = String(allowed.primary_clinician_user_id);
+      const { data: staffProfile, error: staffProfileError } = await supabase
+        .from("staff_profiles")
+        .select("id")
+        .eq("organization_id", organizationId)
+        .eq("auth_user_id", clinicianUserId)
+        .eq("is_active", true)
+        .is("archived_at", null)
+        .maybeSingle();
+      if (staffProfileError) throw staffProfileError;
+      if (!staffProfile?.id) {
+        return NextResponse.json(
+          { success: false, error: "Assigned clinician must be an active user in this organization." },
+          { status: 400 },
+        );
+      }
+
+      const { data: roleRows, error: roleError } = await supabase
+        .from("staff_role_assignments")
+        .select("staff_roles!inner(role_code)")
+        .eq("organization_id", organizationId)
+        .eq("staff_id", staffProfile.id)
+        .is("archived_at", null);
+      if (roleError) throw roleError;
+      const roleCodes = ((roleRows ?? []) as Array<{ staff_roles?: { role_code?: string | null } | null }>)
+        .map((r) => String(r.staff_roles?.role_code ?? "").trim())
+        .filter(Boolean);
+      const allowedRole = roleCodes.includes("clinician") || roleCodes.includes("practice_owner");
+      if (!allowedRole) {
+        return NextResponse.json(
+          { success: false, error: "Assigned clinician must have the clinician role." },
+          { status: 400 },
+        );
+      }
     }
 
     const { data: existing, error: existingError } = await supabase

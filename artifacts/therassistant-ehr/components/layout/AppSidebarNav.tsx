@@ -271,8 +271,7 @@ export default function AppSidebarNav() {
 
       {adminExpanded ? (
         <div className={styles.subnav}>
-          <SubNavLinkIcon href="/settings/providers" icon={<UserCheckIcon />} label="Providers" prefixes={["/settings/providers"]} pathname={pathname} />
-          <SubNavLinkIcon href="/settings/users" icon={<UsersIcon />} label="Users" prefixes={["/settings/users"]} pathname={pathname} />
+          <SubNavLinkIcon href="/settings/users" icon={<UsersIcon />} label="Users & Clinicians" prefixes={["/settings/users", "/settings/providers"]} pathname={pathname} />
           <SubNavLinkIcon href="/settings/organizations" icon={<BuildingIcon />} label="Organizations" prefixes={["/settings/organization", "/settings/organizations"]} pathname={pathname} />
           <SubNavLinkIcon href="/settings/payers" icon={<ShieldIcon />} label="Payers" prefixes={["/settings/payers"]} pathname={pathname} />
           <SubNavLinkIcon href="/settings/security" icon={<LockIcon />} label="Security" prefixes={["/settings/security"]} pathname={pathname} />

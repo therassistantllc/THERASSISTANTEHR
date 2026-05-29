@@ -136,6 +136,20 @@ interface ClaimRow {
   rarcCodes?: string[];
 }
 
+interface ClaimStatusBatchSummary {
+  id: string;
+  batch_number: string;
+  batch_status: string;
+  claim_count: number;
+  payer_id: string;
+  billing_provider_tax_id: string;
+  generated_file_name: string | null;
+  generated_at: string | null;
+  downloaded_at: string | null;
+  submitted_at: string | null;
+  created_at: string;
+}
+
 // ─── Per-lifecycle endpoint adapters ───────────────────────────────────────
 
 // Each tab fetches from a different backend bucket. Adapters normalize
@@ -417,8 +431,13 @@ export default function ClaimsWorkspace() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
+  const [selectedClaimIds, setSelectedClaimIds] = useState<string[]>([]);
   const [drawerTab, setDrawerTab] = useState<DrawerTabId>("timeline");
   const [recentlyPostedCount, setRecentlyPostedCount] = useState(0);
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [batchMessage, setBatchMessage] = useState<string | null>(null);
+  const [batchError, setBatchError] = useState<string | null>(null);
+  const [statusBatches, setStatusBatches] = useState<ClaimStatusBatchSummary[]>([]);
 
   // URL sync
   useEffect(() => {
@@ -464,6 +483,30 @@ export default function ClaimsWorkspace() {
       cancelled = true;
     };
   }, [activeTab, firstServerChipId]);
+
+  useEffect(() => {
+    if (activeTab !== "submitted") {
+      setSelectedClaimIds([]);
+      return;
+    }
+    setSelectedClaimIds((prev) => prev.filter((id) => rows.some((r) => r.id === id)));
+  }, [activeTab, rows]);
+
+  const loadStatusBatches = useCallback(async () => {
+    try {
+      const p = new URLSearchParams({ organizationId: getOrganizationId() });
+      const json = await fetchJson(`/api/billing/claims/status-batches?${p}`);
+      setStatusBatches((json.batches ?? []) as ClaimStatusBatchSummary[]);
+    } catch {
+      setStatusBatches([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "submitted") {
+      void loadStatusBatches();
+    }
+  }, [activeTab, loadStatusBatches]);
 
   // Fetch the "Recently Posted Today" KPI from write-offs (recent ledger postings).
   useEffect(() => {
@@ -536,6 +579,96 @@ export default function ClaimsWorkspace() {
   );
 
   const closeDrawer = useCallback(() => setSelectedRowId(null), []);
+
+  const selectedCount = selectedClaimIds.length;
+  const allVisibleSelected =
+    filtered.length > 0 && filtered.every((r) => selectedClaimIds.includes(r.id));
+
+  const toggleSelectedClaim = (claimId: string) => {
+    setSelectedClaimIds((prev) =>
+      prev.includes(claimId) ? prev.filter((id) => id !== claimId) : [...prev, claimId],
+    );
+  };
+
+  const toggleSelectAllVisible = () => {
+    if (filtered.length === 0) return;
+    if (allVisibleSelected) {
+      setSelectedClaimIds([]);
+      return;
+    }
+    setSelectedClaimIds(filtered.map((r) => r.id));
+  };
+
+  const generateStatusBatch = async () => {
+    if (selectedClaimIds.length === 0) return;
+    setBatchBusy(true);
+    setBatchMessage(null);
+    setBatchError(null);
+    try {
+      const res = await fetch("/api/billing/claims/status-batches", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ organizationId: getOrganizationId(), claimIds: selectedClaimIds }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(json.error ?? "Failed to create 276 batch");
+      }
+      const excluded = Array.isArray(json.excludedClaims) ? json.excludedClaims.length : 0;
+      setBatchMessage(
+        `Created ${json.batchesCreated ?? 0} batch(es).${excluded > 0 ? ` Excluded ${excluded} claim(s).` : ""}`,
+      );
+      setSelectedClaimIds([]);
+      await loadStatusBatches();
+    } catch (e) {
+      setBatchError(e instanceof Error ? e.message : "Failed to create 276 batch");
+    } finally {
+      setBatchBusy(false);
+    }
+  };
+
+  const downloadStatusBatch = async (batchId: string) => {
+    setBatchError(null);
+    try {
+      const p = new URLSearchParams({ organizationId: getOrganizationId() });
+      const res = await fetch(`/api/billing/claims/status-batches/${encodeURIComponent(batchId)}/download?${p}`);
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        throw new Error((json as { error?: string }).error ?? "Failed to download 276 batch");
+      }
+      const fileName =
+        res.headers.get("Content-Disposition")?.match(/filename=\"?([^\";]+)\"?/)?.[1] ||
+        `${batchId}.edi`;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = fileName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      await loadStatusBatches();
+    } catch (e) {
+      setBatchError(e instanceof Error ? e.message : "Failed to download 276 batch");
+    }
+  };
+
+  const markStatusBatchSubmitted = async (batchId: string) => {
+    setBatchError(null);
+    try {
+      const res = await fetch(`/api/billing/claims/status-batches/${encodeURIComponent(batchId)}/mark-submitted`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ organizationId: getOrganizationId() }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error ?? "Failed to mark 276 submitted");
+      await loadStatusBatches();
+    } catch (e) {
+      setBatchError(e instanceof Error ? e.message : "Failed to mark 276 submitted");
+    }
+  };
 
   useEffect(() => {
     if (!selectedRowId) return;
@@ -655,6 +788,27 @@ export default function ClaimsWorkspace() {
 
       {error ? <div className={styles.error}>{error}</div> : null}
 
+      {activeTab === "submitted" ? (
+        <section className={styles.batchToolbar}>
+          <div className={styles.batchToolbarRow}>
+            <button type="button" className={styles.batchButton} onClick={toggleSelectAllVisible}>
+              {allVisibleSelected ? "Clear Selection" : "Select All Visible"}
+            </button>
+            <span className={styles.batchMeta}>{selectedCount} selected</span>
+            <button
+              type="button"
+              className={`${styles.batchButton} ${styles.batchButtonPrimary}`}
+              onClick={() => void generateStatusBatch()}
+              disabled={selectedCount === 0 || batchBusy}
+            >
+              {batchBusy ? "Generating..." : "Generate 276 Batch"}
+            </button>
+          </div>
+          {batchMessage ? <div className={styles.batchSuccess}>{batchMessage}</div> : null}
+          {batchError ? <div className={styles.batchError}>{batchError}</div> : null}
+        </section>
+      ) : null}
+
       {/* Body — table */}
       <div className={styles.tableWrap}>
         {loading ? (
@@ -667,6 +821,7 @@ export default function ClaimsWorkspace() {
           <table className={styles.table}>
             <thead>
               <tr>
+                {activeTab === "submitted" ? <th style={{ width: 44 }}>Select</th> : null}
                 <th>Client</th>
                 <th>DOS</th>
                 <th>Payer</th>
@@ -690,6 +845,16 @@ export default function ClaimsWorkspace() {
                       setDrawerTab("timeline");
                     }}
                   >
+                    {activeTab === "submitted" ? (
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selectedClaimIds.includes(r.id)}
+                          onChange={() => toggleSelectedClaim(r.id)}
+                          aria-label={`Select claim ${r.claimNumber}`}
+                        />
+                      </td>
+                    ) : null}
                     <td>
                       <div className={styles.patientCell}>{r.patientName}</div>
                       <div className={styles.patientSub}>Claim {r.claimNumber}</div>
@@ -730,6 +895,42 @@ export default function ClaimsWorkspace() {
           </table>
         )}
       </div>
+
+      {activeTab === "submitted" && statusBatches.length > 0 ? (
+        <section className={styles.statusBatchesPanel}>
+          <h3 className={styles.statusBatchesTitle}>276 Batch History</h3>
+          <div className={styles.statusBatchesList}>
+            {statusBatches.map((batch) => (
+              <div key={batch.id} className={styles.statusBatchCard}>
+                <div>
+                  <strong>{batch.batch_number}</strong>
+                  <div className={styles.patientSub}>
+                    {batch.claim_count} claims · Payer {batch.payer_id} · TIN {batch.billing_provider_tax_id}
+                  </div>
+                  <div className={styles.patientSub}>Status: {batch.batch_status}</div>
+                </div>
+                <div className={styles.statusBatchActions}>
+                  <button
+                    type="button"
+                    className={styles.batchButton}
+                    onClick={() => void downloadStatusBatch(batch.id)}
+                  >
+                    Download
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.batchButton}
+                    onClick={() => void markStatusBatchSubmitted(batch.id)}
+                    disabled={batch.batch_status === "submitted"}
+                  >
+                    Mark Submitted
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       {/* Drawer */}
       {selectedRow ? (

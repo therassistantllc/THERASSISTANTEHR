@@ -46,9 +46,9 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
     const organizationId = guard.organizationId;
 
     const FULL_CLIENT_COLS =
-      "id, first_name, middle_name, last_name, date_of_birth, email, phone, preferred_name, pronouns, mrn, external_client_ref, sex_at_birth, gender_identity, address_line_1, address_line_2, city, state, postal_code, preferred_language, emergency_contact_name, emergency_contact_phone";
+      "id, first_name, middle_name, last_name, date_of_birth, email, phone, preferred_name, pronouns, mrn, external_client_ref, sex_at_birth, gender_identity, address_line_1, address_line_2, city, state, postal_code, preferred_language, emergency_contact_name, emergency_contact_phone, primary_clinician_user_id";
     const BASE_CLIENT_COLS =
-      "id, first_name, middle_name, last_name, date_of_birth, email, phone, preferred_name, pronouns, mrn, external_client_ref, sex_at_birth, gender_identity, address_line_1, address_line_2, city, state, postal_code, preferred_language";
+      "id, first_name, middle_name, last_name, date_of_birth, email, phone, preferred_name, pronouns, mrn, external_client_ref, sex_at_birth, gender_identity, address_line_1, address_line_2, city, state, postal_code, preferred_language, primary_clinician_user_id";
 
     let { data: client, error: clientError } = await supabase
       .from("clients")
@@ -190,6 +190,7 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
         sourceClientId: client.external_client_ref ?? null,
         emergencyContactName: client.emergency_contact_name ?? null,
         emergencyContactPhone: client.emergency_contact_phone ?? null,
+        primaryClinicianUserId: client.primary_clinician_user_id ?? null,
       },
       insurance: {
         policies: policies ?? [],

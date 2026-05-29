@@ -200,6 +200,60 @@
   margin-left: 4px;
 }
 
+.batchToolbar {
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-surface);
+}
+
+.batchToolbarRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.batchMeta {
+  color: var(--c-ink-muted);
+  font-size: 12px;
+  margin-left: 4px;
+}
+
+.batchButton {
+  appearance: none;
+  border: 1px solid var(--c-border-strong);
+  background: #fff;
+  color: var(--c-ink);
+  font-size: 12px;
+  line-height: 1;
+  border-radius: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.batchButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.batchButtonPrimary {
+  background: var(--c-info-ink);
+  border-color: var(--c-info-ink);
+  color: #fff;
+  margin-left: auto;
+}
+
+.batchSuccess {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--c-resolved-ink);
+}
+
+.batchError {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--c-urgent-ink);
+}
+
 .phaseBanner {
   margin: 12px 24px 0;
   padding: 10px 14px;
@@ -304,6 +358,41 @@
   background: var(--c-surface);
   border: 1px dashed var(--c-border-strong);
   border-radius: 8px;
+}
+
+.statusBatchesPanel {
+  border-top: 1px solid var(--c-border);
+  background: var(--c-surface);
+  padding: 14px 24px 20px;
+}
+
+.statusBatchesTitle {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--c-ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.statusBatchesList {
+  display: grid;
+  gap: 8px;
+}
+
+.statusBatchCard {
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.statusBatchActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 /* ── Drawer ─────────────────────────────────────────────────────── */

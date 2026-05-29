@@ -8,6 +8,11 @@ function text(value: unknown) {
   return String(value ?? "").trim();
 }
 
+function isMissingColumnError(err: unknown) {
+  return String((err as { code?: string })?.code ?? "") === "42703"
+    || String((err as { message?: string })?.message ?? "").toLowerCase().includes("does not exist");
+}
+
 export async function POST(request: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
     const body = await request.json().catch(() => ({}));
@@ -21,7 +26,10 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
 
     const { id } = await ctx.params;
 
-    const { data: batch, error: lookupError } = await supabase
+    let { data: batch, error: lookupError }: {
+      data: DbRow | null;
+      error: { message?: string; code?: string } | null;
+    } = await supabase
       .from("claim_837p_batches")
       .select("id, batch_source, batch_status")
       .eq("organization_id", guard.organizationId)
@@ -29,6 +37,20 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       .eq("batch_source", "charge_auto")
       .is("archived_at", null)
       .maybeSingle();
+
+    if (lookupError && isMissingColumnError(lookupError)) {
+      // Backward-compatible fallback for environments where batch_source
+      // has not been added yet.
+      const fallback = await supabase
+        .from("claim_837p_batches")
+        .select("id, batch_status")
+        .eq("organization_id", guard.organizationId)
+        .eq("id", id)
+        .is("archived_at", null)
+        .maybeSingle();
+      batch = (fallback.data as DbRow | null) ?? null;
+      lookupError = (fallback.error as { message?: string; code?: string } | null) ?? null;
+    }
 
     if (lookupError) {
       return NextResponse.json({ success: false, error: lookupError.message ?? "Failed to load batch" }, { status: 422 });

@@ -1,5 +1,5 @@
-import ProvidersSettingsClient from "./ProvidersSettingsClient";
+import { redirect } from "next/navigation";
 
 export default function ProvidersSettingsPage() {
-  return <ProvidersSettingsClient />;
+  redirect("/settings/users");
 }

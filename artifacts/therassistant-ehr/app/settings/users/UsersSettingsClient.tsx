@@ -79,6 +79,7 @@ export default function UsersSettingsClient() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
+  const [syncBusy, setSyncBusy] = useState(false);
 
   // Status toggle busy state
   const [togglingId, setTogglingId] = useState<string | null>(null);
@@ -187,6 +188,30 @@ export default function UsersSettingsClient() {
     setTogglingId(null);
   }
 
+  async function syncClinicianUsers() {
+    setSyncBusy(true);
+    setSubmitError(null);
+    setSubmitSuccess(null);
+    try {
+      const res = await fetch("/api/admin/security/sync-clinicians", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) {
+        throw new Error((json as { error?: string }).error ?? "Failed to sync clinician users");
+      }
+      const created = Number((json as { created?: number }).created ?? 0);
+      const roleAssigned = Number((json as { roleAssigned?: number }).roleAssigned ?? 0);
+      setSubmitSuccess(`Clinician sync complete: created ${created} user(s), assigned clinician role to ${roleAssigned} user(s).`);
+      await load();
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : "Failed to sync clinician users");
+    } finally {
+      setSyncBusy(false);
+    }
+  }
+
   return (
     <main className="app-shell">
       {/* ── Header ── */}
@@ -194,10 +219,18 @@ export default function UsersSettingsClient() {
         <div>
           <p className="eyebrow">Settings</p>
           <h1>Users</h1>
-          <p className="hero-copy">Manage staff accounts, roles, and access.</p>
+          <p className="hero-copy">Manage all users, including clinicians/providers, roles, and access.</p>
         </div>
         <div className="hero-actions">
           <Link className="button button-secondary" href="/settings">← Settings</Link>
+          <button
+            type="button"
+            className="button button-secondary"
+            onClick={() => void syncClinicianUsers()}
+            disabled={syncBusy}
+          >
+            {syncBusy ? "Syncing…" : "Sync Clinicians"}
+          </button>
           <button
             type="button"
             className="button button-primary"

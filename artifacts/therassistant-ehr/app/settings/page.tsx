@@ -12,9 +12,9 @@ const SETTINGS_SECTIONS = [
     description: "Manage staff accounts, roles, and access permissions.",
   },
   {
-    label: "Provider Credentialing",
-    href: "/settings/providers",
-    description: "Credentialing profiles, payer enrollments, and network status.",
+    label: "Users & Clinicians",
+    href: "/settings/users",
+    description: "All user accounts in one place, including clinician/provider user mapping and role access.",
   },
   {
     label: "Clearinghouse / Availity",

@@ -197,6 +197,7 @@ type PatientSummary = {
     sourceClientId?: string | null;
     emergencyContactName?: string | null;
     emergencyContactPhone?: string | null;
+    primaryClinicianUserId?: string | null;
   };
   insurance?: {
     policies: InsurancePolicySummary[];
@@ -218,6 +219,11 @@ type AppointmentSummary = {
   type?: string | null;
   reason?: string | null;
   encounter?: { id: string; status?: string | null } | null;
+};
+
+type ClinicianOption = {
+  userId: string;
+  displayName: string;
 };
 
 type ConditionSummary = {
@@ -436,6 +442,7 @@ export default function PatientChartClient({
   const [creditBusy, setCreditBusy] = useState<string | null>(null);
   const [journalHighlights, setJournalHighlights] = useState<JournalHighlights | null>(null);
   const [journalHighlightsLoading, setJournalHighlightsLoading] = useState(false);
+  const [clinicianOptions, setClinicianOptions] = useState<ClinicianOption[]>([]);
   const organizationId = useMemo(
     () => resolveOrganizationId(initialOrganizationId),
     [initialOrganizationId],
@@ -486,6 +493,7 @@ export default function PatientChartClient({
       sourceClientId: p.sourceClientId ?? "",
       emergencyContactName: p.emergencyContactName ?? "",
       emergencyContactPhone: p.emergencyContactPhone ?? "",
+      primaryClinicianUserId: p.primaryClinicianUserId ?? "",
     };
     setDemoDraft(initial);
     setDemoOriginal(initial);
@@ -955,7 +963,7 @@ export default function PatientChartClient({
         const summaryJson = (await summaryResponse.json()) as PatientSummary;
         if (!summaryResponse.ok || !summaryJson.success) throw new Error(summaryJson.error ?? "Failed to load client chart");
 
-        const [appointments, conditions, claims, notes, documents, mailroomItems, casesList] = await Promise.all([
+        const [appointments, conditions, claims, notes, documents, mailroomItems, casesList, clinicians] = await Promise.all([
           fetchList<AppointmentSummary>(`/api/patients/${clientId}/appointments?organizationId=${encodeURIComponent(organizationId)}`, "appointments"),
           fetchList<ConditionSummary>(`/api/patients/${clientId}/conditions?organizationId=${encodeURIComponent(organizationId)}`, "conditions"),
           fetchList<ClaimSummary>(`/api/patients/${clientId}/claims?organizationId=${encodeURIComponent(organizationId)}`, "claims"),
@@ -963,12 +971,14 @@ export default function PatientChartClient({
           fetchList<DocumentSummary>(`/api/patients/${clientId}/documents?organizationId=${encodeURIComponent(organizationId)}`, "documents"),
           fetchList<MailroomSummary>(`/api/mailroom/items?organizationId=${encodeURIComponent(organizationId)}&clientId=${encodeURIComponent(clientId)}&status=all&limit=10`, "items"),
           fetchList<CaseRowSummary>(`/api/clients/${clientId}/cases?organizationId=${encodeURIComponent(organizationId)}`, "cases"),
+          fetchList<ClinicianOption>(`/api/users/clinicians?organizationId=${encodeURIComponent(organizationId)}`, "clinicians"),
         ]);
 
         if (cancelled) return;
 
         setSummary(summaryJson);
         setCases(casesList);
+        setClinicianOptions(clinicians);
         setDetails({
           appointments,
           conditions,
@@ -1091,6 +1101,11 @@ export default function PatientChartClient({
   const formattedAddress = [client.addressLine1, addressLine2, cityStateZip]
     .filter((s) => s && s.length > 0)
     .join(" · ");
+  const assignedClinicianName = (() => {
+    const userId = String(client.primaryClinicianUserId ?? "").trim();
+    if (!userId) return null;
+    return clinicianOptions.find((c) => c.userId === userId)?.displayName ?? userId;
+  })();
 
   const railActions: Array<{ key: string; label: string; href: string }> = [
     { key: "notes", label: "Notes", href: `/clients/${client.id}/notes${orgQ}` },
@@ -1396,6 +1411,19 @@ export default function PatientChartClient({
                   />
                 </div>
                 <div className="summary-field">
+                  <label htmlFor="demo-primaryClinicianUserId">Assigned clinician</label>
+                  <select
+                    id="demo-primaryClinicianUserId"
+                    value={demoDraft.primaryClinicianUserId ?? ""}
+                    onChange={(e) => setDemoField("primaryClinicianUserId", e.target.value)}
+                  >
+                    <option value="">—</option>
+                    {clinicianOptions.map((option) => (
+                      <option key={option.userId} value={option.userId}>{option.displayName}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="summary-field">
                   <label htmlFor="demo-emergencyContactName">Emergency contact</label>
                   <input
                     id="demo-emergencyContactName"
@@ -1471,6 +1499,10 @@ export default function PatientChartClient({
                 <div className="summary-field">
                   <label>Source client ID</label>
                   <span>{dashIfNullish(client.sourceClientId)}</span>
+                </div>
+                <div className="summary-field">
+                  <label>Assigned clinician</label>
+                  <span>{dashIfNullish(assignedClinicianName)}</span>
                 </div>
                 <div className="summary-field">
                   <label>Emergency contact</label>

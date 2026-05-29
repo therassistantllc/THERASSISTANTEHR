@@ -9,11 +9,16 @@ function text(value: unknown) {
   return String(value ?? "").trim();
 }
 
+function isMissingColumnError(err: unknown) {
+  return String((err as { code?: string })?.code ?? "") === "42703"
+    || String((err as { message?: string })?.message ?? "").toLowerCase().includes("does not exist");
+}
+
 async function loadBatch(params: { orgId: string; batchId: string }) {
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) throw new Error("Database connection not available");
 
-  const { data, error } = await supabase
+  let { data, error }: { data: DbRow | null; error: { message?: string; code?: string } | null } = await supabase
     .from("claim_837p_batches")
     .select("id, batch_number, batch_source, generated_file_name, generated_file_content, batch_status")
     .eq("organization_id", params.orgId)
@@ -21,6 +26,20 @@ async function loadBatch(params: { orgId: string; batchId: string }) {
     .eq("batch_source", "charge_auto")
     .is("archived_at", null)
     .maybeSingle();
+
+  if (error && isMissingColumnError(error)) {
+    // Backward-compatible fallback for environments where batch_source
+    // has not been added yet.
+    const fallback = await supabase
+      .from("claim_837p_batches")
+      .select("id, batch_number, generated_file_name, generated_file_content, batch_status")
+      .eq("organization_id", params.orgId)
+      .eq("id", params.batchId)
+      .is("archived_at", null)
+      .maybeSingle();
+    data = (fallback.data as DbRow | null) ?? null;
+    error = (fallback.error as { message?: string; code?: string } | null) ?? null;
+  }
 
   if (error) throw new Error(error.message ?? "Failed to load batch");
   return (data ?? null) as DbRow | null;

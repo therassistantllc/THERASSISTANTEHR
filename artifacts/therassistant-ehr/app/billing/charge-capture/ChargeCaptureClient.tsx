@@ -215,6 +215,7 @@ export default function ChargeCaptureClient() {
   const [statusFilter, setStatusFilter] = useState<ChargeStatus | "all">("all");
   const [search, setSearch] = useState("");
   const [actionBusy, setActionBusy] = useState<string | null>(null);
+  const [selectedReleaseIds, setSelectedReleaseIds] = useState<string[]>([]);
 
   // CMS-1500 Edit modal
   const [editRow, setEditRow] = useState<ChargeRow | null>(null);
@@ -325,21 +326,45 @@ export default function ChargeCaptureClient() {
 
   // ── Charge row actions ────────────────────────────────────────────────────
 
+  async function patchChargeStatus(chargeId: string, action: "approve" | "hold" | "route_back") {
+    const res = await fetch(`/api/billing/charge-capture/${encodeURIComponent(chargeId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ organizationId: orgId, action }),
+    });
+    const json = await res.json();
+    if (!res.ok || !json.success) throw new Error(json.error ?? "Failed to update charge");
+  }
+
+  async function releaseChargesToClaims(chargeCaptureIds: string[]) {
+    const res = await fetch("/api/billing/charge-capture/release", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ organizationId: orgId, chargeCaptureIds }),
+    });
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      throw new Error(json.error ?? "Failed to release charges");
+    }
+    return json as {
+      succeeded?: number;
+      failed?: number;
+      results?: Array<{ errors?: Array<{ message?: string }> }>;
+    };
+  }
+
   async function chargeAction(chargeId: string, action: "hold" | "release" | "approve") {
     setActionBusy(chargeId + action);
     try {
-      const statusMap: Record<string, string> = {
-        hold: "blocked",
-        release: "released_to_claims",
-        approve: "ready_for_review",
-      };
-      const res = await fetch(`/api/billing/charge-capture/${encodeURIComponent(chargeId)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ organizationId: orgId, chargeStatus: statusMap[action] }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.success) throw new Error(json.error ?? `Failed to ${action}`);
+      if (action === "release") {
+        const json = await releaseChargesToClaims([chargeId]);
+        if ((json.succeeded ?? 0) !== 1) {
+          const firstError = json.results?.[0]?.errors?.[0]?.message;
+          throw new Error(firstError ?? "Charge could not be released");
+        }
+      } else {
+        await patchChargeStatus(chargeId, action === "approve" ? "approve" : "hold");
+      }
       showToast(
         action === "hold" ? "Charge placed on hold." :
         action === "release" ? "Charge released to billing." :
@@ -475,6 +500,81 @@ export default function ChargeCaptureClient() {
     for (const r of charges) counts[deriveStatus(r)]++;
     return counts;
   }, [charges]);
+
+  const releasableVisibleIds = useMemo(() => {
+    return visibleCharges
+      .filter((r) => deriveStatus(r) === "Ready" && r.tab !== "released_to_claims")
+      .map((r) => r.id);
+  }, [visibleCharges]);
+
+  const allReleasableVisibleSelected =
+    releasableVisibleIds.length > 0 &&
+    releasableVisibleIds.every((id) => selectedReleaseIds.includes(id));
+
+  const selectedReleasableCount = selectedReleaseIds.filter((id) => {
+    const row = charges.find((r) => r.id === id);
+    return row ? deriveStatus(row) === "Ready" && row.tab !== "released_to_claims" : false;
+  }).length;
+
+  useEffect(() => {
+    setSelectedReleaseIds((prev) =>
+      prev.filter((id) => {
+        const row = charges.find((r) => r.id === id);
+        return row ? deriveStatus(row) === "Ready" && row.tab !== "released_to_claims" : false;
+      })
+    );
+  }, [charges]);
+
+  function toggleRowReleaseSelection(chargeId: string, checked: boolean) {
+    setSelectedReleaseIds((prev) => {
+      if (checked) return prev.includes(chargeId) ? prev : [...prev, chargeId];
+      return prev.filter((id) => id !== chargeId);
+    });
+  }
+
+  function toggleSelectAllReleasableVisible() {
+    setSelectedReleaseIds((prev) => {
+      if (allReleasableVisibleSelected) {
+        const clearSet = new Set(releasableVisibleIds);
+        return prev.filter((id) => !clearSet.has(id));
+      }
+      const next = new Set(prev);
+      for (const id of releasableVisibleIds) next.add(id);
+      return Array.from(next);
+    });
+  }
+
+  async function releaseSelectedForBatching() {
+    const releasableIds = selectedReleaseIds.filter((id) => {
+      const row = charges.find((r) => r.id === id);
+      return row ? deriveStatus(row) === "Ready" && row.tab !== "released_to_claims" : false;
+    });
+    if (releasableIds.length === 0) {
+      showToast("No ready charges selected to release.");
+      return;
+    }
+
+    setActionBusy("bulk-release");
+    try {
+      const json = await releaseChargesToClaims(releasableIds);
+      const succeeded = Number(json.succeeded ?? 0);
+      const failed = Number(json.failed ?? Math.max(0, releasableIds.length - succeeded));
+
+      if (succeeded > 0 && failed === 0) {
+        showToast(`Released ${succeeded} charge${succeeded === 1 ? "" : "s"} to billing.`);
+      } else if (succeeded > 0 && failed > 0) {
+        showToast(`Released ${succeeded} charge${succeeded === 1 ? "" : "s"}; ${failed} failed.`);
+      } else {
+        showToast("Failed to release selected charges.");
+      }
+
+      await loadCharges();
+    } catch {
+      showToast("Failed to release selected charges.");
+    } finally {
+      setActionBusy(null);
+    }
+  }
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -701,6 +801,44 @@ export default function ChargeCaptureClient() {
                 onChange={(e) => setSearch(e.target.value)}
                 style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #CBD5E1", fontSize: 13, width: 200 }}
               />
+
+              <button
+                type="button"
+                onClick={toggleSelectAllReleasableVisible}
+                disabled={releasableVisibleIds.length === 0 || actionBusy === "bulk-release"}
+                style={{
+                  padding: "5px 10px",
+                  borderRadius: 6,
+                  border: "1px solid #CBD5E1",
+                  background: "#fff",
+                  color: "#334155",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: releasableVisibleIds.length === 0 ? "not-allowed" : "pointer",
+                }}
+              >
+                {allReleasableVisibleSelected ? "Clear Selected" : "Select All Ready"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void releaseSelectedForBatching()}
+                disabled={selectedReleasableCount === 0 || actionBusy === "bulk-release"}
+                style={{
+                  padding: "5px 10px",
+                  borderRadius: 6,
+                  border: "none",
+                  background: selectedReleasableCount === 0 ? "#CBD5E1" : "#0F2D63",
+                  color: "#fff",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: selectedReleasableCount === 0 ? "not-allowed" : "pointer",
+                }}
+              >
+                {actionBusy === "bulk-release"
+                  ? "Releasing…"
+                  : `Release Selected (${selectedReleasableCount})`}
+              </button>
             </div>
           </div>
         </div>
@@ -718,7 +856,7 @@ export default function ChargeCaptureClient() {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ borderBottom: "2px solid #F1F5F9" }}>
-                  {["Patient", "DOS", "CPT", "Provider", "Status", "Actions"].map((h) => (
+                  {["Select", "Patient", "DOS", "CPT", "Provider", "Status", "Actions"].map((h) => (
                     <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontWeight: 700, color: "#475569", whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
@@ -730,8 +868,23 @@ export default function ChargeCaptureClient() {
                   const cpt = r.providerSelectedCode ?? r.systemSuggestedCode ?? "—";
                   const encounterId = r.encounter.id;
                   const isReleased = r.tab === "released_to_claims";
+                  const isReleasable = status === "Ready" && !isReleased;
                   return (
                     <tr key={r.id} style={{ borderBottom: "1px solid #F8FAFC" }}>
+                      {/* Select */}
+                      <td style={{ padding: "9px 12px" }}>
+                        {isReleasable ? (
+                          <input
+                            type="checkbox"
+                            checked={selectedReleaseIds.includes(r.id)}
+                            onChange={(e) => toggleRowReleaseSelection(r.id, e.target.checked)}
+                            aria-label={`Select ${r.client.name} for release`}
+                          />
+                        ) : (
+                          <span style={{ color: "#CBD5E1" }}>—</span>
+                        )}
+                      </td>
+
                       {/* Patient */}
                       <td style={{ padding: "9px 12px" }}>
                         <span style={{ fontWeight: 600, color: "#0F172A" }}>{r.client.name}</span>

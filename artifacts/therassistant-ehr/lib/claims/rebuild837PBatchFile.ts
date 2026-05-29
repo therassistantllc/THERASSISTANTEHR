@@ -325,6 +325,68 @@ export async function rebuild837PBatchFile(args: {
     partiesByClaim.set(asString(row.claim_id), normalizeParties(row));
   }
 
+  // Backward-compatible recovery: some corrected claims were created without
+  // cloning claim_parties_snapshot. If a missing claim points to
+  // original_claim_id and that original has a snapshot, clone it on-the-fly.
+  const missingPartiesClaimIds = claims
+    .map((c) => c.id)
+    .filter((cid) => !partiesByClaim.has(cid));
+  if (missingPartiesClaimIds.length > 0) {
+    const originalIdByChild = new Map<string, string>();
+    for (const claim of claims) {
+      if (!missingPartiesClaimIds.includes(claim.id)) continue;
+      if (claim.original_claim_id) {
+        originalIdByChild.set(claim.id, claim.original_claim_id);
+      }
+    }
+
+    const originalIds = [...new Set(Array.from(originalIdByChild.values()))];
+    if (originalIds.length > 0) {
+      const { data: originalSnapshotRows, error: originalSnapshotErr } = await (supabase as any)
+        .from("claim_parties_snapshot")
+        .select("*")
+        .in("claim_id", originalIds);
+      if (originalSnapshotErr) {
+        return { ok: false, batchId, error: originalSnapshotErr.message };
+      }
+
+      const originalSnapshotByClaimId = new Map<string, Row>();
+      for (const row of (originalSnapshotRows ?? []) as Row[]) {
+        originalSnapshotByClaimId.set(asString(row.claim_id), row);
+      }
+
+      const cloneRows: Row[] = [];
+      for (const [childId, originalId] of originalIdByChild.entries()) {
+        if (partiesByClaim.has(childId)) continue;
+        const original = originalSnapshotByClaimId.get(originalId);
+        if (!original) continue;
+        // Remove identity/audit columns and rebind to child claim.
+        const { id: _id, claim_id: _cid, created_at: _ca, updated_at: _ua, ...rest } = original;
+        cloneRows.push({ ...rest, claim_id: childId });
+      }
+
+      if (cloneRows.length > 0) {
+        const { error: cloneErr } = await (supabase as any)
+          .from("claim_parties_snapshot")
+          .upsert(cloneRows, { onConflict: "claim_id" });
+        if (cloneErr) {
+          return { ok: false, batchId, error: cloneErr.message };
+        }
+
+        const { data: refreshedRows, error: refreshedErr } = await (supabase as any)
+          .from("claim_parties_snapshot")
+          .select("*")
+          .in("claim_id", missingPartiesClaimIds);
+        if (refreshedErr) {
+          return { ok: false, batchId, error: refreshedErr.message };
+        }
+        for (const row of (refreshedRows ?? []) as Row[]) {
+          partiesByClaim.set(asString(row.claim_id), normalizeParties(row));
+        }
+      }
+    }
+  }
+
   const payerProfileIds = Array.from(
     new Set(claims.map((c) => c.payer_profile_id).filter((v): v is string => !!v)),
   );
