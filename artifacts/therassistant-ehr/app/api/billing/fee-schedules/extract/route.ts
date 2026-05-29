@@ -1,7 +1,7 @@
 /**
  * /api/billing/fee-schedules/extract
  *
- * Accepts a payer-contract fee schedule as a PDF or XLSX upload (multipart
+ * Accepts a payer-contract fee schedule as a PDF upload (multipart
  * `file` field) and returns the extracted CPT + allowed-amount rows so the
  * admin can preview/edit them in the bulk-import grid before committing to
  * `fee_schedules`.
@@ -22,8 +22,6 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MAX_BYTES = 25 * 1024 * 1024;
-const MAX_XLSX_BYTES = 5 * 1024 * 1024;
-const XLSX_PARSE_TIMEOUT_MS = 5000;
 
 export interface ExtractedRow {
   procedureCode: string;
@@ -127,105 +125,6 @@ async function extractFromPdf(buf: Buffer): Promise<ExtractedRow[]> {
   return dedupe(rows);
 }
 
-async function extractFromXlsx(buf: Buffer): Promise<ExtractedRow[]> {
-  const XLSX = (await import("xlsx")) as any;
-  const wb = XLSX.read(buf, { type: "buffer" });
-  const rows: ExtractedRow[] = [];
-
-  for (const sheetName of wb.SheetNames) {
-    const sheet = wb.Sheets[sheetName];
-    const grid: unknown[][] = XLSX.utils.sheet_to_json(sheet, {
-      header: 1,
-      raw: false,
-      defval: "",
-    });
-    if (grid.length === 0) continue;
-
-    // Try header-based extraction first.
-    let headerIdx = -1;
-    let iCpt = -1;
-    let iAllowed = -1;
-    let iMods = -1;
-    let iPos = -1;
-    let iBilled = -1;
-    let iNotes = -1;
-    for (let r = 0; r < Math.min(grid.length, 20); r++) {
-      const cells = (grid[r] ?? []).map((c) =>
-        String(c ?? "").trim().toLowerCase(),
-      );
-      const find = (...names: string[]) =>
-        cells.findIndex((c) => names.some((n) => c === n || c.includes(n)));
-      const a = find("cpt", "procedure", "code", "hcpcs");
-      const b = find("allowed", "allowed amount", "allow", "contracted", "rate", "fee");
-      if (a >= 0 && b >= 0) {
-        headerIdx = r;
-        iCpt = a;
-        iAllowed = b;
-        iMods = find("modifier");
-        iPos = find("place of service", "pos");
-        iBilled = find("billed", "charge");
-        iNotes = find("description", "notes", "desc");
-        break;
-      }
-    }
-
-    if (headerIdx >= 0) {
-      for (let r = headerIdx + 1; r < grid.length; r++) {
-        const row = grid[r] ?? [];
-        const cpt = String(row[iCpt] ?? "").trim().toUpperCase();
-        if (!CPT_RE.test(cpt)) continue;
-        const allowed = toMoney(String(row[iAllowed] ?? ""));
-        if (allowed == null) continue;
-        const mods =
-          iMods >= 0
-            ? String(row[iMods] ?? "")
-                .split(/[,\s/|]+/)
-                .map((m) => m.trim().toUpperCase())
-                .filter((m) => MOD_RE.test(m))
-            : [];
-        const pos =
-          iPos >= 0 ? String(row[iPos] ?? "").trim() || null : null;
-        const billed =
-          iBilled >= 0 ? toMoney(String(row[iBilled] ?? "")) : null;
-        const notes =
-          iNotes >= 0
-            ? (String(row[iNotes] ?? "").trim() || null)
-            : null;
-        rows.push({
-          procedureCode: cpt.match(CPT_RE)?.[1] ?? cpt,
-          modifiers: mods.slice(0, 4),
-          placeOfService: pos && POS_RE.test(pos) ? pos : null,
-          allowedAmount: allowed,
-          billedRate: billed,
-          notes,
-        });
-      }
-      continue;
-    }
-
-    // Headerless fallback: treat every row as a free-form line.
-    for (const row of grid) {
-      const line = (row ?? []).map((c) => String(c ?? "")).join(" ");
-      const parsed = parseLine(line);
-      if (parsed) rows.push(parsed);
-    }
-  }
-
-  return dedupe(rows);
-}
-
-async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  let timeoutId: NodeJS.Timeout | null = null;
-  const timeout = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => reject(new Error(`${label} timed out`)), ms);
-  });
-  try {
-    return await Promise.race([promise, timeout]);
-  } finally {
-    if (timeoutId) clearTimeout(timeoutId);
-  }
-}
-
 export async function POST(request: Request) {
   try {
     const guard = await requireBillingAccess({
@@ -261,29 +160,15 @@ export async function POST(request: Request) {
     const type = (file.type || "").toLowerCase();
 
     let rows: ExtractedRow[] = [];
-    let kind: "pdf" | "xlsx" | "unknown" = "unknown";
+    let kind: "pdf" | "unknown" = "unknown";
     if (name.endsWith(".pdf") || type === "application/pdf") {
       kind = "pdf";
       rows = await extractFromPdf(buf);
-    } else if (
-      name.endsWith(".xlsx") ||
-      name.endsWith(".xlsm") ||
-      type.includes("spreadsheetml") ||
-      type.includes("excel")
-    ) {
-      if (file.size > MAX_XLSX_BYTES) {
-        return NextResponse.json(
-          { success: false, error: `Excel uploads are limited to ${MAX_XLSX_BYTES} bytes.` },
-          { status: 413 },
-        );
-      }
-      kind = "xlsx";
-      rows = await withTimeout(extractFromXlsx(buf), XLSX_PARSE_TIMEOUT_MS, "xlsx parsing");
     } else {
       return NextResponse.json(
         {
           success: false,
-          error: "Unsupported file. Upload a PDF or Excel (.xlsx/.xlsm) file.",
+          error: "Unsupported file. Upload a PDF file.",
         },
         { status: 415 },
       );

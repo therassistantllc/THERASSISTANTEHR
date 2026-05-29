@@ -34,6 +34,10 @@ function padIsaId(value: string): string {
   return value.padEnd(15, " ").slice(0, 15);
 }
 
+function isaFixedBlank10(): string {
+  return "".padEnd(10, " ");
+}
+
 function formatZip(zip: string | null | undefined): string {
   return sanitizeX12(zip).replace(/\s+/g, "");
 }
@@ -98,13 +102,14 @@ export function generateAvaility837PBatch(
   // ISA02 (Authorization Info) and ISA04 (Security Info) are fixed 10-char
   // fields per X12 005010 — an empty string is malformed and OA will reject
   // the envelope. Pad to exactly 10 spaces.
+  const isaBlank = isaFixedBlank10();
   segments.push(
     [
       "ISA",
       "00",
-      "          ",
+      isaBlank,
       "00",
-      "          ",
+      isaBlank,
       sanitizeX12(connection.sender_qualifier || "ZZ"),
       padIsaId(sanitizeX12(connection.submitter_id)),
       sanitizeX12(connection.receiver_qualifier || "30"),

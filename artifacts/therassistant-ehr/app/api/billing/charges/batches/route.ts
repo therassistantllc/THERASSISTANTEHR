@@ -256,26 +256,47 @@ function makeBatchNumber(suffix?: number) {
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json().catch(() => ({}))) as { organizationId?: string; claimIds?: unknown; generateNow?: unknown };
+    const body = (await request.json().catch(() => ({}))) as {
+      organizationId?: string;
+      claimIds?: unknown;
+      generateNow?: unknown;
+      scopeAllReady?: unknown;
+    };
     const guard = await requireBillingAccess({ requestedOrganizationId: body.organizationId ?? null });
     if (guard instanceof NextResponse) return guard;
     const organizationId = guard.organizationId;
 
-    const generateNow =
+    const requestedGenerateNow =
       body.generateNow === true ||
       body.generateNow === 1 ||
       String(body.generateNow ?? "").toLowerCase() === "true";
+    const allowSynchronousGeneration = String(process.env.ALLOW_SYNC_837_GENERATION ?? "").toLowerCase() === "true";
+    const generateNow = requestedGenerateNow && allowSynchronousGeneration;
 
     const selectedClaimIds = Array.isArray(body.claimIds)
       ? [...new Set(body.claimIds.map((id) => text(id)).filter(Boolean))]
       : [];
-    if (selectedClaimIds.length > 500) {
+    if (selectedClaimIds.length > 5000) {
       return NextResponse.json(
-        { success: false, error: "At most 500 claimIds can be submitted per request" },
+        { success: false, error: "At most 5000 claimIds can be submitted per request" },
         { status: 400 },
       );
     }
+    const scopeAllReady =
+      body.scopeAllReady === true ||
+      body.scopeAllReady === 1 ||
+      String(body.scopeAllReady ?? "").toLowerCase() === "true";
     const explicitSelection = selectedClaimIds.length > 0;
+
+    if (!explicitSelection && !scopeAllReady) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "claimIds are required unless scopeAllReady=true is provided",
+        },
+        { status: 400 },
+      );
+    }
 
     const supabase = createServerSupabaseAdminClient();
     if (!supabase) {
@@ -421,27 +442,51 @@ export async function POST(request: Request) {
       });
     }
 
-    // 4. Group by payer_profile_id (null payers go to their own group)
-    const groups = new Map<string, DbRow[]>();
+    const unbatchedIds = unbatched.map((c) => text(c.id)).filter(Boolean);
+    const { data: partySnapshots } = unbatchedIds.length
+      ? await supabase
+          .from("claim_parties_snapshot")
+          .select("claim_id, billing_provider_tax_id")
+          .in("claim_id", unbatchedIds)
+      : { data: [] as DbRow[] };
+
+    const billingTinByClaimId = new Map<string, string>();
+    for (const row of (partySnapshots ?? []) as DbRow[]) {
+      const claimId = text(row.claim_id);
+      if (!claimId || billingTinByClaimId.has(claimId)) continue;
+      const tin = text(row.billing_provider_tax_id);
+      if (tin) billingTinByClaimId.set(claimId, tin);
+    }
+
+    // 4. Group by payer_profile_id + billing provider TIN (nulls isolate into their own groups)
+    const groups = new Map<string, { payerProfileId: string | null; billingProviderTaxId: string | null; rows: DbRow[] }>();
     for (const claim of unbatched) {
-      const key = text(claim.payer_profile_id) || "__no_payer__";
-      const group = groups.get(key) ?? [];
-      group.push(claim);
+      const payerProfileId = text(claim.payer_profile_id) || null;
+      const billingProviderTaxId = billingTinByClaimId.get(text(claim.id)) ?? null;
+      const key = `${payerProfileId ?? "__no_payer__"}::${billingProviderTaxId ?? "__no_tin__"}`;
+      const group = groups.get(key) ?? {
+        payerProfileId,
+        billingProviderTaxId,
+        rows: [],
+      };
+      group.rows.push(claim);
       groups.set(key, group);
     }
 
     const orderedGroups = [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
     const createdBatches: Array<{
       batchId: string; batchNumber: string; payerProfileId: string | null;
+      billingProviderTaxId: string | null;
       claimCount: number; totalChargeAmount: number; claimIds: string[];
     }> = [];
 
-    // 5. Create one batch per payer group via the atomic RPC
+    // 5. Create one batch per payer/TIN group via the atomic RPC
     for (let i = 0; i < orderedGroups.length; i++) {
-      const [payerKey, rows] = orderedGroups[i];
-      const payerProfileId = payerKey === "__no_payer__" ? null : payerKey;
-      const ids = rows.map((c) => text(c.id));
-      const totalChargeAmount = rows.reduce((s, r) => s + money(r.total_charge), 0);
+      const [, group] = orderedGroups[i];
+      const payerProfileId = group.payerProfileId;
+      const billingProviderTaxId = group.billingProviderTaxId;
+      const ids = group.rows.map((c) => text(c.id));
+      const totalChargeAmount = group.rows.reduce((s, r) => s + money(r.total_charge), 0);
       const number = orderedGroups.length === 1 ? makeBatchNumber() : makeBatchNumber(i + 1);
 
       const { data: rpcData, error: rpcError } = await (supabase as any).rpc("create_837p_batch_atomic", {
@@ -458,7 +503,11 @@ export async function POST(request: Request) {
       // Stamp batch_source so the download/mark-submitted routes recognize it
       await supabase
         .from("claim_837p_batches")
-        .update({ batch_source: "charge_auto", updated_at: new Date().toISOString() })
+        .update({
+          batch_source: "charge_auto",
+          billing_provider_tax_id: billingProviderTaxId,
+          updated_at: new Date().toISOString(),
+        })
         .eq("id", result.batch_id)
         .eq("organization_id", organizationId);
 
@@ -466,7 +515,8 @@ export async function POST(request: Request) {
         batchId: result.batch_id,
         batchNumber: result.batch_number ?? number,
         payerProfileId,
-        claimCount: rows.length,
+        billingProviderTaxId,
+        claimCount: group.rows.length,
         totalChargeAmount: Math.round(totalChargeAmount * 100) / 100,
         claimIds: ids,
       });
@@ -477,6 +527,7 @@ export async function POST(request: Request) {
         batchId: b.batchId,
         batchNumber: b.batchNumber,
         payerProfileId: null as string | null,
+        billingProviderTaxId: null as string | null,
         claimCount: b.claimCount,
         totalChargeAmount: 0,
         claimIds: [] as string[],
@@ -488,6 +539,7 @@ export async function POST(request: Request) {
       batchId: string;
       batchNumber: string;
       payerProfileId: string | null;
+      billingProviderTaxId: string | null;
       claimCount: number;
       totalChargeAmount: number;
       generated: boolean;
@@ -509,6 +561,7 @@ export async function POST(request: Request) {
           batchId: b.batchId,
           batchNumber: b.batchNumber,
           payerProfileId: b.payerProfileId,
+          billingProviderTaxId: b.billingProviderTaxId,
           claimCount: b.claimCount,
           totalChargeAmount: b.totalChargeAmount,
           generated: res.status === "fulfilled" && res.value.ok,
@@ -537,6 +590,7 @@ export async function POST(request: Request) {
         batchId: b.batchId,
         batchNumber: b.batchNumber,
         payerProfileId: b.payerProfileId,
+        billingProviderTaxId: b.billingProviderTaxId,
         claimCount: b.claimCount,
         totalChargeAmount: b.totalChargeAmount,
         generated: false,
@@ -562,7 +616,7 @@ export async function POST(request: Request) {
       existingBatchesRegenerated: existingRegenerated,
       message:
         !generateNow
-          ? `Batches created. Queued ${queuedJobs} background job${queuedJobs === 1 ? "" : "s"} to generate 837 files.`
+          ? `${requestedGenerateNow && !allowSynchronousGeneration ? "Synchronous generation disabled; " : ""}Batches created. Queued ${queuedJobs} background job${queuedJobs === 1 ? "" : "s"} to generate 837 files.`
           :
         remainingReadyClaims > 0
           ? `Processed first ${allReady.length} ready claims; ${remainingReadyClaims} additional ready claim(s) remain outside this request window.`

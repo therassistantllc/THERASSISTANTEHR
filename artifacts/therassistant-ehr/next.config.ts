@@ -69,6 +69,9 @@ const claimRedirects: Array<{ from: string; tab: string; filter?: string }> = [
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  typescript: {
+    ignoreBuildErrors: false,
+  },
   experimental: {
     webpackMemoryOptimizations: true
   },

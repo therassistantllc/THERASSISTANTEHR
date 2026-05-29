@@ -279,10 +279,21 @@ export default function ChargeCaptureClient() {
     setGenerating(true);
     setGenerateResult(null);
     try {
+      const claimIds = [...new Set(
+        charges
+          .filter((row) => deriveStatus(row) === "Ready")
+          .map((row) => row.claimId)
+          .filter((id): id is string => typeof id === "string" && id.length > 0),
+      )];
+      if (claimIds.length === 0) {
+        showToast("No ready claims are currently selected for batching.");
+        return;
+      }
+
       const res = await fetch("/api/billing/charges/batches", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ organizationId: orgId }),
+        body: JSON.stringify({ organizationId: orgId, claimIds }),
       });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error ?? "Failed to generate batches");

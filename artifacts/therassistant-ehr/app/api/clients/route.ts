@@ -142,31 +142,6 @@ export async function POST(request: Request) {
       .select("id, first_name, last_name, preferred_name, email, phone, date_of_birth")
       .single();
 
-    // Gracefully degrade if the emergency_contact_* columns haven't been
-    // pushed to the live database yet — drop them and retry once. Apply the
-    // 20260611010000_clients_emergency_contact migration to restore.
-    if (error) {
-      const errCode = (error as { code?: string }).code ?? "";
-      const errMessage = String((error as { message?: string }).message ?? "");
-      const missingEmergency =
-        (errCode === "42703" || errCode === "PGRST204") &&
-        /emergency_contact_(name|phone)/i.test(errMessage);
-      if (missingEmergency) {
-        console.warn(
-          "[clients create] emergency_contact_* columns missing; saving without them. Apply the clients_emergency_contact migration to restore.",
-        );
-        delete insertRow.emergency_contact_name;
-        delete insertRow.emergency_contact_phone;
-        const retry = await supabase
-          .from("clients")
-          .insert(insertRow)
-          .select("id, first_name, last_name, preferred_name, email, phone, date_of_birth")
-          .single();
-        inserted = retry.data;
-        error = retry.error;
-      }
-    }
-
     if (error) throw error;
     if (!inserted) throw new Error("Insert returned no row");
 

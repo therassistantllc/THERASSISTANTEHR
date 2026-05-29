@@ -674,6 +674,10 @@ function makeFileName(now: Date): string {
   return `THERASSISTANT_837P_${date}_${time}.837`;
 }
 
+function isaFixedBlank10(): string {
+  return "".padEnd(10, " ");
+}
+
 // ─── Segment builders ─────────────────────────────────────────────────────────
 
 function buildEnvelope(input: Map837PInput, controls: {
@@ -694,6 +698,7 @@ function buildEnvelope(input: Map837PInput, controls: {
   const isaDate = yyMMdd(now);
   const gsDate = yyyyMMdd(now);
   const time = HHmm(now);
+  const isaBlank = isaFixedBlank10();
 
   const segs: string[] = [];
 
@@ -702,9 +707,9 @@ function buildEnvelope(input: Map837PInput, controls: {
     [
       "ISA",
       "00",
-      "          ",     // ISA02 — Authorization Information (10 chars)
+      isaBlank,          // ISA02 — Authorization Information (10 chars)
       "00",
-      "          ",     // ISA04 — Security Information (10 chars)
+      isaBlank,          // ISA04 — Security Information (10 chars)
       senderQual,
       padIsaId(sanitizeX12(envelope.submitter_id)),
       receiverQual,
