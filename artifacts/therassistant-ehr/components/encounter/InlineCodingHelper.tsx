@@ -37,8 +37,14 @@ const InlineCodingHelper = forwardRef<InlineCodingHelperHandle>(function InlineC
 
     function handleLoad() {
       try {
-        const helperWin = iframe.contentWindow as HelperWindow | null;
-        const helperDoc = iframe.contentDocument;
+        const frame = iframeRef.current;
+        if (!frame) {
+          setReady(false);
+          setLoadError("Coding helper iframe is unavailable.");
+          return;
+        }
+        const helperWin = frame.contentWindow as HelperWindow | null;
+        const helperDoc = frame.contentDocument;
         if (helperDoc) {
           const accessorNode = helperDoc.createElement("script");
           accessorNode.textContent = "window.getLatestCodingReport = function(){ try { return latestCodingReport || null; } catch { return null; } };";

@@ -72,9 +72,6 @@ const nextConfig: NextConfig = {
   experimental: {
     webpackMemoryOptimizations: true
   },
-  typescript: {
-    ignoreBuildErrors: true
-  },
   allowedDevOrigins: [
     "*.janeway.replit.dev",
     "*.replit.dev",

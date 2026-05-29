@@ -9,15 +9,71 @@ const MICROSOFT_TENANT_ID = Deno.env.get("MICROSOFT_TENANT_ID") || "common";
 const APP_BASE_URL = Deno.env.get("APP_BASE_URL")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SERVICE_ROLE_KEY")!;
+const STATE_SECRET =
+  Deno.env.get("OUTLOOK_OAUTH_STATE_SECRET") ||
+  Deno.env.get("GMAIL_OAUTH_STATE_SECRET") ||
+  Deno.env.get("OAUTH_STATE_SECRET") ||
+  "";
 
 const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+
+function b64urlDecode(s: string): Uint8Array {
+  const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
+  const std = s.replace(/-/g, "+").replace(/_/g, "/") + pad;
+  const bin = atob(std);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function b64urlDecodeToString(s: string): string {
+  return new TextDecoder().decode(b64urlDecode(s));
+}
+
+function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+
+async function hmacSha256(secret: string, message: string): Promise<Uint8Array> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+  return new Uint8Array(sig);
+}
+
+async function verifyState(state: string): Promise<{ organizationId: string }> {
+  const dot = state.lastIndexOf(".");
+  if (dot < 0) throw new Error("Malformed state");
+  const payloadB64 = state.slice(0, dot);
+  const sigB64 = state.slice(dot + 1);
+  const expected = await hmacSha256(STATE_SECRET, payloadB64);
+  const got = b64urlDecode(sigB64);
+  if (!timingSafeEqual(expected, got)) throw new Error("Invalid state signature");
+
+  const payload = JSON.parse(b64urlDecodeToString(payloadB64));
+  if (typeof payload.o !== "string" || typeof payload.e !== "number") {
+    throw new Error("Invalid state payload");
+  }
+  if (Math.floor(Date.now() / 1000) > payload.e) {
+    throw new Error("Expired state");
+  }
+  return { organizationId: payload.o };
+}
 
 async function graphGet(path: string, accessToken: string) {
   const res = await fetch(`https://graph.microsoft.com/v1.0${path}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!res.ok) {
-    throw new Error(`Graph API error ${res.status}: ${await res.text()}`);
+    throw new Error(`Graph API error ${res.status}`);
   }
   return await res.json();
 }
@@ -29,18 +85,18 @@ serve(async (req: { url: string | URL }) => {
     const stateRaw = url.searchParams.get("state");
     const errorParam = url.searchParams.get("error");
 
+    if (!STATE_SECRET) {
+      return new Response("OAuth is not configured", { status: 503 });
+    }
+
     if (errorParam) {
-      return new Response(
-        `Outlook OAuth error: ${errorParam} ${url.searchParams.get("error_description") || ""}`,
-        { status: 400 },
-      );
+      return new Response(`Outlook OAuth error: ${errorParam}`, { status: 400 });
     }
     if (!code || !stateRaw) {
       return new Response("Missing code/state", { status: 400 });
     }
 
-    const state = JSON.parse(atob(stateRaw));
-    const organizationId = state.organization_id;
+    const { organizationId } = await verifyState(stateRaw);
     const redirectUri = `${SUPABASE_URL}/functions/v1/outlook-oauth-callback`;
 
     const tokenRes = await fetch(
@@ -59,7 +115,7 @@ serve(async (req: { url: string | URL }) => {
     );
 
     if (!tokenRes.ok) {
-      throw new Error(await tokenRes.text());
+      throw new Error(`Token exchange failed (${tokenRes.status})`);
     }
     const token = await tokenRes.json();
 
@@ -132,7 +188,6 @@ serve(async (req: { url: string | URL }) => {
     );
   } catch (err) {
     console.error(err);
-    const message = err instanceof Error ? err.message : String(err);
-    return new Response(message, { status: 500 });
+    return new Response("OAuth callback failed", { status: 500 });
   }
 });

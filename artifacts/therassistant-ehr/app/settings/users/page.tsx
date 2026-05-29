@@ -38,5 +38,5 @@ export default async function UsersSettingsPage() {
     );
   }
 
-  return <UsersSettingsClient />;
+  return <UsersSettingsClient apiEnabled={Boolean(staff)} />;
 }

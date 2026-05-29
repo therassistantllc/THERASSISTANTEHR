@@ -5,8 +5,6 @@ import { requireOrgAccess } from "@/lib/auth/requireOrgAccess";
 type Row = Record<string, unknown>;
 
 const ELIGIBILITY_STALE_DAYS = 30;
-const CLAIM_ISSUE_STATUSES = new Set(["denied", "rejected_oa", "rejected_payer"]);
-const OPEN_WQ_STATUSES = ["open", "in_progress", "blocked"];
 
 function value(input: unknown) {
   return String(input ?? "").trim();
@@ -14,11 +12,6 @@ function value(input: unknown) {
 
 function nameOf(row: Row) {
   return [row.first_name, row.last_name].map(value).filter(Boolean).join(" ") || "Unnamed client";
-}
-
-function amount(input: unknown) {
-  const numberValue = Number(input ?? 0);
-  return Number.isFinite(numberValue) ? Math.round(numberValue * 100) / 100 : 0;
 }
 
 function isValidCalendarDate(iso: string): boolean {
@@ -199,7 +192,7 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("Clients create API error:", error);
     return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : "Failed to create client" },
+      { success: false, error: "Failed to create client" },
       { status: 500 },
     );
   }
@@ -216,175 +209,42 @@ export async function GET(request: Request) {
     });
     if (guard instanceof NextResponse) return guard;
     const organizationId = guard.organizationId;
-    const q = value(searchParams.get("q")).toLowerCase();
-
-    const baseColumns = "id, first_name, last_name, preferred_name, email, phone, archived_at, deceased_at, updated_at, primary_clinician_user_id";
-    const fullColumns = `${baseColumns}, intake_status`;
-
-    let clients: Row[] | null;
-    const initial = await supabase
-      .from("clients")
-      .select(fullColumns)
-      .eq("organization_id", organizationId)
-      .is("archived_at", null)
-      .order("last_name", { ascending: true })
-      .limit(250);
-    let error = initial.error;
-    clients = (initial.data as Row[] | null) ?? null;
-
-    if (error) {
-      const errCode = (error as { code?: string }).code ?? "";
-      const errMessage = String((error as { message?: string }).message ?? "");
-      const isMissingIntakeStatus =
-        errCode === "42703" ||
-        /column\s+["']?clients\.intake_status["']?\s+does not exist/i.test(errMessage) ||
-        /intake_status/i.test(errMessage);
-
-      if (!isMissingIntakeStatus) throw error;
-
-      console.warn(
-        "[clients roster] clients.intake_status column missing; degrading gracefully. Apply the patient_intake_workflow migration to restore intake status data.",
-      );
-
-      const fallback = await supabase
-        .from("clients")
-        .select(baseColumns)
-        .eq("organization_id", organizationId)
-        .is("archived_at", null)
-        .order("last_name", { ascending: true })
-        .limit(250);
-
-      if (fallback.error) throw fallback.error;
-      clients = (fallback.data as Row[] | null) ?? null;
-    }
-
-    const rows = ((clients ?? []) as Row[]).filter((client) => {
-      if (!q) return true;
-      return [client.first_name, client.last_name, client.preferred_name, client.email, client.phone]
-        .map(value)
-        .join(" ")
-        .toLowerCase()
-        .includes(q);
+    const q = value(searchParams.get("q"));
+    const limitRaw = Number(searchParams.get("limit") ?? "50");
+    const offsetRaw = Number(searchParams.get("offset") ?? "0");
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 200) : 50;
+    const offset = Number.isFinite(offsetRaw) ? Math.max(Math.trunc(offsetRaw), 0) : 0;
+    const { data, error } = await (supabase as any).rpc("billing_clients_roster_page", {
+      p_organization_id: organizationId,
+      p_query: q || null,
+      p_limit: limit,
+      p_offset: offset,
     });
+    if (error) throw error;
 
-    const ids = rows.map((client) => value(client.id)).filter(Boolean);
-
-    // Batch the operational queries in parallel. Each is wrapped so a single
-    // table failure (missing column, view not yet migrated, etc.) degrades the
-    // affected signal to empty instead of crashing the entire roster.
-    async function safeQuery(label: string, runner: () => PromiseLike<{ data: unknown; error: unknown }>): Promise<Row[]> {
-      try {
-        const { data, error: queryError } = await runner();
-        if (queryError) {
-          console.warn(`[clients roster] ${label} query failed; degrading to empty.`, queryError);
-          return [];
-        }
-        return (data as Row[] | null) ?? [];
-      } catch (caught) {
-        console.warn(`[clients roster] ${label} query threw; degrading to empty.`, caught);
-        return [];
-      }
-    }
-
-    const nowIso = new Date().toISOString();
-    const [invoiceRows, eligibilityRows, appointmentRows, workqueueRows, claimRows] = ids.length
-      ? await Promise.all([
-          safeQuery("patient_invoices", () =>
-            supabase
-              .from("patient_invoices")
-              .select("client_id, balance_amount, invoice_status")
-              .eq("organization_id", organizationId)
-              .in("client_id", ids)
-              .is("archived_at", null)),
-          safeQuery("eligibility_checks", () =>
-            supabase
-              .from("eligibility_checks")
-              .select("client_id, eligibility_status, checked_at, copay_amount")
-              .eq("organization_id", organizationId)
-              .in("client_id", ids)
-              .is("archived_at", null)
-              .order("checked_at", { ascending: false })),
-          safeQuery("appointments", () =>
-            supabase
-              .from("appointments")
-              .select("client_id, scheduled_start_at, appointment_status")
-              .eq("organization_id", organizationId)
-              .in("client_id", ids)
-              .gte("scheduled_start_at", nowIso)
-              .order("scheduled_start_at", { ascending: true })),
-          safeQuery("workqueue_items", () =>
-            supabase
-              .from("workqueue_items")
-              .select("client_id, status")
-              .eq("organization_id", organizationId)
-              .in("client_id", ids)
-              .in("status", OPEN_WQ_STATUSES)
-              .is("archived_at", null)),
-          safeQuery("professional_claims", () =>
-            supabase
-              .from("professional_claims")
-              .select("patient_id, claim_status")
-              .eq("organization_id", organizationId)
-              .in("patient_id", ids)),
-        ])
-      : [[] as Row[], [] as Row[], [] as Row[], [] as Row[], [] as Row[]];
-
-    const balances = new Map<string, number>();
-    for (const invoice of invoiceRows) {
-      const status = value(invoice.invoice_status).toLowerCase();
-      if (!["open", "sent", "collections"].includes(status)) continue;
-      const clientId = value(invoice.client_id);
-      balances.set(clientId, (balances.get(clientId) ?? 0) + amount(invoice.balance_amount));
-    }
-
-    // Eligibility: take the first (latest) record per client because results are ordered desc by checked_at.
-    const latestEligibility = new Map<string, Row>();
-    for (const row of eligibilityRows) {
-      const clientId = value(row.client_id);
-      if (!latestEligibility.has(clientId)) latestEligibility.set(clientId, row);
-    }
-
-    const nextAppointment = new Map<string, string>();
-    for (const appt of appointmentRows) {
-      const clientId = value(appt.client_id);
-      const start = value(appt.scheduled_start_at);
-      if (!start) continue;
-      if (!nextAppointment.has(clientId)) nextAppointment.set(clientId, start);
-    }
-
-    const workqueueCounts = new Map<string, number>();
-    for (const wq of workqueueRows) {
-      const clientId = value(wq.client_id);
-      if (!clientId) continue;
-      workqueueCounts.set(clientId, (workqueueCounts.get(clientId) ?? 0) + 1);
-    }
-
-    const claimIssueCounts = new Map<string, number>();
-    for (const claim of claimRows) {
-      const status = value(claim.claim_status).toLowerCase();
-      if (!CLAIM_ISSUE_STATUSES.has(status)) continue;
-      const clientId = value(claim.patient_id);
-      if (!clientId) continue;
-      claimIssueCounts.set(clientId, (claimIssueCounts.get(clientId) ?? 0) + 1);
-    }
+    const rows = (data ?? []) as Row[];
+    const totalCount = rows.length > 0 ? Number(rows[0].total_count ?? 0) : 0;
 
     const records = rows.map((client) => {
-      const id = value(client.id);
-      const eligibility = deriveEligibilityState(latestEligibility.get(id) ?? null);
+      const eligibility = deriveEligibilityState({
+        eligibility_status: client.eligibility_status,
+        checked_at: client.eligibility_checked_at,
+        copay_amount: client.copay_amount,
+      });
       return {
-        id,
+        id: value(client.client_id),
         name: nameOf(client),
         preferredName: client.preferred_name ?? null,
         email: client.email ?? null,
         phone: client.phone ?? null,
-        status: client.deceased_at ? "deceased" : "active",
+        status: value(client.status) || "active",
         intakeStatus: client.intake_status ?? "not_started",
-        openBalance: balances.get(id) ?? 0,
+        openBalance: Number(client.open_balance ?? 0),
         updatedAt: client.updated_at ?? null,
         eligibility,
-        nextAppointmentAt: nextAppointment.get(id) ?? null,
-        openWorkqueueCount: workqueueCounts.get(id) ?? 0,
-        claimIssueCount: claimIssueCounts.get(id) ?? 0,
+        nextAppointmentAt: client.next_appointment_at ?? null,
+        openWorkqueueCount: Number(client.open_workqueue_count ?? 0),
+        claimIssueCount: Number(client.claim_issue_count ?? 0),
         primaryClinicianUserId: client.primary_clinician_user_id ? String(client.primary_clinician_user_id) : null,
       };
     });
@@ -392,8 +252,15 @@ export async function GET(request: Request) {
     return NextResponse.json({
       success: true,
       organizationId,
+      pagination: {
+        limit,
+        offset,
+        returned: records.length,
+        totalCount,
+        hasMore: offset + records.length < totalCount,
+      },
       metrics: {
-        total: records.length,
+        total: totalCount,
         active: records.filter((record) => record.status === "active").length,
         intakeIncomplete: records.filter((record) => String(record.intakeStatus ?? "") !== "complete").length,
         withBalance: records.filter((record) => record.openBalance > 0).length,
@@ -407,7 +274,7 @@ export async function GET(request: Request) {
   } catch (error) {
     console.error("Clients roster API error:", error);
     return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : "Clients roster API failed" },
+      { success: false, error: "Clients roster API failed" },
       { status: 500 },
     );
   }

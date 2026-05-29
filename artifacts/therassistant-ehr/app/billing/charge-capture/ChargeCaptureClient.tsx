@@ -151,6 +151,8 @@ function slInputStyle(w: number): React.CSSProperties {
 // ── Status derivation ─────────────────────────────────────────────────────────
 
 function deriveStatus(r: ChargeRow): ChargeStatus {
+  // Server-side charge_status is authoritative when set to terminal/releasable states.
+  if (r.chargeStatus === "ready_for_claim") return "Ready";
   if (r.tab === "held_charges" || r.chargeStatus === "blocked") return "Hold";
   if (!r.encounter.noteSigned) return "Unsigned";
   if (
@@ -286,7 +288,11 @@ export default function ChargeCaptureClient() {
       if (!res.ok || !json.success) throw new Error(json.error ?? "Failed to generate batches");
       setGenerateResult({ batchesCreated: json.batchesCreated ?? 0, claimsQueued: json.claimsQueued ?? 0, message: json.message });
       if ((json.batchesCreated ?? 0) > 0) {
-        showToast(`Generated ${json.batchesCreated} batch${json.batchesCreated === 1 ? "" : "es"} covering ${json.claimsQueued} claim${json.claimsQueued === 1 ? "" : "s"}. Download the 837P files below and upload to Availity.`);
+        if (json.generationMode === "queued") {
+          showToast(`Created ${json.batchesCreated} batch${json.batchesCreated === 1 ? "" : "es"} covering ${json.claimsQueued} claim${json.claimsQueued === 1 ? "" : "s"}. Background generation queued for ${json.jobsQueued ?? 0} batch${json.jobsQueued === 1 ? "" : "es"}.`);
+        } else {
+          showToast(`Generated ${json.batchesCreated} batch${json.batchesCreated === 1 ? "" : "es"} covering ${json.claimsQueued} claim${json.claimsQueued === 1 ? "" : "s"}. Download the 837P files below and upload to Availity.`);
+        }
       } else {
         showToast(json.message ?? "No new batches were created.");
       }
@@ -501,6 +507,13 @@ export default function ChargeCaptureClient() {
     return counts;
   }, [charges]);
 
+  const hasDraftAutoBatch = useMemo(
+    () => batches.some((b) => ["draft", "ready_to_generate"].includes((b.status ?? "").toLowerCase())),
+    [batches],
+  );
+
+  const canGenerateBatches = statusCounts["Ready"] > 0 || hasDraftAutoBatch;
+
   const releasableVisibleIds = useMemo(() => {
     return visibleCharges
       .filter((r) => deriveStatus(r) === "Ready" && r.tab !== "released_to_claims")
@@ -635,12 +648,12 @@ export default function ChargeCaptureClient() {
             </div>
             <button
               type="button"
-              disabled={generating || statusCounts["Ready"] === 0}
+              disabled={generating || !canGenerateBatches}
               onClick={() => void generateBatches()}
               style={{
-                padding: "8px 16px", borderRadius: 7, border: "none", cursor: generating || statusCounts["Ready"] === 0 ? "not-allowed" : "pointer",
-                background: generating || statusCounts["Ready"] === 0 ? "#CBD5E1" : "#1D4ED8",
-                color: generating || statusCounts["Ready"] === 0 ? "#94A3B8" : "#fff",
+                padding: "8px 16px", borderRadius: 7, border: "none", cursor: generating || !canGenerateBatches ? "not-allowed" : "pointer",
+                background: generating || !canGenerateBatches ? "#CBD5E1" : "#1D4ED8",
+                color: generating || !canGenerateBatches ? "#94A3B8" : "#fff",
                 fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", gap: 6,
               }}
             >

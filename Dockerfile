@@ -27,14 +27,9 @@ WORKDIR /workspace
 ENV NODE_ENV=production
 ENV NODE_OPTIONS=--max-old-space-size=4096
 ENV NEXT_TELEMETRY_DISABLED=1
-ENV NEXT_DISABLE_ESLINT=1
 ENV NEXT_PRIVATE_BUILD_WORKER=1
 
-RUN set -eux; \
-	pnpm --filter @workspace/therassistant-ehr... run build:ci || \
-	(echo "First build attempt failed, clearing Next cache and retrying once" && \
-	 rm -rf /workspace/artifacts/therassistant-ehr/.next/cache && \
-	 pnpm --filter @workspace/therassistant-ehr... run build:ci)
+RUN pnpm --filter @workspace/therassistant-ehr... run build:ci
 
 FROM node:24-slim AS runner
 
@@ -44,10 +39,15 @@ ENV NEXT_TELEMETRY_DISABLED=1
 
 WORKDIR /app
 
+RUN groupadd --system --gid 1001 nodejs \
+ && useradd --system --uid 1001 --gid nodejs --create-home appuser
+
 # Copy the standalone output
-COPY --from=build /workspace/artifacts/therassistant-ehr/.next/standalone ./
-COPY --from=build /workspace/artifacts/therassistant-ehr/.next/static ./artifacts/therassistant-ehr/.next/static
-COPY --from=build /workspace/artifacts/therassistant-ehr/public ./artifacts/therassistant-ehr/public
+COPY --from=build --chown=1001:1001 /workspace/artifacts/therassistant-ehr/.next/standalone ./
+COPY --from=build --chown=1001:1001 /workspace/artifacts/therassistant-ehr/.next/static ./artifacts/therassistant-ehr/.next/static
+COPY --from=build --chown=1001:1001 /workspace/artifacts/therassistant-ehr/public ./artifacts/therassistant-ehr/public
+
+USER 1001:1001
 
 EXPOSE 8080
 

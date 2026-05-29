@@ -22,10 +22,10 @@
  * Behaviour by env (mirrors `requireBillingAccess`):
  *   - production / test: no session → 401, missing perm → 403,
  *     mismatched org → 403.
- *   - development: missing session is allowed (returns a
- *     `isDevPassthrough: true` context) so local-without-login keeps
- *     working. A logged-in dev session still has its perm + org
- *     checks enforced.
+ *   - development: missing session is denied by default. To allow
+ *     local no-login passthrough, set ALLOW_DEV_AUTH_BYPASS=true.
+ *     A logged-in dev session still has its perm + org checks
+ *     enforced.
  *
  * Routes that authenticate via a different mechanism (Stripe
  * webhooks, FHIR API-key, public intake-token forms, cron secret
@@ -52,6 +52,7 @@ export interface OrgAccessOptions {
    * Pass `null`/`undefined` if the route doesn't accept one.
    */
   requestedOrganizationId?: string | null;
+
   /**
    * Optional permission required. Leave undefined / null to require
    * only an authenticated staff member (the common case for routes
@@ -79,7 +80,11 @@ export function evaluateOrgAccess(
   const permission = options.permission ?? null;
 
   if (!staffCtx) {
-    if (env !== "development") {
+    const allowDevBypass =
+      env === "development" &&
+      String(process.env.ALLOW_DEV_AUTH_BYPASS ?? "").toLowerCase() === "true";
+
+    if (!allowDevBypass) {
       return { ok: false, status: 401, error: "Authentication required" };
     }
     return {

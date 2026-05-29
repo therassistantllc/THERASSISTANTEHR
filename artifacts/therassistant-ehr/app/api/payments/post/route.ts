@@ -14,17 +14,14 @@ function generateUuid() {
 }
 
 function extractErrorMessage(error: unknown) {
+  if (error instanceof PaymentPostingUnauthenticatedError) return "Not authenticated";
+  if (error instanceof PaymentPostingForbiddenError) return "Forbidden";
   if (error instanceof Error && error.message) return error.message;
   if (error && typeof error === "object" && "message" in error) {
     const message = (error as { message?: unknown }).message;
     if (typeof message === "string" && message.trim()) return message;
   }
-
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return "Payment posting failed";
-  }
+  return "Payment posting failed";
 }
 
 export async function POST(request: Request) {
@@ -150,6 +147,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, reused: false, posting: createdPosting });
   } catch (error) {
+    console.error("Payment posting failed", error);
     return NextResponse.json(
       {
         success: false,

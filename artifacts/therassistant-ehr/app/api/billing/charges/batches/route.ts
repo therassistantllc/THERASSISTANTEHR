@@ -22,10 +22,10 @@ function isClinicianScoped(roles: string[]) {
 }
 
 function getErrorMessage(error: unknown) {
-  if (error instanceof Error && error.message) return error.message;
-  if (typeof error === "object" && error !== null) {
-    const maybeMessage = (error as { message?: unknown }).message;
-    if (typeof maybeMessage === "string" && maybeMessage.trim()) return maybeMessage;
+  if (error instanceof Error) {
+    const m = error.message.toLowerCase();
+    if (m.includes("not authenticated")) return "Not authenticated";
+    if (m.includes("forbidden")) return "Forbidden";
   }
   return "Failed to load charge batches";
 }
@@ -42,42 +42,25 @@ export async function GET(request: Request) {
     }
 
     const practiceFilter = text(searchParams.get("practice"));
+    const limitRaw = Number(searchParams.get("limit") ?? "50");
+    const offsetRaw = Number(searchParams.get("offset") ?? "0");
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 200) : 50;
+    const offset = Number.isFinite(offsetRaw) ? Math.max(Math.trunc(offsetRaw), 0) : 0;
     const clinicianOnly = isClinicianScoped(guard.roles ?? []);
     const providerId = clinicianOnly && guard.userId ? await getProviderIdForUser(guard.userId, guard.organizationId) : null;
 
-    const primarySelect =
-      "id, batch_number, batch_status, claim_count, total_charge_amount, generated_file_name, submitted_at, created_at, updated_at, payer_profile_id, billing_provider_tax_id";
-    const fallbackSelect =
-      "id, batch_number, batch_status, claim_count, total_charge_amount, generated_file_name, submitted_at, created_at, updated_at";
+    const { data: batchRows, error: batchError, count: batchCount } = await supabase
+      .from("claim_837p_batches")
+      .select(
+        "id, batch_number, batch_status, claim_count, total_charge_amount, generated_file_name, submitted_at, created_at, updated_at, payer_profile_id, billing_provider_tax_id",
+        { count: "exact" },
+      )
+      .eq("organization_id", guard.organizationId)
+      .eq("batch_source", "charge_auto")
+      .is("archived_at", null)
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1);
 
-    const fetchBatches = async (applySourceFilter: boolean, selectClause: string) => {
-      let query = supabase
-        .from("claim_837p_batches")
-        .select(selectClause)
-        .eq("organization_id", guard.organizationId)
-        .is("archived_at", null)
-        .order("created_at", { ascending: false })
-        .limit(250);
-
-      if (applySourceFilter) {
-        query = query.eq("batch_source", "charge_auto");
-      }
-
-      return query;
-    };
-
-    let { data: batchRows, error: batchError } = await fetchBatches(true, primarySelect);
-
-    const isMissingColumnError = (err: unknown) =>
-      String((err as { code?: string })?.code ?? "") === "42703"
-      || String((err as { message?: string })?.message ?? "").toLowerCase().includes("does not exist");
-
-    if (batchError && isMissingColumnError(batchError)) {
-      // Backward-compatible fallback for environments that predate batch_source and newer batch columns.
-      const fallback = await fetchBatches(false, fallbackSelect);
-      batchRows = fallback.data;
-      batchError = fallback.error;
-    }
     if (batchError) throw batchError;
 
     const batches = (batchRows ?? []) as unknown as DbRow[];
@@ -87,6 +70,13 @@ export async function GET(request: Request) {
         clinicianOnly,
         canManage: !clinicianOnly,
         practiceOptions: [] as Array<{ value: string; label: string }>,
+        pagination: {
+          limit,
+          offset,
+          returned: 0,
+          totalCount: batchCount ?? 0,
+          hasMore: false,
+        },
         batches: [] as unknown[],
       });
     }
@@ -310,6 +300,13 @@ export async function GET(request: Request) {
       clinicianOnly,
       canManage: !clinicianOnly,
       practiceOptions: Array.from(practiceSet).sort().map((p) => ({ value: p, label: p })),
+      pagination: {
+        limit,
+        offset,
+        returned: outBatches.length,
+        totalCount: batchCount ?? null,
+        hasMore: batchCount != null ? offset + outBatches.length < batchCount : outBatches.length === limit,
+      },
       totals: {
         totalUnbilledCharges,
         pendingBatches,
@@ -330,8 +327,9 @@ export async function GET(request: Request) {
 //
 // Groups all `ready_for_batch` professional claims (not yet in an active
 // batch) by payer_profile_id, creates one claim_837p_batches record per
-// payer via the atomic RPC, stamps batch_source = "charge_auto", then
-// eagerly generates the 837P file content so it's ready to download.
+// payer via the atomic RPC, and stamps batch_source = "charge_auto".
+// 837 generation can run eagerly (`generateNow=true`) or be deferred to the
+// first download request for faster API response times.
 //
 // Body: { organizationId: string }
 
@@ -342,40 +340,126 @@ function makeBatchNumber(suffix?: number) {
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json().catch(() => ({}))) as { organizationId?: string };
+    const body = (await request.json().catch(() => ({}))) as { organizationId?: string; claimIds?: unknown; generateNow?: unknown };
     const guard = await requireBillingAccess({ requestedOrganizationId: body.organizationId ?? null });
     if (guard instanceof NextResponse) return guard;
     const organizationId = guard.organizationId;
+
+    const generateNow =
+      body.generateNow === true ||
+      body.generateNow === 1 ||
+      String(body.generateNow ?? "").toLowerCase() === "true";
+
+    const selectedClaimIds = Array.isArray(body.claimIds)
+      ? [...new Set(body.claimIds.map((id) => text(id)).filter(Boolean))]
+      : [];
+    if (selectedClaimIds.length > 500) {
+      return NextResponse.json(
+        { success: false, error: "At most 500 claimIds can be submitted per request" },
+        { status: 400 },
+      );
+    }
+    const explicitSelection = selectedClaimIds.length > 0;
 
     const supabase = createServerSupabaseAdminClient();
     if (!supabase) {
       return NextResponse.json({ success: false, error: "Database connection not available" }, { status: 500 });
     }
 
-    // 1. Load all claims that are ready to batch
-    const { data: readyClaims, error: claimsError } = await supabase
+    // 1. Collect existing auto batches that are not yet submitted so
+    // "Generate" can finalize already-grouped released claims.
+    const { data: existingAutoBatches, error: existingBatchError } = await supabase
+      .from("claim_837p_batches")
+      .select("id, batch_number, batch_status")
+      .eq("organization_id", organizationId)
+      .eq("batch_source", "charge_auto")
+      .in("batch_status", ["draft", "ready_to_generate", "generated"])
+      .is("archived_at", null)
+      .order("created_at", { ascending: true });
+    if (existingBatchError) throw existingBatchError;
+
+    const existingBatchRows = (existingAutoBatches ?? []) as DbRow[];
+    const existingBatchIds = existingBatchRows.map((b) => text(b.id)).filter(Boolean);
+
+    const { data: existingLinks, error: existingLinksError } = existingBatchIds.length > 0
+      ? await supabase
+          .from("claim_837p_batch_claims")
+          .select("batch_id, professional_claim_id")
+          .eq("organization_id", organizationId)
+          .in("batch_id", existingBatchIds)
+          .is("archived_at", null)
+      : { data: [] as DbRow[], error: null as any };
+    if (existingLinksError) throw existingLinksError;
+
+    const existingClaimCountsByBatchId = new Map<string, number>();
+    for (const link of (existingLinks ?? []) as DbRow[]) {
+      const batchId = text(link.batch_id);
+      if (!batchId) continue;
+      existingClaimCountsByBatchId.set(batchId, (existingClaimCountsByBatchId.get(batchId) ?? 0) + 1);
+    }
+
+    const existingProcessable = existingBatchRows
+      .filter((b) => (existingClaimCountsByBatchId.get(text(b.id)) ?? 0) > 0)
+      .map((b) => ({
+        batchId: text(b.id),
+        batchNumber: text(b.batch_number) || text(b.id).slice(0, 8),
+        status: text(b.batch_status).toLowerCase(),
+        claimCount: existingClaimCountsByBatchId.get(text(b.id)) ?? 0,
+      }));
+
+    // 2. Load claims that are ready to batch and not yet in active batches.
+    let totalReadyCountQuery = supabase
       .from("professional_claims")
-      .select("id, claim_status, total_charge, payer_profile_id")
+      .select("id", { count: "exact", head: true })
       .eq("organization_id", organizationId)
       .eq("claim_status", "ready_for_batch")
-      .is("archived_at", null)
-      .order("created_at", { ascending: true })
-      .limit(500);
-    if (claimsError) throw claimsError;
-
-    const allReady = (readyClaims ?? []) as DbRow[];
-    if (allReady.length === 0) {
-      return NextResponse.json({
-        success: true,
-        batchesCreated: 0,
-        batches: [],
-        message: "No claims are currently in ready_for_batch status. Release charges first.",
-      });
+      .is("archived_at", null);
+    if (explicitSelection) {
+      totalReadyCountQuery = totalReadyCountQuery.in("id", selectedClaimIds);
     }
+
+    const [{ count: totalReadyCount, error: countError }] = await Promise.all([
+      totalReadyCountQuery,
+    ]);
+    if (countError) throw countError;
+
+    const allReady: DbRow[] = [];
+    if (explicitSelection) {
+      const { data: selectedReady, error: selectedError } = await supabase
+        .from("professional_claims")
+        .select("id, claim_status, total_charge, payer_profile_id")
+        .eq("organization_id", organizationId)
+        .eq("claim_status", "ready_for_batch")
+        .is("archived_at", null)
+        .in("id", selectedClaimIds)
+        .order("created_at", { ascending: true });
+      if (selectedError) throw selectedError;
+      allReady.push(...((selectedReady ?? []) as DbRow[]));
+    } else {
+      const pageSize = 500;
+      let pageOffset = 0;
+      while (true) {
+        const { data: pageRows, error: pageError } = await supabase
+          .from("professional_claims")
+          .select("id, claim_status, total_charge, payer_profile_id")
+          .eq("organization_id", organizationId)
+          .eq("claim_status", "ready_for_batch")
+          .is("archived_at", null)
+          .order("created_at", { ascending: true })
+          .range(pageOffset, pageOffset + pageSize - 1);
+        if (pageError) throw pageError;
+        const page = (pageRows ?? []) as DbRow[];
+        allReady.push(...page);
+        if (page.length < pageSize) break;
+        pageOffset += pageSize;
+      }
+    }
+
+    const remainingReadyClaims = Math.max((totalReadyCount ?? allReady.length) - allReady.length, 0);
 
     // 2. Find which claims are already in an active (non-submitted, non-archived) batch
     const readyIds = allReady.map((c) => text(c.id)).filter(Boolean);
-    const { data: existingLinks } = await supabase
+    const { data: readyClaimLinks } = await supabase
       .from("claim_837p_batch_claims")
       .select("professional_claim_id, batch_id")
       .eq("organization_id", organizationId)
@@ -383,7 +467,7 @@ export async function POST(request: Request) {
       .is("archived_at", null);
 
     // Resolve batch statuses for linked claims
-    const linkedBatchIds = [...new Set(((existingLinks ?? []) as DbRow[]).map((r) => text(r.batch_id)).filter(Boolean))];
+    const linkedBatchIds = [...new Set(((readyClaimLinks ?? []) as DbRow[]).map((r) => text(r.batch_id)).filter(Boolean))];
     let activeBatchIds = new Set<string>();
     if (linkedBatchIds.length > 0) {
       const { data: linkedBatches } = await supabase
@@ -400,19 +484,24 @@ export async function POST(request: Request) {
     }
 
     const alreadyBatchedClaimIds = new Set(
-      ((existingLinks ?? []) as DbRow[])
+      ((readyClaimLinks ?? []) as DbRow[])
         .filter((r) => activeBatchIds.has(text(r.batch_id)))
         .map((r) => text(r.professional_claim_id)),
     );
 
     // 3. Only process claims not already in an active batch
     const unbatched = allReady.filter((c) => !alreadyBatchedClaimIds.has(text(c.id)));
-    if (unbatched.length === 0) {
+
+    if (existingProcessable.length === 0 && unbatched.length === 0) {
       return NextResponse.json({
         success: true,
         batchesCreated: 0,
+        selectionMode: explicitSelection ? "explicit" : "auto",
+        totalReadyClaims: totalReadyCount ?? 0,
+        scannedReadyClaims: allReady.length,
+        remainingReadyClaims,
         batches: [],
-        message: "All ready claims are already assigned to active batches. Download them below.",
+        message: "No claims are currently in ready_for_batch status. Release charges first.",
       });
     }
 
@@ -467,37 +556,110 @@ export async function POST(request: Request) {
       });
     }
 
-    // 6. Eagerly generate 837P content for each batch (best-effort)
-    const batchResults = await Promise.allSettled(
-      createdBatches.map((b) =>
-        rebuild837PBatchFile({ batchId: b.batchId, organizationId }),
-      ),
-    );
+    const processedBatches = [
+      ...existingProcessable.map((b) => ({
+        batchId: b.batchId,
+        batchNumber: b.batchNumber,
+        payerProfileId: null as string | null,
+        claimCount: b.claimCount,
+        totalChargeAmount: 0,
+        claimIds: [] as string[],
+      })),
+      ...createdBatches,
+    ];
 
-    const outputBatches = createdBatches.map((b, i) => {
-      const res = batchResults[i];
-      return {
+    let outputBatches: Array<{
+      batchId: string;
+      batchNumber: string;
+      payerProfileId: string | null;
+      claimCount: number;
+      totalChargeAmount: number;
+      generated: boolean;
+      generationError: string | null;
+      generationDeferred: boolean;
+    }>;
+    let queuedJobs = 0;
+
+    if (generateNow) {
+      const batchResults = await Promise.allSettled(
+        processedBatches.map((b) =>
+          rebuild837PBatchFile({ batchId: b.batchId, organizationId }),
+        ),
+      );
+
+      outputBatches = processedBatches.map((b, i) => {
+        const res = batchResults[i];
+        return {
+          batchId: b.batchId,
+          batchNumber: b.batchNumber,
+          payerProfileId: b.payerProfileId,
+          claimCount: b.claimCount,
+          totalChargeAmount: b.totalChargeAmount,
+          generated: res.status === "fulfilled" && res.value.ok,
+          generationError: res.status === "rejected"
+            ? String((res as PromiseRejectedResult).reason)
+            : (res.status === "fulfilled" && !res.value.ok ? (res.value.error ?? null) : null),
+          generationDeferred: false,
+        };
+      });
+    } else {
+      for (const batch of processedBatches) {
+        const { data: queueData, error: queueError } = await (supabase as any).rpc(
+          "enqueue_claim_837p_batch_generation_job",
+          {
+            p_organization_id: organizationId,
+            p_batch_id: batch.batchId,
+          },
+        );
+        if (queueError) throw queueError;
+        if (Boolean((queueData as { enqueued?: unknown } | null)?.enqueued)) {
+          queuedJobs += 1;
+        }
+      }
+
+      outputBatches = processedBatches.map((b) => ({
         batchId: b.batchId,
         batchNumber: b.batchNumber,
         payerProfileId: b.payerProfileId,
         claimCount: b.claimCount,
         totalChargeAmount: b.totalChargeAmount,
-        generated: res.status === "fulfilled" && res.value.ok,
-        generationError: res.status === "rejected"
-          ? String((res as PromiseRejectedResult).reason)
-          : (res.status === "fulfilled" && !res.value.ok ? res.value.error : null),
-      };
-    });
+        generated: false,
+        generationError: null,
+        generationDeferred: true,
+      }));
+    }
+
+    const createdSet = new Set(createdBatches.map((b) => b.batchId));
+    const existingRegenerated = outputBatches.filter((b) => !createdSet.has(b.batchId)).length;
+    const totalClaimsCovered = processedBatches.reduce((sum, b) => sum + b.claimCount, 0);
 
     return NextResponse.json({
       success: true,
       batchesCreated: createdBatches.length,
-      claimsQueued: unbatched.length,
+      generationMode: generateNow ? "eager" : "queued",
+      jobsQueued: queuedJobs,
+      selectionMode: explicitSelection ? "explicit" : "auto",
+      totalReadyClaims: totalReadyCount ?? allReady.length,
+      scannedReadyClaims: allReady.length,
+      remainingReadyClaims,
+      claimsQueued: totalClaimsCovered,
+      existingBatchesRegenerated: existingRegenerated,
+      message:
+        !generateNow
+          ? `Batches created. Queued ${queuedJobs} background job${queuedJobs === 1 ? "" : "s"} to generate 837 files.`
+          :
+        remainingReadyClaims > 0
+          ? `Processed first ${allReady.length} ready claims; ${remainingReadyClaims} additional ready claim(s) remain outside this request window.`
+          :
+        createdBatches.length === 0 && existingRegenerated > 0
+          ? `Regenerated ${existingRegenerated} existing batch${existingRegenerated === 1 ? "" : "es"}.`
+          : undefined,
       batches: outputBatches,
     });
   } catch (error) {
+    console.error("Charge batch generation failed", error);
     return NextResponse.json(
-      { success: false, error: getErrorMessage(error) },
+      { success: false, error: "Failed to generate charge batches" },
       { status: 500 },
     );
   }

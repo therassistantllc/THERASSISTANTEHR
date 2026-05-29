@@ -9,8 +9,23 @@ const MICROSOFT_TENANT_ID = Deno.env.get("MICROSOFT_TENANT_ID") || "common";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SERVICE_ROLE_KEY")!;
+const CRON_SECRET =
+  Deno.env.get("INTERNAL_CRON_SECRET") ||
+  Deno.env.get("CRON_SECRET") ||
+  "";
 
 const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+
+function hasCronAccess(req: Request): boolean {
+  if (!CRON_SECRET) return false;
+  const headerSecret = req.headers.get("x-cron-secret");
+  if (headerSecret && headerSecret === CRON_SECRET) return true;
+  const authHeader = req.headers.get("authorization") ?? "";
+  if (authHeader.toLowerCase().startsWith("bearer ")) {
+    return authHeader.slice(7).trim() === CRON_SECRET;
+  }
+  return false;
+}
 
 async function refreshAccessToken(refreshToken: string) {
   const res = await fetch(
@@ -29,7 +44,7 @@ async function refreshAccessToken(refreshToken: string) {
     },
   );
   if (!res.ok) {
-    throw new Error(`Refresh token failed: ${await res.text()}`);
+    throw new Error(`Refresh token failed (${res.status})`);
   }
   return await res.json();
 }
@@ -39,7 +54,7 @@ async function graphGet(url: string, accessToken: string) {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!res.ok) {
-    throw new Error(`Graph GET failed ${res.status}: ${await res.text()}`);
+    throw new Error(`Graph GET failed (${res.status})`);
   }
   return await res.json();
 }
@@ -52,7 +67,14 @@ function parseEmailAddress(emailAddress: { name?: string; address?: string } | n
   };
 }
 
-serve(async () => {
+serve(async (req: Request) => {
+  if (!CRON_SECRET) {
+    return Response.json({ error: "Missing cron secret configuration" }, { status: 503 });
+  }
+  if (!hasCronAccess(req)) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const result = {
     checked_connections: 0,
     routed_messages: 0,
@@ -180,14 +202,20 @@ serve(async () => {
         .eq("id", connection.id);
     } catch (err) {
       const message = String((err as Error)?.message ?? err);
-      result.errors.push(`${connection.external_account_email}: ${message}`);
+      result.errors.push(`${connection.external_account_email}: sync_failed`);
       await supabase
         .from("integration_connections")
         .update({
-          sync_error: message,
+          sync_error: "Sync failed; see function logs",
           updated_at: new Date().toISOString(),
         })
         .eq("id", connection.id);
+
+      console.error("Outlook poll connection failed", {
+        connectionId: connection.id,
+        email: connection.external_account_email,
+        error: message,
+      });
     }
   }
 

@@ -102,7 +102,7 @@ export async function POST(request: Request) {
       if (!claim) reasons.push("Claim not found");
 
       const status = text(claim?.claim_status).toLowerCase();
-      if (status && !["batched", "submitted", "accepted_oa", "accepted_payer", "adjudicated", "partial", "denied"].includes(status)) {
+      if (status && !["batched", "submitted", "accepted_oa", "rejected_oa", "accepted_payer", "adjudicated", "partial", "denied"].includes(status)) {
         reasons.push(`Claim status ${status} is not eligible for 276 batching`);
       }
 

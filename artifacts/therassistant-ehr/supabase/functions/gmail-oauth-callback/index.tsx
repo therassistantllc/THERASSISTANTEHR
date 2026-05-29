@@ -13,8 +13,7 @@ const STATE_SECRET = Deno.env.get("GMAIL_OAUTH_STATE_SECRET")!;
 
 const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
-const REDIRECT_URI =
-  "https://btsbmozbggjllpcsuyyy.supabase.co/functions/v1/gmail-oauth-callback";
+const REDIRECT_URI = `${SUPABASE_URL}/functions/v1/gmail-oauth-callback`;
 
 function b64urlDecode(s: string): Uint8Array {
   const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
@@ -86,7 +85,7 @@ async function googleGet(path: string, accessToken: string) {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!res.ok) {
-    throw new Error(`Google API error ${res.status}: ${await res.text()}`);
+    throw new Error(`Google API error ${res.status}`);
   }
   return await res.json();
 }
@@ -116,7 +115,7 @@ serve(async (req: Request) => {
     });
 
     if (!tokenRes.ok) {
-      throw new Error(await tokenRes.text());
+      throw new Error(`Token exchange failed (${tokenRes.status})`);
     }
 
     const token = await tokenRes.json();
@@ -194,7 +193,6 @@ serve(async (req: Request) => {
     );
   } catch (err) {
     console.error(err);
-    const message = err instanceof Error ? err.message : String(err);
-    return new Response(message, { status: 500 });
+    return new Response("OAuth callback failed", { status: 500 });
   }
 });

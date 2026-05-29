@@ -5,6 +5,7 @@ import {
   type FindOrCreateAppointment,
 } from "@/lib/encounters/findOrCreate";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
+import { requireOrgAccess } from "@/lib/auth/requireOrgAccess";
 
 export async function POST(request: Request) {
   try {
@@ -16,11 +17,15 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: "Request body must be valid JSON" }, { status: 400 });
     }
     const appointmentId = body.appointmentId ? String(body.appointmentId) : "";
-    const organizationId = body.organizationId ? String(body.organizationId) : "";
-
-    if (!appointmentId || !organizationId) {
-      return NextResponse.json({ success: false, error: "appointmentId and organizationId are required" }, { status: 400 });
+    if (!appointmentId) {
+      return NextResponse.json({ success: false, error: "appointmentId is required" }, { status: 400 });
     }
+
+    const guard = await requireOrgAccess({
+      requestedOrganizationId: body.organizationId ? String(body.organizationId) : null,
+    });
+    if (guard instanceof NextResponse) return guard;
+    const organizationId = guard.organizationId;
 
     const { data: appointment, error: appointmentError } = await supabase
       .from("appointments")
@@ -54,7 +59,7 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("Create encounter from appointment API error:", error);
     return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : "Create encounter failed" },
+      { success: false, error: "Create encounter failed" },
       { status: 500 },
     );
   }

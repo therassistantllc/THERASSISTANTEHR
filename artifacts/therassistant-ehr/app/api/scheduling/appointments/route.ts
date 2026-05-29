@@ -2,7 +2,15 @@ import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 
 import { requireOrgAccess } from "@/lib/auth/requireOrgAccess";
-type Row = Record<string, unknown>;
+const MAX_RANGE_DAYS = 62;
+const MAX_LIMIT = 500;
+
+function parseIso(input: string | null) {
+  if (!input) return null;
+  const date = new Date(input);
+  if (Number.isNaN(date.getTime())) return null;
+  return date;
+}
 
 export async function GET(request: Request) {
   try {
@@ -22,6 +30,10 @@ export async function GET(request: Request) {
     const organizationId = guard.organizationId;
     const from = searchParams.get("from");
     const to = searchParams.get("to");
+    const limitRaw = Number(searchParams.get("limit") ?? "100");
+    const offsetRaw = Number(searchParams.get("offset") ?? "0");
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), MAX_LIMIT) : 100;
+    const offset = Number.isFinite(offsetRaw) ? Math.max(Math.trunc(offsetRaw), 0) : 0;
 
     if (!from || !to) {
       return NextResponse.json(
@@ -30,79 +42,50 @@ export async function GET(request: Request) {
       );
     }
 
-    const { data: appts, error } = await supabase
-      .from("appointments")
-      .select(
-        "id, client_id, provider_id, scheduled_start_at, scheduled_end_at, appointment_status, appointment_type, cpt_code, memo",
-      )
-      .eq("organization_id", organizationId)
-      .is("archived_at", null)
-      .gte("scheduled_start_at", from)
-      .lt("scheduled_start_at", to)
-      .order("scheduled_start_at", { ascending: true });
-
-    if (error) {
+    const fromDate = parseIso(from);
+    const toDate = parseIso(to);
+    if (!fromDate || !toDate) {
       return NextResponse.json(
-        { success: false, error: error.message },
-        { status: 422 },
+        { success: false, error: "from and to must be valid ISO timestamps" },
+        { status: 400 },
+      );
+    }
+    if (toDate <= fromDate) {
+      return NextResponse.json(
+        { success: false, error: "to must be after from" },
+        { status: 400 },
       );
     }
 
-    const rows = (appts ?? []) as Row[];
-    const clientIds = Array.from(
-      new Set(rows.map((r) => String(r.client_id ?? "")).filter(Boolean)),
-    );
-    const providerIds = Array.from(
-      new Set(rows.map((r) => String(r.provider_id ?? "")).filter(Boolean)),
-    );
-
-    const [clientsRes, providersRes] = await Promise.all([
-      clientIds.length
-        ? supabase
-            .from("clients")
-            .select("id, first_name, last_name, preferred_name")
-            .eq("organization_id", organizationId)
-            .in("id", clientIds)
-        : Promise.resolve({ data: [] as Row[] }),
-      providerIds.length
-        ? supabase
-            .from("providers")
-            .select("id, first_name, last_name, display_name, credential")
-            .eq("organization_id", organizationId)
-            .in("id", providerIds)
-        : Promise.resolve({ data: [] as Row[] }),
-    ]);
-
-    const clientMap = new Map<string, Row>();
-    for (const c of (clientsRes.data ?? []) as Row[]) {
-      clientMap.set(String(c.id), c);
+    const spanDays = Math.ceil((toDate.getTime() - fromDate.getTime()) / 86_400_000);
+    if (spanDays > MAX_RANGE_DAYS) {
+      return NextResponse.json(
+        { success: false, error: `Date range cannot exceed ${MAX_RANGE_DAYS} days` },
+        { status: 400 },
+      );
     }
-    const providerMap = new Map<string, Row>();
-    for (const p of (providersRes.data ?? []) as Row[]) {
-      providerMap.set(String(p.id), p);
+
+    const { data, error } = await (supabase as any).rpc("scheduling_appointments_page", {
+      p_organization_id: organizationId,
+      p_from: fromDate.toISOString(),
+      p_to: toDate.toISOString(),
+      p_limit: limit,
+      p_offset: offset,
+    });
+
+    if (error) {
+      console.error("Appointments list query failed", error);
+      return NextResponse.json(
+        { success: false, error: "Failed to load appointments" },
+        { status: 500 },
+      );
     }
+
+    const rows = (data ?? []) as Array<Record<string, unknown>>;
+    const totalCount = rows.length > 0 ? Number(rows[0].total_count ?? 0) : 0;
 
     const appointments = rows.map((r) => {
-      const client = clientMap.get(String(r.client_id ?? ""));
-      const provider = providerMap.get(String(r.provider_id ?? ""));
-      const clientName = client
-        ? [client.first_name, client.last_name].filter(Boolean).join(" ") ||
-          "Unknown client"
-        : "Unknown client";
-      const providerName = provider
-        ? String(provider.display_name ?? "").trim() ||
-          [provider.first_name, provider.last_name]
-            .filter(Boolean)
-            .join(" ") ||
-          "Unassigned"
-        : "Unassigned";
-
-      // CPT and memo now live in their own columns. Fall back to the
-      // legacy heuristic (CPT-shaped string stashed in appointment_type)
-      // for rows that predate the dedicated columns and haven't been
-      // backfilled yet.
-      const apptType =
-        typeof r.appointment_type === "string" ? r.appointment_type : "";
+      const apptType = typeof r.appointment_type === "string" ? r.appointment_type : "";
       const cptCode =
         (typeof r.cpt_code === "string" && r.cpt_code) ||
         (/^9\d{4}$/.test(apptType) ? apptType : null);
@@ -110,9 +93,9 @@ export async function GET(request: Request) {
       return {
         id: String(r.id),
         clientId: r.client_id ? String(r.client_id) : null,
-        clientName,
+        clientName: String(r.client_name ?? "Unknown client"),
         providerId: r.provider_id ? String(r.provider_id) : null,
-        providerName,
+        providerName: String(r.provider_name ?? "Unassigned"),
         scheduledStartAt: r.scheduled_start_at,
         scheduledEndAt: r.scheduled_end_at,
         status: r.appointment_status,
@@ -126,13 +109,21 @@ export async function GET(request: Request) {
       organizationId,
       from,
       to,
+      pagination: {
+        limit,
+        offset,
+        returned: appointments.length,
+        totalCount,
+        hasMore: offset + appointments.length < totalCount,
+      },
       appointments,
     });
   } catch (err) {
+    console.error("Appointments API error", err);
     return NextResponse.json(
       {
         success: false,
-        error: err instanceof Error ? err.message : "Failed to load appointments",
+        error: "Failed to load appointments",
       },
       { status: 500 },
     );

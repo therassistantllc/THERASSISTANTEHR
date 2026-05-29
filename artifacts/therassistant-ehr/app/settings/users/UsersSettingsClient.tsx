@@ -58,7 +58,7 @@ function roleBadge(code: string) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function UsersSettingsClient() {
+export default function UsersSettingsClient({ apiEnabled = true }: { apiEnabled?: boolean }) {
   const [members, setMembers] = useState<StaffMember[]>([]);
   const [roles, setRoles] = useState<RoleOption[]>([]);
   const [orgs, setOrgs] = useState<OrgOption[]>([]);
@@ -85,6 +85,11 @@ export default function UsersSettingsClient() {
   const [togglingId, setTogglingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    if (!apiEnabled) {
+      setLoading(false);
+      setError(null);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -93,6 +98,9 @@ export default function UsersSettingsClient() {
         fetch("/api/admin/organizations", { cache: "no-store" }).catch(() => ({ ok: false, json: async () => ({}) })),
       ]);
 
+      if (membersRes.status === 401) {
+        throw new Error("Sign in to manage users.");
+      }
       if (!membersRes.ok) {
         const j = await membersRes.json().catch(() => ({}));
         throw new Error((j as { error?: string }).error ?? "Failed to load members");
@@ -130,7 +138,7 @@ export default function UsersSettingsClient() {
     } finally {
       setLoading(false);
     }
-  }, [orgs]);
+  }, [apiEnabled, orgs]);
 
   useEffect(() => { void load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -227,13 +235,14 @@ export default function UsersSettingsClient() {
             type="button"
             className="button button-secondary"
             onClick={() => void syncClinicianUsers()}
-            disabled={syncBusy}
+            disabled={syncBusy || !apiEnabled}
           >
             {syncBusy ? "Syncing…" : "Sync Clinicians"}
           </button>
           <button
             type="button"
             className="button button-primary"
+            disabled={!apiEnabled}
             onClick={() => { resetForm(); setAddOpen(true); }}
           >
             + Add User
@@ -245,6 +254,14 @@ export default function UsersSettingsClient() {
         <section className="panel" role="alert" style={{ borderLeft: "4px solid #DC2626" }}>
           <p style={{ color: "#DC2626" }}>{error}</p>
           <button type="button" className="button button-secondary" onClick={load}>Retry</button>
+        </section>
+      ) : null}
+
+      {!apiEnabled ? (
+        <section className="panel" role="status" style={{ borderLeft: "4px solid #2563EB" }}>
+          <p style={{ color: "#1E40AF", margin: 0 }}>
+            Sign in to use Users setup. This preview is visible in development, but user management actions require an authenticated admin session.
+          </p>
         </section>
       ) : null}
 

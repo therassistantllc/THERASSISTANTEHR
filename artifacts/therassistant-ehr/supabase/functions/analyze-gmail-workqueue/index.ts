@@ -6,8 +6,25 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SERVICE_ROLE_KEY")!;
 const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY")!;
+const CRON_SECRET =
+  Deno.env.get("INTERNAL_CRON_SECRET") ||
+  Deno.env.get("CRON_SECRET") ||
+  "";
+const MAX_BATCH = 20;
+const MAX_CONCURRENCY = 3;
 
 const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+
+function hasCronAccess(req: Request): boolean {
+  if (!CRON_SECRET) return false;
+  const headerSecret = req.headers.get("x-cron-secret");
+  if (headerSecret && headerSecret === CRON_SECRET) return true;
+  const authHeader = req.headers.get("authorization") ?? "";
+  if (authHeader.toLowerCase().startsWith("bearer ")) {
+    return authHeader.slice(7).trim() === CRON_SECRET;
+  }
+  return false;
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getOutputText(aiJson: any): string | null {
@@ -24,7 +41,41 @@ function getOutputText(aiJson: any): string | null {
   return null;
 }
 
-serve(async () => {
+function parsePositiveInt(input: string | null, fallback: number, max: number): number {
+  const n = Number(input ?? "");
+  if (!Number.isFinite(n)) return fallback;
+  const v = Math.trunc(n);
+  if (v < 1) return fallback;
+  return Math.min(v, max);
+}
+
+function toPromptPayloadExcerpt(rawPayload: unknown): string {
+  if (!rawPayload || typeof rawPayload !== "object") return "";
+  const src = rawPayload as Record<string, unknown>;
+  const compact = {
+    threadId: src.threadId,
+    historyId: src.historyId,
+    labelIds: src.labelIds,
+    internalDate: src.internalDate,
+    payloadHeaders: (src.payload && typeof src.payload === "object" && "headers" in (src.payload as Record<string, unknown>))
+      ? (src.payload as Record<string, unknown>).headers
+      : undefined,
+  };
+  return JSON.stringify(compact).slice(0, 2000);
+}
+
+serve(async (req: Request) => {
+  if (!CRON_SECRET) {
+    return Response.json({ error: "Missing cron secret configuration" }, { status: 503 });
+  }
+  if (!hasCronAccess(req)) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const url = new URL(req.url);
+  const limit = parsePositiveInt(url.searchParams.get("limit"), 10, MAX_BATCH);
+  const concurrency = parsePositiveInt(url.searchParams.get("concurrency"), 3, MAX_CONCURRENCY);
+
   const result = {
     checked: 0,
     analyzed: 0,
@@ -50,7 +101,7 @@ serve(async () => {
     .eq("ai_analysis_status", "pending")
     .is("archived_at", null)
     .order("created_at", { ascending: true })
-    .limit(10);
+    .limit(limit);
 
   if (error) {
     return Response.json({ error: error.message }, { status: 500 });
@@ -58,7 +109,7 @@ serve(async () => {
 
   result.checked = emails?.length ?? 0;
 
-  for (const email of emails ?? []) {
+  async function processEmail(email: Record<string, unknown>) {
     try {
       const emailText = `
 From: ${email.from_name ?? ""} <${email.from_email}>
@@ -66,7 +117,7 @@ Subject: ${email.subject ?? ""}
 Snippet: ${email.snippet ?? ""}
 
 Raw excerpt:
-${JSON.stringify(email.raw_payload ?? {}).slice(0, 6000)}
+${toPromptPayloadExcerpt(email.raw_payload)}
 `;
 
       const aiRes = await fetch("https://api.openai.com/v1/responses", {
@@ -147,7 +198,7 @@ ${JSON.stringify(email.raw_payload ?? {}).slice(0, 6000)}
       });
 
       if (!aiRes.ok) {
-        throw new Error(await aiRes.text());
+        throw new Error(`OpenAI request failed (${aiRes.status})`);
       }
 
       const aiJson = await aiRes.json();
@@ -227,19 +278,34 @@ ${JSON.stringify(email.raw_payload ?? {}).slice(0, 6000)}
         .from("inbound_email_messages")
         .update({
           ai_analysis_status: "failed",
-          ai_error: message,
+          ai_error: "Analysis failed; see function logs",
           updated_at: new Date().toISOString(),
         })
         .eq("id", email.id);
+
+      console.error("Gmail workqueue analysis failed", {
+        emailId: email.id,
+        error: message,
+      });
 
       result.failed += 1;
       result.results.push({
         id: email.id,
         status: "failed",
-        error: message,
+        error: "analysis_failed",
       });
     }
   }
+
+  const queue = [...(emails ?? [])] as Array<Record<string, unknown>>;
+  const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+    while (queue.length > 0) {
+      const next = queue.shift();
+      if (!next) break;
+      await processEmail(next);
+    }
+  });
+  await Promise.all(workers);
 
   return Response.json(result);
 });

@@ -43,6 +43,7 @@ const TIME_CHIP_OPTIONS: Array<{ value: string; label: string }> = (() => {
 type ListAppointment = {
   id: string;
   clientId: string | null;
+  encounterId?: string | null;
   clientName: string;
   providerId: string | null;
   providerName: string;

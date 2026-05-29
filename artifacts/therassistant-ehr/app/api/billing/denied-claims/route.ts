@@ -31,6 +31,10 @@ export async function GET(request: Request) {
     if (guard instanceof NextResponse) return guard;
     const { organizationId } = guard;
     const practiceFilter = str(searchParams.get("practice"));
+    const limitRaw = Number(searchParams.get("limit") ?? "100");
+    const offsetRaw = Number(searchParams.get("offset") ?? "0");
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 250) : 100;
+    const offset = Number.isFinite(offsetRaw) ? Math.max(Math.trunc(offsetRaw), 0) : 0;
     const clinicianOnly = isClinicianScoped(guard.roles ?? []);
     const providerId = clinicianOnly && guard.userId
       ? await getProviderIdForUser(guard.userId, organizationId)
@@ -40,7 +44,45 @@ export async function GET(request: Request) {
     if (!supabase)
       return NextResponse.json({ success: false, error: "Database not available" }, { status: 500 });
 
-    const { data, error } = await supabase
+    let clinicianAppointmentIds: string[] | null = null;
+    if (clinicianOnly) {
+      if (!providerId) {
+        return NextResponse.json({
+          success: true,
+          clinicianOnly,
+          canManage: false,
+          practiceOptions: [],
+          rows: [],
+          total: 0,
+          pagination: { limit, offset, returned: 0, totalCount: 0, hasMore: false },
+        });
+      }
+
+      const { data: providerAppts, error: providerApptsError } = await supabase
+        .from("appointments")
+        .select("id")
+        .eq("organization_id", organizationId)
+        .eq("provider_id", providerId)
+        .is("archived_at", null);
+      if (providerApptsError) throw providerApptsError;
+      clinicianAppointmentIds = (providerAppts ?? [])
+        .map((row) => str((row as Record<string, unknown>).id))
+        .filter(Boolean);
+
+      if (clinicianAppointmentIds.length === 0) {
+        return NextResponse.json({
+          success: true,
+          clinicianOnly,
+          canManage: false,
+          practiceOptions: [],
+          rows: [],
+          total: 0,
+          pagination: { limit, offset, returned: 0, totalCount: 0, hasMore: false },
+        });
+      }
+    }
+
+    let query = supabase
       .from("professional_claims")
       .select(
         `id, claim_number, claim_status, total_charge, patient_responsibility_amount,
@@ -51,13 +93,24 @@ export async function GET(request: Request) {
          created_at, updated_at,
          clients(id, first_name, last_name, email),
          payer_profiles(payer_name),
-         appointments(id, scheduled_start_at, provider_id, provider_location_id,
+         appointments!inner(id, scheduled_start_at, provider_id, provider_location_id,
                       providers(id, first_name, last_name, display_name))`,
+        { count: "exact" },
       )
       .eq("organization_id", organizationId)
       .eq("claim_status", "denied")
       .is("archived_at", null)
-      .order("updated_at", { ascending: false });
+      .order("updated_at", { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (clinicianAppointmentIds && clinicianAppointmentIds.length > 0) {
+      query = query.in("appointment_id", clinicianAppointmentIds);
+    }
+    if (practiceFilter) {
+      query = query.eq("appointments.provider_location_id", practiceFilter);
+    }
+
+    const { data, error, count } = await query;
 
     if (error) throw error;
 
@@ -141,10 +194,18 @@ export async function GET(request: Request) {
       practiceOptions: Array.from(practiceSet).sort().map((p) => ({ value: p, label: p })),
       rows,
       total: rows.length,
+      pagination: {
+        limit,
+        offset,
+        returned: rows.length,
+        totalCount: count ?? null,
+        hasMore: count != null ? offset + rows.length < count : rows.length === limit,
+      },
     });
   } catch (e) {
+    console.error("Denied claims query failed", e);
     return NextResponse.json(
-      { success: false, error: e instanceof Error ? e.message : "Failed" },
+      { success: false, error: "Failed to load denied claims" },
       { status: 500 },
     );
   }

@@ -22,6 +22,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MAX_BYTES = 25 * 1024 * 1024;
+const MAX_XLSX_BYTES = 5 * 1024 * 1024;
+const XLSX_PARSE_TIMEOUT_MS = 5000;
 
 export interface ExtractedRow {
   procedureCode: string;
@@ -212,6 +214,18 @@ async function extractFromXlsx(buf: Buffer): Promise<ExtractedRow[]> {
   return dedupe(rows);
 }
 
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timeoutId: NodeJS.Timeout | null = null;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`${label} timed out`)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const guard = await requireBillingAccess({
@@ -254,17 +268,22 @@ export async function POST(request: Request) {
     } else if (
       name.endsWith(".xlsx") ||
       name.endsWith(".xlsm") ||
-      name.endsWith(".xls") ||
       type.includes("spreadsheetml") ||
       type.includes("excel")
     ) {
+      if (file.size > MAX_XLSX_BYTES) {
+        return NextResponse.json(
+          { success: false, error: `Excel uploads are limited to ${MAX_XLSX_BYTES} bytes.` },
+          { status: 413 },
+        );
+      }
       kind = "xlsx";
-      rows = await extractFromXlsx(buf);
+      rows = await withTimeout(extractFromXlsx(buf), XLSX_PARSE_TIMEOUT_MS, "xlsx parsing");
     } else {
       return NextResponse.json(
         {
           success: false,
-          error: "Unsupported file. Upload a PDF or Excel (.xlsx) file.",
+          error: "Unsupported file. Upload a PDF or Excel (.xlsx/.xlsm) file.",
         },
         { status: 415 },
       );
@@ -278,10 +297,11 @@ export async function POST(request: Request) {
       count: rows.length,
     });
   } catch (e) {
+    console.error("Fee schedule extract error:", e);
     return NextResponse.json(
       {
         success: false,
-        error: e instanceof Error ? e.message : "Extraction failed",
+        error: "Extraction failed",
       },
       { status: 500 },
     );

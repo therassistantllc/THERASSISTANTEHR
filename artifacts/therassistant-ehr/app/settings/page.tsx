@@ -7,11 +7,6 @@ const SETTINGS_SECTIONS = [
     description: "List, add, and edit your organizations — practice name, NPI, tax ID, billing address, and provider assignments.",
   },
   {
-    label: "Staff & Users",
-    href: "/settings/security",
-    description: "Manage staff accounts, roles, and access permissions.",
-  },
-  {
     label: "Users & Clinicians",
     href: "/settings/users",
     description: "All user accounts in one place, including clinician/provider user mapping and role access.",
@@ -52,7 +47,7 @@ const SETTINGS_SECTIONS = [
     description: "Auto-flag claims when payers respond with specific RARC/CARC codes so billers can react faster.",
   },
   {
-    label: "Security",
+    label: "Security & Access",
     href: "/settings/security",
     description: "Password policy, two-factor authentication, and audit logs.",
   },

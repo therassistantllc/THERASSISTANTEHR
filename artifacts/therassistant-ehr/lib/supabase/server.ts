@@ -38,14 +38,12 @@ function getServiceRoleKey() {
 export function createServerSupabaseAdminClient(): SupabaseClient | null {
   const url = getSupabaseUrl();
   const serviceRole = getServiceRoleKey();
-  const anonKey = process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  const apiKey = serviceRole ?? anonKey;
 
-  if (!url || !apiKey) {
+  if (!url || !serviceRole) {
     return null;
   }
 
-  return createClient(url, apiKey, {
+  return createClient(url, serviceRole, {
     auth: {
       persistSession: false,
       autoRefreshToken: false,
@@ -56,14 +54,12 @@ export function createServerSupabaseAdminClient(): SupabaseClient | null {
 function createServerSupabaseAdminClientTyped(): SupabaseClient<Database> | null {
   const url = getSupabaseUrl();
   const serviceRole = getServiceRoleKey();
-  const anonKey = process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  const apiKey = serviceRole ?? anonKey;
 
-  if (!url || !apiKey) {
+  if (!url || !serviceRole) {
     return null;
   }
 
-  return createClient<Database>(url, apiKey, {
+  return createClient<Database>(url, serviceRole, {
     auth: {
       persistSession: false,
       autoRefreshToken: false,

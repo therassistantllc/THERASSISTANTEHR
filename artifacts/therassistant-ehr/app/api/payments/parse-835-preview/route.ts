@@ -11,6 +11,8 @@ import { requireOrgAccess } from "@/lib/auth/requireOrgAccess";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { parse835 } from "@/lib/clearinghouse/parsers/parse835";
 
+const MAX_ERA_FILE_BYTES = 5 * 1024 * 1024;
+
 function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
@@ -75,6 +77,15 @@ export async function POST(request: Request) {
 
     if (!(file instanceof File)) {
       return NextResponse.json({ ok: false, error: "835 file is required" }, { status: 400 });
+    }
+    if (file.size <= 0) {
+      return NextResponse.json({ ok: false, error: "835 file is empty" }, { status: 400 });
+    }
+    if (file.size > MAX_ERA_FILE_BYTES) {
+      return NextResponse.json(
+        { ok: false, error: `835 file exceeds ${Math.floor(MAX_ERA_FILE_BYTES / (1024 * 1024))}MB limit` },
+        { status: 413 },
+      );
     }
 
     const guard = await requireOrgAccess({ requestedOrganizationId: submittedOrgId || null });
@@ -282,8 +293,7 @@ export async function POST(request: Request) {
       unmatchedCount,
     } satisfies PreviewResponse);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Preview failed";
     console.error("[parse-835-preview]", err);
-    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
+    return NextResponse.json({ ok: false, error: "Preview failed" }, { status: 500 });
   }
 }

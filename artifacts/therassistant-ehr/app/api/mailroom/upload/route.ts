@@ -3,6 +3,16 @@ import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 
 import { requireOrgAccess } from "@/lib/auth/requireOrgAccess";
 const BUCKET = "mailroom-documents";
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+const ALLOWED_MIME_TYPES = new Set([
+  "application/pdf",
+  "image/png",
+  "image/jpeg",
+  "image/tiff",
+  "text/plain",
+  "text/csv",
+]);
 
 function logCtx(label: string, ctx: Record<string, unknown>) {
   const parts = Object.entries(ctx)
@@ -11,34 +21,27 @@ function logCtx(label: string, ctx: Record<string, unknown>) {
   console.log(`[mailroom.upload] ${label} ${parts}`);
 }
 
-/**
- * Ensure the mailroom storage bucket exists (idempotent, best-effort).
- * Service-role can list/create buckets. We ignore "already exists" errors.
- */
-async function ensureBucket(supabase: ReturnType<typeof createServerSupabaseAdminClient>) {
-  if (!supabase) return;
-  try {
-    const { data: buckets } = await supabase.storage.listBuckets();
-    if (buckets && buckets.some((b) => b.name === BUCKET)) return;
-    const { error } = await supabase.storage.createBucket(BUCKET, {
-      public: false,
-      fileSizeLimit: 25 * 1024 * 1024, // 25 MB cap on individual mailroom files
-    });
-    if (error && !/already exists/i.test(error.message)) {
-      logCtx("ensure-bucket-error", { bucket: BUCKET, err: error.message });
-    } else {
-      logCtx("ensure-bucket-created", { bucket: BUCKET });
+function looksLikeAllowedFile(bytes: Uint8Array, mimeType: string) {
+  const hasPrefix = (...sig: number[]) => sig.every((n, i) => bytes[i] === n);
+  if (mimeType === "application/pdf") return hasPrefix(0x25, 0x50, 0x44, 0x46); // %PDF
+  if (mimeType === "image/png") return hasPrefix(0x89, 0x50, 0x4e, 0x47);
+  if (mimeType === "image/jpeg") return hasPrefix(0xff, 0xd8, 0xff);
+  if (mimeType === "image/tiff") return hasPrefix(0x49, 0x49, 0x2a, 0x00) || hasPrefix(0x4d, 0x4d, 0x00, 0x2a);
+  if (mimeType === "text/plain" || mimeType === "text/csv") {
+    // Permit UTF-8 BOM or mostly-printable text for plain/csv.
+    let printable = 0;
+    const sample = bytes.subarray(0, Math.min(bytes.length, 512));
+    for (const b of sample) {
+      if (b === 0x09 || b === 0x0a || b === 0x0d || (b >= 0x20 && b <= 0x7e)) printable++;
     }
-  } catch (err) {
-    logCtx("ensure-bucket-exception", {
-      bucket: BUCKET,
-      err: err instanceof Error ? err.message : String(err),
-    });
+    return sample.length === 0 || printable / sample.length > 0.9;
   }
+  return false;
 }
 
 export async function POST(req: NextRequest) {
   try {
+    const requestId = crypto.randomUUID();
     const supabase = createServerSupabaseAdminClient();
     if (!supabase) {
       return NextResponse.json({ success: false, error: "Database connection not available" }, { status: 500 });
@@ -59,33 +62,47 @@ export async function POST(req: NextRequest) {
 
     const blob = file as Blob & { name?: string };
     const fileName = (blob.name && String(blob.name)) || `mailroom-${Date.now()}`;
-    const mimeType = blob.type || "application/octet-stream";
+    const mimeType = (blob.type || "").toLowerCase();
+
+    if (!ALLOWED_MIME_TYPES.has(mimeType)) {
+      return NextResponse.json(
+        { success: false, error: "Unsupported file type. Allowed types: PDF, PNG, JPEG, TIFF, TXT, CSV." },
+        { status: 415 },
+      );
+    }
+
+    if (typeof blob.size !== "number" || blob.size <= 0 || blob.size > MAX_UPLOAD_BYTES) {
+      return NextResponse.json(
+        { success: false, error: `File size must be between 1 byte and ${MAX_UPLOAD_BYTES} bytes.` },
+        { status: 413 },
+      );
+    }
+
     const safeName = fileName.replace(/[^\w.\-]+/g, "_");
     const storagePath = `${organizationId}/${Date.now()}-${safeName}`;
 
-    await ensureBucket(supabase);
-
-    logCtx("upload-start", {
-      organizationId,
-      bucket: BUCKET,
-      path: storagePath,
-      mime: mimeType,
-      size: blob.size ?? 0,
-    });
+    logCtx("upload-start", { requestId, organizationId, size: blob.size ?? 0 });
 
     const arrayBuffer = await blob.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    if (!looksLikeAllowedFile(bytes, mimeType)) {
+      return NextResponse.json(
+        { success: false, error: "File content does not match the declared MIME type." },
+        { status: 400 },
+      );
+    }
+
     const { error: upErr } = await supabase.storage
       .from(BUCKET)
-      .upload(storagePath, new Uint8Array(arrayBuffer), { contentType: mimeType, upsert: false });
+      .upload(storagePath, bytes, { contentType: mimeType, upsert: false });
     if (upErr) {
       logCtx("upload-failed", {
+        requestId,
         organizationId,
-        bucket: BUCKET,
-        path: storagePath,
         err: upErr.message,
       });
       return NextResponse.json(
-        { success: false, error: `Storage upload failed: ${upErr.message}`, bucket: BUCKET, attemptedPath: storagePath },
+        { success: false, error: "Storage upload failed" },
         { status: 500 },
       );
     }
@@ -112,21 +129,19 @@ export async function POST(req: NextRequest) {
     if (error || !data) {
       await supabase.storage.from(BUCKET).remove([storagePath]).catch(() => {});
       logCtx("db-insert-failed", {
+        requestId,
         organizationId,
-        bucket: BUCKET,
-        path: storagePath,
-        err: error?.message || "no-data",
+        err: error?.message || "db-insert-failed",
       });
       return NextResponse.json(
-        { success: false, error: error?.message || "Failed to create mailroom item" },
+        { success: false, error: "Failed to create mailroom item" },
         { status: 422 },
       );
     }
 
     logCtx("upload-ok", {
+      requestId,
       organizationId,
-      bucket: BUCKET,
-      path: storagePath,
       itemId: String(data.id),
     });
 
@@ -148,7 +163,7 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     console.error("Mailroom upload error:", error);
     return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : "Upload failed" },
+      { success: false, error: "Upload failed" },
       { status: 500 },
     );
   }
