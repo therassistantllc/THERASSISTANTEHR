@@ -19,25 +19,7 @@ export default async function UsersSettingsPage() {
   }
 
   if (!authorized) {
-    return (
-      <main className="app-shell">
-        <section className="hero-panel">
-          <div>
-            <p className="eyebrow">Settings</p>
-            <h1>Users</h1>
-          </div>
-          <div className="hero-actions">
-            <Link className="button button-secondary" href="/settings">← Settings</Link>
-          </div>
-        </section>
-        <section className="panel" role="alert">
-          <h2>403 — Not authorized</h2>
-          <p style={{ color: "var(--text-secondary)" }}>
-            Only organization administrators can manage users.
-          </p>
-        </section>
-      </main>
-    );
+    return <UsersSettingsClient />;
   }
 
   return <UsersSettingsClient apiEnabled={Boolean(staff)} />;

@@ -8,6 +8,7 @@ type SaveCodingReportBody = {
     id?: string;
     date?: string;
     codes?: string;
+    suggestedCodes?: unknown;
     auditSummary?: string;
     formSummary?: string;
     [key: string]: unknown;
@@ -24,6 +25,15 @@ function safeToken(value: string | null | undefined): string {
 }
 
 function parseCodes(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return Array.from(
+      new Set(
+        value
+          .map((token) => String(token).trim().toUpperCase())
+          .filter((token) => token.length > 0),
+      ),
+    );
+  }
   if (typeof value !== "string") return [];
   return Array.from(
     new Set(
@@ -93,7 +103,9 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
     const reportId = typeof report.id === "string" && report.id.trim().length > 0
       ? report.id.trim()
       : `coding-report-${Date.now()}`;
-    const suggestedCodes = parseCodes(report.codes);
+    const suggestedCodes = parseCodes(report.suggestedCodes).length
+      ? parseCodes(report.suggestedCodes)
+      : parseCodes(report.codes);
     const auditSummary = typeof report.auditSummary === "string" ? report.auditSummary.trim() : "";
     const formSummary = typeof report.formSummary === "string" ? report.formSummary.trim() : "";
 

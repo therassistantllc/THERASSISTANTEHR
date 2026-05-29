@@ -5,14 +5,10 @@ import { analyzeMedicaidDocumentation } from "@/lib/encounters/medicaidCodeDetec
 import type { SoapNoteData } from "@/components/encounter/SoapNoteEditor";
 import type { Diagnosis } from "@/components/encounter/DiagnosisPicker";
 import type { ServiceLine } from "@/components/encounter/CptCodePanel";
-
-export type CodingHelperReport = {
-  id: string;
-  date: string;
-  codes: string;
-  auditSummary: string;
-  formSummary: string;
-};
+import CodingQuestionnaire from "@/components/encounter/coding-helper/CodingQuestionnaire";
+import { buildCodingReport, type CodingHelperReport } from "@/components/encounter/coding-helper/buildCodingReport";
+import { scoreCodingQuestionnaire } from "@/components/encounter/coding-helper/scoring";
+import type { CodingQuestionnaireAnswers } from "@/components/encounter/coding-helper/questions";
 
 type Props = {
   encounterId: string;
@@ -83,6 +79,7 @@ export default function CodingHelperPanel(props: Props) {
     onSaveReport,
   } = props;
 
+  const [answers, setAnswers] = useState<CodingQuestionnaireAnswers>({});
   const [latestReport, setLatestReport] = useState<CodingHelperReport | null>(null);
   const [saving, setSaving] = useState(false);
   const [panelError, setPanelError] = useState<string | null>(null);
@@ -101,68 +98,37 @@ export default function CodingHelperPanel(props: Props) {
     [soapNote, diagnoses, serviceLines, clientName, payerName, isMedicaid],
   );
 
-  const analysis = useMemo(() => {
+  const questionnaireScore = useMemo(() => scoreCodingQuestionnaire(answers), [answers]);
+
+  const noteAnalysis = useMemo(() => {
     if (!documentationText.trim()) return null;
     return analyzeMedicaidDocumentation(documentationText);
   }, [documentationText]);
 
-  const suggestedCodes = useMemo(() => {
-    if (!analysis) return [] as string[];
-    return Array.from(
-      new Set(
-        analysis.recommendations
-          .filter((rec) => rec.action === "suggest" || rec.action === "clarify_before_suggesting")
-          .map((rec) => rec.code),
-      ),
-    );
-  }, [analysis]);
+  const suggestedCodes = useMemo(
+    () => Array.from(new Set([...questionnaireScore.suggestedCodes, ...questionnaireScore.psychotherapyCodes])),
+    [questionnaireScore],
+  );
 
-  const auditSummary = useMemo(() => {
-    if (!analysis) return "No coding support signals detected from current note content.";
-    const notes = [...analysis.auditSummary];
-    if (analysis.globalWarnings.length > 0) {
-      notes.push(`Warnings: ${analysis.globalWarnings.join(" | ")}`);
-    }
-    return notes.filter(Boolean).join(" ") || "No coding support signals detected from current note content.";
-  }, [analysis]);
+  const auditSummary = useMemo(
+    () => [questionnaireScore.summary, noteAnalysis?.auditSummary.join(" ") ?? ""].filter(Boolean).join(" "),
+    [questionnaireScore, noteAnalysis],
+  );
 
   function buildReport(): CodingHelperReport {
-    const date = new Date().toISOString().slice(0, 10);
-    const recommendations = analysis?.recommendations ?? [];
-    const recommendationText = recommendations
-      .map((rec) => {
-        const missing = rec.missingElements.length ? ` Missing: ${rec.missingElements.join("; ")}.` : "";
-        const blockerText = rec.blockers.length ? ` Blockers: ${rec.blockers.map((b) => b.label).join("; ")}.` : "";
-        return `- ${rec.code} (${rec.action}, ${rec.confidence}): ${rec.explanation}.${missing}${blockerText}`;
-      })
-      .join("\n");
-
-    const formSummary = [
-      `Encounter: ${encounterId}`,
-      `Organization: ${organizationId}`,
-      clean(clientName) ? `Client: ${clean(clientName)}` : "",
-      clean(payerName) ? `Payer: ${clean(payerName)}` : "",
-      `Coverage context: ${isMedicaid ? "Medicaid" : "Non-Medicaid"}`,
-      "",
-      "Suggested codes:",
-      suggestedCodes.length ? suggestedCodes.join(", ") : "None",
-      "",
-      "Recommendations:",
-      recommendationText || "No recommendation rows generated.",
-      "",
-      "Source snapshot:",
-      documentationText || "No source note content.",
-    ]
-      .filter(Boolean)
-      .join("\n");
-
-    return {
-      id: `coding-helper-${encounterId}-${Date.now()}`,
-      date,
-      codes: suggestedCodes.join(", "),
-      auditSummary,
-      formSummary,
-    };
+    return buildCodingReport({
+      encounterId,
+      organizationId,
+      answers,
+      questionnaireScore,
+      noteAnalysis,
+      sourceSnapshot: documentationText,
+      soapNote,
+      diagnoses,
+      serviceLines,
+      payerName,
+      isMedicaid,
+    });
   }
 
   function handleGenerate() {
@@ -206,9 +172,13 @@ export default function CodingHelperPanel(props: Props) {
         </p>
         {!isMedicaid ? (
           <p className="muted" style={{ margin: 0, fontSize: 12 }}>
-            Medicaid-focused code heuristics are still available, but confidence may be lower for non-Medicaid coverage.
+            The questionnaire logic still runs for non-Medicaid coverage, but payer-specific fit may vary.
           </p>
         ) : null}
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <CodingQuestionnaire answers={answers} onChange={setAnswers} />
       </div>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
@@ -241,9 +211,19 @@ export default function CodingHelperPanel(props: Props) {
         <p>
           <strong>Audit summary:</strong> {auditSummary}
         </p>
-        {analysis?.globalWarnings.length ? (
+        {questionnaireScore.documentationWarnings.length ? (
           <p>
-            <strong>Documentation warnings:</strong> {analysis.globalWarnings.join(" | ")}
+            <strong>Documentation warnings:</strong> {questionnaireScore.documentationWarnings.join(" | ")}
+          </p>
+        ) : null}
+        {questionnaireScore.screeningDetails.length ? (
+          <p>
+            <strong>Screening details:</strong> {questionnaireScore.screeningDetails.join(" | ")}
+          </p>
+        ) : null}
+        {noteAnalysis?.recommendations.some((rec) => rec.action === "suggest") ? (
+          <p>
+            <strong>Note-only suggest signals:</strong> {Array.from(new Set(noteAnalysis.recommendations.filter((rec) => rec.action === "suggest").map((rec) => rec.code))).join(", ")}
           </p>
         ) : null}
       </div>
@@ -254,6 +234,16 @@ export default function CodingHelperPanel(props: Props) {
           <p style={{ marginBottom: 8 }}><strong>Report date:</strong> {latestReport.date}</p>
           <p style={{ marginBottom: 8 }}><strong>Codes:</strong> {latestReport.codes || "None"}</p>
           <p style={{ marginBottom: 8 }}><strong>Summary:</strong> {latestReport.auditSummary}</p>
+          <p style={{ marginBottom: 8 }}><strong>Saved answers:</strong> {Object.keys(latestReport.answers).length}</p>
+          <p style={{ marginBottom: 8 }}><strong>Questionnaire-supported codes:</strong> {latestReport.questionnaireScore.suggestedCodes.length ? latestReport.questionnaireScore.suggestedCodes.join(", ") : "None"}</p>
+          <details>
+            <summary>View questionnaire score breakdown</summary>
+            <pre style={{ whiteSpace: "pre-wrap", marginTop: 8, fontSize: 12 }}>
+              {latestReport.questionnaireScore.codeScores
+                .map((score) => `${score.code}: ${score.earnedPoints}/${score.possiblePoints} (${score.status})`)
+                .join("\n") || "No score breakdown available."}
+            </pre>
+          </details>
           <details>
             <summary>View full report details</summary>
             <pre style={{ whiteSpace: "pre-wrap", marginTop: 8, fontSize: 12 }}>{latestReport.formSummary}</pre>
@@ -263,3 +253,5 @@ export default function CodingHelperPanel(props: Props) {
     </div>
   );
 }
+
+export type { CodingHelperReport };
