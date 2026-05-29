@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { requireAuthenticatedStaffFromAccessToken } from "@/lib/rbac/auth";
 
+const SERVER_AUTH_COOKIE = "sb-therassistant-auth-token";
+
 function normalizeNext(next: string | null): string {
   if (!next) return "/calendar";
   if (!next.startsWith("/")) return "/calendar";
@@ -22,11 +24,25 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const next = normalizeNext(url.searchParams.get("next"));
 
-  return NextResponse.json({
+  const response = NextResponse.json({
     success: true,
     next,
     staffId: context.staffId,
     organizationId: context.organizationId,
     roles: context.roles,
   });
+
+  if (token) {
+    response.cookies.set({
+      name: SERVER_AUTH_COOKIE,
+      value: token,
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60,
+    });
+  }
+
+  return response;
 }

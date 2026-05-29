@@ -10,6 +10,8 @@ import { NextResponse } from "next/server";
 import { getProviderIdForUser, requireAuthenticatedStaffFromAccessToken } from "@/lib/rbac/auth";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 
+const SERVER_AUTH_COOKIE = "sb-therassistant-auth-token";
+
 function parseBooleanFlag(value: string | null): boolean {
   return value === "1" || value === "true" || value === "yes";
 }
@@ -72,7 +74,7 @@ export async function GET(request: Request) {
     }
   }
 
-  return NextResponse.json({
+  const response = NextResponse.json({
     staffId,
     organizationId,
     organizationName,
@@ -84,4 +86,18 @@ export async function GET(request: Request) {
     permissions,
     providerId,
   });
+
+  if (token) {
+    response.cookies.set({
+      name: SERVER_AUTH_COOKIE,
+      value: token,
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60,
+    });
+  }
+
+  return response;
 }

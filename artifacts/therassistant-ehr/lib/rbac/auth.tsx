@@ -5,7 +5,10 @@
 
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import type { Database } from "@/lib/supabase/database.types";
+import { cookies } from "next/headers";
 import { PermissionCode, StaffRoleCode } from "./constants";
+
+const SERVER_AUTH_COOKIE = "sb-therassistant-auth-token";
 
 /**
  * Authenticated user context loaded from Supabase auth
@@ -21,11 +24,27 @@ async function getAuthenticatedUserInternal(
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) return null;
 
+  let token = typeof accessToken === "string" && accessToken.trim().length > 0 ? accessToken.trim() : null;
+  if (!token) {
+    try {
+      const jar = await cookies();
+      token = jar.get(SERVER_AUTH_COOKIE)?.value?.trim() || null;
+      if (!token) {
+        const cookieMatch = jar
+          .getAll()
+          .find((cookie) => /^sb-.*-auth-token(?:\.\d+)?$/.test(cookie.name));
+        token = cookieMatch?.value?.trim() || null;
+      }
+    } catch {
+      token = null;
+    }
+  }
+
   try {
     const {
       data: { user },
       error,
-    } = await supabase.auth.getUser(accessToken);
+    } = await supabase.auth.getUser(token || undefined);
 
     if (error || !user) {
       // Development bypass is opt-in only.
