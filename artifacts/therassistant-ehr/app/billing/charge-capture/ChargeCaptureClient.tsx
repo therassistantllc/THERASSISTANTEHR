@@ -296,7 +296,9 @@ export default function ChargeCaptureClient() {
         body: JSON.stringify({ organizationId: orgId, claimIds }),
       });
       const json = await res.json();
-      if (!res.ok || !json.success) throw new Error(json.error ?? "Failed to generate batches");
+      if (!res.ok || !json.success) {
+        throw new Error(json.error ?? json.message ?? "Failed to generate batches");
+      }
       setGenerateResult({ batchesCreated: json.batchesCreated ?? 0, claimsQueued: json.claimsQueued ?? 0, message: json.message });
       if ((json.batchesCreated ?? 0) > 0) {
         if (json.generationMode === "queued") {

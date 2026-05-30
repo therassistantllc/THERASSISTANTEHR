@@ -36,6 +36,14 @@ function getErrorMessage(error: unknown) {
   return "Failed to load charge batches";
 }
 
+function getGenerationErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    const msg = error.message.trim();
+    return msg || "Failed to generate charge batches";
+  }
+  return "Failed to generate charge batches";
+}
+
 function makeBatchNumber(suffix?: number) {
   const stamp = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
   return suffix == null ? `CC-${stamp}` : `CC-${stamp}-${suffix}`;
@@ -311,6 +319,7 @@ export async function POST(request: Request) {
     let existingBatchQuery = supabase
       .from("claim_837p_batches")
       .select("id, batch_number, batch_status, generated_file_name, batch_source")
+      .eq("organization_id", organizationId)
       .in("batch_status", ["draft", "ready_to_generate", "generation_failed", "generated"])
       .is("archived_at", null)
       .order("created_at", { ascending: true });
@@ -603,9 +612,15 @@ export async function POST(request: Request) {
     const failedGenerationCount = outputBatches.filter((b) => !b.generated).length;
     const existingRegenerated = outputBatches.filter((b) => b.source === "existing").length;
     const totalClaimsCovered = processedBatches.reduce((sum, b) => sum + b.claimCount, 0);
+    const firstGenerationError =
+      outputBatches.find((b) => !b.generated)?.generationError ?? null;
 
     return NextResponse.json({
       success: failedGenerationCount === 0,
+      error:
+        failedGenerationCount > 0
+          ? firstGenerationError ?? "Failed to generate one or more 837P batch files"
+          : undefined,
       batchesCreated: createdBatches.length,
       generationMode: "eager",
       jobsQueued: 0,
@@ -625,7 +640,7 @@ export async function POST(request: Request) {
     console.error("Charge batch generation failed", error);
 
     return NextResponse.json(
-      { success: false, error: "Failed to generate charge batches" },
+      { success: false, error: getGenerationErrorMessage(error) },
       { status: 500 },
     );
   }

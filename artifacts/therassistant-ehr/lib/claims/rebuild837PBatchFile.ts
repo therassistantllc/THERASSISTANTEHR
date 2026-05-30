@@ -387,6 +387,106 @@ export async function rebuild837PBatchFile(args: {
     }
   }
 
+  // Secondary recovery: for legacy claims with no original_claim_id snapshot,
+  // clone from the most recent snapshot on the same patient (prefer same payer).
+  const stillMissingPartiesClaims = claims.filter((c) => !partiesByClaim.has(c.id));
+  if (stillMissingPartiesClaims.length > 0) {
+    const patientIds = Array.from(
+      new Set(stillMissingPartiesClaims.map((c) => c.patient_id).filter((v): v is string => !!v)),
+    );
+
+    if (patientIds.length > 0) {
+      const { data: donorClaimRows, error: donorClaimErr } = await (supabase as any)
+        .from("professional_claims")
+        .select("id, patient_id, payer_profile_id, created_at")
+        .eq("organization_id", organizationId)
+        .in("patient_id", patientIds)
+        .is("archived_at", null);
+      if (donorClaimErr) {
+        return { ok: false, batchId, error: donorClaimErr.message };
+      }
+
+      const donorClaims = ((donorClaimRows ?? []) as Row[])
+        .map((row) => ({
+          id: asString(row.id),
+          patient_id: asString(row.patient_id),
+          payer_profile_id: (row.payer_profile_id as string | null | undefined) ?? null,
+          created_at: (row.created_at as string | null | undefined) ?? null,
+        }))
+        .filter((row) => !!row.id && !!row.patient_id);
+
+      const donorIds = donorClaims.map((c) => c.id);
+      if (donorIds.length > 0) {
+        const { data: donorSnapshotRows, error: donorSnapshotErr } = await (supabase as any)
+          .from("claim_parties_snapshot")
+          .select("*")
+          .in("claim_id", donorIds);
+        if (donorSnapshotErr) {
+          return { ok: false, batchId, error: donorSnapshotErr.message };
+        }
+
+        const donorSnapshotByClaimId = new Map<string, Row>();
+        for (const row of (donorSnapshotRows ?? []) as Row[]) {
+          donorSnapshotByClaimId.set(asString(row.claim_id), row);
+        }
+
+        const donorClaimCandidates = donorClaims.filter((c) => donorSnapshotByClaimId.has(c.id));
+        const cloneRows: Row[] = [];
+
+        for (const target of stillMissingPartiesClaims) {
+          if (!target.patient_id) continue;
+
+          const candidates = donorClaimCandidates.filter(
+            (d) => d.patient_id === target.patient_id && d.id !== target.id,
+          );
+          if (candidates.length === 0) continue;
+
+          candidates.sort((a, b) => {
+            const aSamePayer = a.payer_profile_id && target.payer_profile_id
+              ? a.payer_profile_id === target.payer_profile_id
+              : false;
+            const bSamePayer = b.payer_profile_id && target.payer_profile_id
+              ? b.payer_profile_id === target.payer_profile_id
+              : false;
+            if (aSamePayer !== bSamePayer) return aSamePayer ? -1 : 1;
+
+            const aCreated = Date.parse(a.created_at ?? "") || 0;
+            const bCreated = Date.parse(b.created_at ?? "") || 0;
+            return bCreated - aCreated;
+          });
+
+          const donor = candidates[0];
+          const donorSnapshot = donorSnapshotByClaimId.get(donor.id);
+          if (!donorSnapshot) continue;
+
+          const { id: _id, claim_id: _cid, created_at: _ca, updated_at: _ua, ...rest } = donorSnapshot;
+          cloneRows.push({ ...rest, claim_id: target.id });
+        }
+
+        if (cloneRows.length > 0) {
+          const { error: cloneErr } = await (supabase as any)
+            .from("claim_parties_snapshot")
+            .upsert(cloneRows, { onConflict: "claim_id" });
+          if (cloneErr) {
+            return { ok: false, batchId, error: cloneErr.message };
+          }
+
+          const stillMissingIds = stillMissingPartiesClaims.map((c) => c.id);
+          const { data: refreshedRows, error: refreshedErr } = await (supabase as any)
+            .from("claim_parties_snapshot")
+            .select("*")
+            .in("claim_id", stillMissingIds);
+          if (refreshedErr) {
+            return { ok: false, batchId, error: refreshedErr.message };
+          }
+          for (const row of (refreshedRows ?? []) as Row[]) {
+            partiesByClaim.set(asString(row.claim_id), normalizeParties(row));
+          }
+        }
+      }
+    }
+  }
+
   const payerProfileIds = Array.from(
     new Set(claims.map((c) => c.payer_profile_id).filter((v): v is string => !!v)),
   );

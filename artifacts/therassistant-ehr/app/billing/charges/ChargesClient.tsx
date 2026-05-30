@@ -126,10 +126,7 @@ export default function ChargesClient() {
   function renderBatchActions(batchId: string) {
   if (!batchId) return "—";
 
-  const batch = batches.find((b) => b.id === batchId);
-  if (!batch) return "—";
-
-  const downloadUrl = `/api/billing/charges/batches/${encodeURIComponent(batch.id)}/download?organizationId=${encodeURIComponent(organizationId)}`;
+  const downloadUrl = `/api/billing/charges/batches/${encodeURIComponent(batchId)}/download?organizationId=${encodeURIComponent(organizationId)}`;
 
   return (
     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -145,8 +142,8 @@ export default function ChargesClient() {
       <button
         className="button button-secondary"
         type="button"
-        onClick={() => void postAction(batch.id, "submit")}
-        disabled={!canManage || busyId === batch.id}
+        onClick={() => void postAction(batchId, "submit")}
+        disabled={!canManage || busyId === batchId}
       >
         Submit Batch
       </button>
@@ -154,8 +151,8 @@ export default function ChargesClient() {
       <button
         className="button"
         type="button"
-        onClick={() => void postAction(batch.id, "mark-submitted")}
-        disabled={!canManage || busyId === batch.id}
+        onClick={() => void postAction(batchId, "mark-submitted")}
+        disabled={!canManage || busyId === batchId}
       >
         Mark Submitted
       </button>
