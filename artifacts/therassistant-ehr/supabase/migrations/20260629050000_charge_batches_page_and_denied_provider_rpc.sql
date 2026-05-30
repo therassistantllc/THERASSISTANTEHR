@@ -61,9 +61,7 @@ as $$
             order by sl.line_number asc
           )
           from public.professional_claim_service_lines sl
-          where sl.organization_id = p_organization_id
-            and sl.claim_id = pc.id
-            and sl.archived_at is null
+          where sl.claim_id = pc.id
         ),
         '[]'::jsonb
       ) as service_lines
@@ -273,9 +271,7 @@ as $$
   left join lateral (
     select l.procedure_code
     from public.professional_claim_service_lines l
-    where l.organization_id = p_organization_id
-      and l.claim_id = m.id
-      and l.archived_at is null
+    where l.claim_id = m.id
     order by l.line_number asc
     limit 1
   ) sl on true

@@ -321,7 +321,7 @@ as $$
     m.payer_profile_id,
     pp.payer_name,
     pp.payer_type,
-    pp.payer_id as payer_id_value,
+    pp.availity_payer_id as payer_id_value,
     coalesce(sl.cpt_codes, '{}'::text[]) as cpt_codes,
     coalesce(m.diagnosis_codes, '{}'::text[]) as diagnosis_codes,
     coalesce(sl.modifiers, '{}'::text[]) as modifiers,
@@ -343,8 +343,8 @@ as $$
     snap.billing_provider_npi as practice_id,
     snap.billing_provider_name as practice_name,
     wq.assigned_to_user_id as assigned_biller_user_id,
-    coalesce(u.full_name, u.email) as assigned_biller_name,
-    wq.defer_until as follow_up_due_at,
+    coalesce(nullif(concat_ws(' ', u.first_name, u.last_name), ''), u.email) as assigned_biller_name,
+    wq.deferred_until as follow_up_due_at,
     m.total_count::bigint as total_count
   from matched m
   left join public.clients c
@@ -390,7 +390,7 @@ as $$
   left join lateral (
     select
       w.assigned_to_user_id,
-      w.defer_until
+      w.deferred_until
     from public.workqueue_items w
     where w.organization_id = p_organization_id
       and w.professional_claim_id = m.id
@@ -398,7 +398,7 @@ as $$
     order by w.updated_at desc nulls last
     limit 1
   ) wq on true
-  left join public.users u
+  left join public.staff_profiles u
     on u.id = wq.assigned_to_user_id
   order by m.created_at asc;
 $$;
