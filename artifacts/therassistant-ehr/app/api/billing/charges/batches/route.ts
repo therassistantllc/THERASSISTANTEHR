@@ -312,52 +312,61 @@ export async function POST(request: Request) {
     }
 
     /*
-      Existing batches must be regenerated even when there are no new unbatched claims.
-      This fixes the UI mismatch:
-      “25 charges ready to batch” but POST says “No unbatched claims.”
+      Existing-batch regeneration is useful for whole-scope runs, but when the
+      user submits an explicit claim selection we should not fail that action
+      because of unrelated legacy batches.
     */
-    let existingBatchQuery = supabase
-      .from("claim_837p_batches")
-      .select("id, batch_number, batch_status, generated_file_name, batch_source")
-      .eq("organization_id", organizationId)
-      .in("batch_status", ["draft", "ready_to_generate", "generation_failed", "generated"])
-      .is("archived_at", null)
-      .order("created_at", { ascending: true });
+    const includeExistingRegeneration = !explicitSelection;
+    let existingProcessable: Array<{
+      batchId: string;
+      batchNumber: string;
+      claimCount: number;
+    }> = [];
 
-    const { data: existingBatchesRaw, error: existingBatchesError } = await existingBatchQuery;
-    if (existingBatchesError) throw existingBatchesError;
+    if (includeExistingRegeneration) {
+      let existingBatchQuery = supabase
+        .from("claim_837p_batches")
+        .select("id, batch_number, batch_status, generated_file_name, batch_source")
+        .eq("organization_id", organizationId)
+        .in("batch_status", ["draft", "ready_to_generate", "generation_failed", "generated"])
+        .is("archived_at", null)
+        .order("created_at", { ascending: true });
 
-    const existingBatchRows = (existingBatchesRaw ?? []) as DbRow[];
-    const existingBatchIds = existingBatchRows.map((b) => text(b.id)).filter(Boolean);
+      const { data: existingBatchesRaw, error: existingBatchesError } = await existingBatchQuery;
+      if (existingBatchesError) throw existingBatchesError;
 
-    const { data: existingLinksRaw, error: existingLinksError } =
-      existingBatchIds.length > 0
-        ? await supabase
-            .from("claim_837p_batch_claims")
-            .select("batch_id, professional_claim_id")
-            .eq("organization_id", organizationId)
-            .in("batch_id", existingBatchIds)
-            .is("archived_at", null)
-        : { data: [] as DbRow[], error: null };
+      const existingBatchRows = (existingBatchesRaw ?? []) as DbRow[];
+      const existingBatchIds = existingBatchRows.map((b) => text(b.id)).filter(Boolean);
 
-    if (existingLinksError) throw existingLinksError;
+      const { data: existingLinksRaw, error: existingLinksError } =
+        existingBatchIds.length > 0
+          ? await supabase
+              .from("claim_837p_batch_claims")
+              .select("batch_id, professional_claim_id")
+              .eq("organization_id", organizationId)
+              .in("batch_id", existingBatchIds)
+              .is("archived_at", null)
+          : { data: [] as DbRow[], error: null };
 
-    const existingLinks = (existingLinksRaw ?? []) as DbRow[];
-    const existingClaimCountsByBatchId = new Map<string, number>();
+      if (existingLinksError) throw existingLinksError;
 
-    for (const link of existingLinks) {
-      const batchId = text(link.batch_id);
-      if (!batchId) continue;
-      existingClaimCountsByBatchId.set(batchId, (existingClaimCountsByBatchId.get(batchId) ?? 0) + 1);
+      const existingLinks = (existingLinksRaw ?? []) as DbRow[];
+      const existingClaimCountsByBatchId = new Map<string, number>();
+
+      for (const link of existingLinks) {
+        const batchId = text(link.batch_id);
+        if (!batchId) continue;
+        existingClaimCountsByBatchId.set(batchId, (existingClaimCountsByBatchId.get(batchId) ?? 0) + 1);
+      }
+
+      existingProcessable = existingBatchRows
+        .filter((b) => (existingClaimCountsByBatchId.get(text(b.id)) ?? 0) > 0)
+        .map((b) => ({
+          batchId: text(b.id),
+          batchNumber: text(b.batch_number) || text(b.id).slice(0, 8),
+          claimCount: existingClaimCountsByBatchId.get(text(b.id)) ?? 0,
+        }));
     }
-
-    const existingProcessable = existingBatchRows
-      .filter((b) => (existingClaimCountsByBatchId.get(text(b.id)) ?? 0) > 0)
-      .map((b) => ({
-        batchId: text(b.id),
-        batchNumber: text(b.batch_number) || text(b.id).slice(0, 8),
-        claimCount: existingClaimCountsByBatchId.get(text(b.id)) ?? 0,
-      }));
 
     let readyClaimsQuery = supabase
       .from("professional_claims")
