@@ -311,12 +311,9 @@ export async function POST(request: Request) {
       );
     }
 
-    /*
-      Existing-batch regeneration is useful for whole-scope runs, but when the
-      user submits an explicit claim selection we should not fail that action
-      because of unrelated legacy batches.
-    */
-    const includeExistingRegeneration = !explicitSelection;
+    // 1. Existing batches should be regenerated regardless of batch_source so
+    // legacy rows (null/different source) are not skipped.
+    const includeExistingRegeneration = true;
     let existingProcessable: Array<{
       batchId: string;
       batchNumber: string;
@@ -579,9 +576,20 @@ export async function POST(request: Request) {
         claimsQueued: 0,
         existingBatchesRegenerated: 0,
         batches: [],
-        message:
-          "No ready batches or unbatched ready claims were found. Release charges first.",
+        message: "No ready batches or unbatched ready claims were found.",
       });
+    }
+
+    const generateNow = true;
+
+    if (!generateNow) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Queued generation is disabled for this route",
+        },
+        { status: 500 },
+      );
     }
 
     const batchResults = await Promise.allSettled(
@@ -649,7 +657,10 @@ export async function POST(request: Request) {
     console.error("Charge batch generation failed", error);
 
     return NextResponse.json(
-      { success: false, error: getGenerationErrorMessage(error) },
+      {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to generate charge batches",
+      },
       { status: 500 },
     );
   }
