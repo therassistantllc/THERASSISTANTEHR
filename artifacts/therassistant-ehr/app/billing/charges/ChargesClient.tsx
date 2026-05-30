@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { DEFAULT_ORG_ID } from "@/lib/config";
 
 type ChargeRow = {
   chargeId: string;
@@ -122,18 +121,45 @@ export default function ChargesClient() {
     }
   }
 
-  function renderBatchActions(batchNumber: string) {
-    const batch = batches.find((b) => b.batchNumber === batchNumber);
-    if (!batch) return "—";
-    const downloadUrl = `/api/billing/charges/batches/${encodeURIComponent(batch.id)}/download?organizationId=${encodeURIComponent(organizationId)}`;
-    return (
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        <a className="button button-secondary" href={downloadUrl} target="_blank" rel="noopener noreferrer">Download Batch</a>
-        <button className="button button-secondary" type="button" onClick={() => void postAction(batch.id, "submit")} disabled={!canManage || busyId === batch.id}>Submit Batch</button>
-        <button className="button" type="button" onClick={() => void postAction(batch.id, "mark-submitted")} disabled={!canManage || busyId === batch.id}>Mark Submitted</button>
-      </div>
-    );
-  }
+  function renderBatchActions(batchId: string) {
+  if (!batchId) return "—";
+
+  const batch = batches.find((b) => b.id === batchId);
+  if (!batch) return "—";
+
+  const downloadUrl = `/api/billing/charges/batches/${encodeURIComponent(batch.id)}/download?organizationId=${encodeURIComponent(organizationId)}`;
+
+  return (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+      <a
+        className="button button-secondary"
+        href={downloadUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        Download Batch
+      </a>
+
+      <button
+        className="button button-secondary"
+        type="button"
+        onClick={() => void postAction(batch.id, "submit")}
+        disabled={!canManage || busyId === batch.id}
+      >
+        Submit Batch
+      </button>
+
+      <button
+        className="button"
+        type="button"
+        onClick={() => void postAction(batch.id, "mark-submitted")}
+        disabled={!canManage || busyId === batch.id}
+      >
+        Mark Submitted
+      </button>
+    </div>
+  );
+}
 
   return (
     <div className="page-shell" style={{ display: "flex", flexDirection: "column", gap: 12 }}>

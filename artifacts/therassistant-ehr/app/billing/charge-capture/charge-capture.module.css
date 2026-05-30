@@ -632,3 +632,121 @@
 }
 .secondaryBtn:disabled { color: #CBD5E1; cursor: default; }
 .secondaryBtn:not(:disabled):hover { border-color: #94A3B8; color: #1E293B; }
+
+
+/* ─── Safety / responsive fixes ─────────────────────────────────────────── */
+.page,
+.page * {
+  box-sizing: border-box;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+.actionBtn:focus-visible,
+.filterBtn:focus-visible,
+.releaseBtn:focus-visible,
+.chip:focus-visible,
+.iconBtn:focus-visible,
+.smallBtn:focus-visible,
+.primaryBtn:focus-visible,
+.secondaryBtn:focus-visible,
+.leftItem:focus-visible {
+  outline: 2px solid #3B82F6;
+  outline-offset: 2px;
+}
+
+.leftPanel {
+  flex: 0 0 320px;
+}
+
+.rightPanel {
+  min-height: 0;
+}
+
+@media (max-width: 960px) {
+  .page {
+    height: auto;
+    min-height: calc(100dvh - 44px);
+    overflow: visible;
+  }
+
+  .header {
+    align-items: stretch;
+  }
+
+  .headerSpacer {
+    display: none;
+  }
+
+  .searchWrap,
+  .searchInput,
+  .filterRow,
+  .releaseBtn {
+    width: 100%;
+  }
+
+  .filterRow {
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .summaryStrip {
+    flex-wrap: wrap;
+  }
+
+  .summaryCard {
+    flex: 1 1 50%;
+  }
+
+  .splitBody {
+    flex-direction: column;
+    overflow: visible;
+  }
+
+  .leftPanel {
+    width: 100%;
+    flex: none;
+    max-height: 320px;
+    border-right: 0;
+    border-bottom: 1px solid #E2E8F0;
+  }
+
+  .rightPanel {
+    overflow: visible;
+    padding: 12px 12px 80px;
+  }
+
+  .dxGrid {
+    grid-template-columns: repeat(2, minmax(110px, 1fr));
+  }
+
+  .actionBar {
+    position: sticky;
+    bottom: 0;
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 520px) {
+  .summaryCard {
+    flex-basis: 100%;
+  }
+
+  .dxGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .patientBar,
+  .row,
+  .twoCol {
+    flex-direction: column;
+  }
+
+  .field {
+    width: 100%;
+  }
+}
