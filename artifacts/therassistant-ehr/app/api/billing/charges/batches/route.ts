@@ -397,50 +397,18 @@ export async function POST(request: Request) {
         .is("archived_at", null)
         .order("created_at", { ascending: true });
 
-    if (existingBatchError) throw existingBatchError;
-
-    const existingBatchRows = (existingAutoBatches ?? []) as DbRow[];
-    const existingBatchIds = existingBatchRows.map((b) => text(b.id)).filter(Boolean);
-
-    const { data: existingLinks, error: existingLinksError } =
-      existingBatchIds.length > 0
-        ? await supabase
-            .from("claim_837p_batch_claims")
-            .select("batch_id, professional_claim_id")
-            .eq("organization_id", organizationId)
-            .in("batch_id", existingBatchIds)
-            .is("archived_at", null)
-        : { data: [] as DbRow[], error: null };
-
-    if (existingLinksError) throw existingLinksError;
-
-    const existingClaimCountsByBatchId = new Map<string, number>();
-
-    for (const link of (existingLinks ?? []) as DbRow[]) {
-      const batchId = text(link.batch_id);
-
-      if (!batchId) continue;
-
-      existingClaimCountsByBatchId.set(
-        batchId,
-        (existingClaimCountsByBatchId.get(batchId) ?? 0) + 1,
-      );
-    }
-
-    const existingProcessable = existingBatchRows
-      .filter((b) => (existingClaimCountsByBatchId.get(text(b.id)) ?? 0) > 0)
-      .map((b) => ({
-        batchId: text(b.id),
-        batchNumber: text(b.batch_number) || text(b.id).slice(0, 8),
-        claimCount: existingClaimCountsByBatchId.get(text(b.id)) ?? 0,
-      }));
-
-    let totalReadyCountQuery = supabase
-      .from("professional_claims")
-      .select("id", { count: "exact", head: true })
-      .eq("organization_id", organizationId)
-      .eq("claim_status", "ready_for_batch")
-      .is("archived_at", null);
+   if (existingProcessable.length === 0 && unbatched.length === 0) {
+  return NextResponse.json({
+    success: true,
+    batchesCreated: 0,
+    selectionMode: explicitSelection ? "explicit" : "auto",
+    totalReadyClaims: totalReadyCount ?? 0,
+    scannedReadyClaims: allReady.length,
+    remainingReadyClaims,
+    batches: [],
+    message: "No claims are currently in ready_for_batch status. Release charges first.",
+  });
+}
 
     if (explicitSelection) {
       totalReadyCountQuery = totalReadyCountQuery.in("id", selectedClaimIds);
