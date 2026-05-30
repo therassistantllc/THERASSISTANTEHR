@@ -311,7 +311,6 @@ export async function POST(request: Request) {
     let existingBatchQuery = supabase
       .from("claim_837p_batches")
       .select("id, batch_number, batch_status, generated_file_name, batch_source")
-      .eq("organization_id", organizationId)
       .in("batch_status", ["draft", "ready_to_generate", "generation_failed", "generated"])
       .is("archived_at", null)
       .order("created_at", { ascending: true });
