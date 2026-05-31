@@ -13,6 +13,7 @@ type Props = {
   organizationId: string;
   onClose: () => void;
   onCreated: (clientId?: string) => void;
+  initialValues?: Partial<FormState>;
 };
 
 type CreateResponse = {
@@ -43,7 +44,7 @@ const EMPTY_FORM = {
 
 type FormState = typeof EMPTY_FORM;
 
-export default function AddClientDialog({ open, organizationId, onClose, onCreated }: Props) {
+export default function AddClientDialog({ open, organizationId, onClose, onCreated, initialValues }: Props) {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +60,15 @@ export default function AddClientDialog({ open, organizationId, onClose, onCreat
       setError(null);
     }
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    setForm({
+      ...EMPTY_FORM,
+      ...initialValues,
+    });
+    setError(null);
+  }, [open, initialValues]);
 
   useEffect(() => {
     if (!open) return;

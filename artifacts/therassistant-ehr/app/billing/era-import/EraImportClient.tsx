@@ -1069,7 +1069,7 @@ export default function EraImportClient() {
   );
 
   const addPatient = useCallback((b: BatchListItem) => {
-    const url = `/clients/new?prefill=era&eraBatchId=${encodeURIComponent(b.id)}`;
+    const url = `/clients?prefill=era&eraBatchId=${encodeURIComponent(b.id)}`;
     if (typeof window !== "undefined") {
       window.open(url, "_blank", "noopener,noreferrer");
     }

@@ -371,7 +371,7 @@ export default function EraQueueClient() {
                           disabled={b.counts.unmatched === 0}
                           onClick={() => {
                             window.open(
-                              `/clients/new?prefill=era&eraBatchId=${encodeURIComponent(b.id)}`,
+                              `/clients?prefill=era&eraBatchId=${encodeURIComponent(b.id)}`,
                               "_blank",
                               "noopener,noreferrer",
                             );

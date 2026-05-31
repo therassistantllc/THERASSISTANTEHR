@@ -9,6 +9,17 @@ import styles from "./roster.module.css";
 import ClientImportDialog from "./ClientImportDialog";
 import AddClientDialog from "./AddClientDialog";
 
+type AddClientPrefill = {
+  firstName?: string;
+  lastName?: string;
+  preferredName?: string;
+  dateOfBirth?: string;
+  phone?: string;
+  email?: string;
+  mrn?: string;
+  sourceClientId?: string;
+};
+
 type EligibilityState = {
   status: "none" | "active" | "inactive" | "pending" | "error" | "stale";
   checkedAt: string | null;
@@ -158,6 +169,7 @@ export default function PatientsRosterClient({
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  const [addPrefill, setAddPrefill] = useState<AddClientPrefill>({});
   const menuRef = useRef<HTMLDivElement | null>(null);
   const requestSeqRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
@@ -229,6 +241,24 @@ export default function PatientsRosterClient({
     return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("prefill") === "era") {
+      setAddPrefill({
+        firstName: params.get("firstName") ?? "",
+        lastName: params.get("lastName") ?? "",
+        preferredName: params.get("preferredName") ?? "",
+        dateOfBirth: params.get("dateOfBirth") ?? "",
+        phone: params.get("phone") ?? "",
+        email: params.get("email") ?? "",
+        mrn: params.get("mrn") ?? "",
+        sourceClientId: params.get("sourceClientId") ?? params.get("eraBatchId") ?? "",
+      });
+      setAddOpen(true);
+    }
+  }, []);
+
   const metrics: Metrics = payload?.metrics ?? {
     total: 0, active: 0, intakeIncomplete: 0, withBalance: 0,
     needsEligibility: 0, staleEligibility: 0, claimIssues: 0, openWorkqueue: 0,
@@ -298,6 +328,7 @@ export default function PatientsRosterClient({
         open={addOpen}
         organizationId={organizationId}
         onClose={() => setAddOpen(false)}
+        initialValues={addPrefill}
         onCreated={(newClientId) => {
           loadClients(query);
           if (newClientId) {

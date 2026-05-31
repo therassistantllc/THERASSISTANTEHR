@@ -159,6 +159,36 @@ function formatDate(iso: string | null | undefined): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
+function extractPatientNameFromRawSegments(rawSegments: string[] | undefined): {
+  firstName: string;
+  lastName: string;
+} | null {
+  if (!Array.isArray(rawSegments)) return null;
+  for (const segment of rawSegments) {
+    const parts = String(segment ?? "").split("*");
+    if (parts[0] !== "NM1" || parts[1] !== "QC") continue;
+    const lastName = String(parts[3] ?? "").trim();
+    const firstName = String(parts[4] ?? "").trim();
+    if (firstName || lastName) {
+      return { firstName, lastName };
+    }
+  }
+  return null;
+}
+
+function buildAddPatientUrl(batchId: string, row: ClaimPayment): string {
+  const params = new URLSearchParams({
+    prefill: "era",
+    eraBatchId: batchId,
+  });
+  const patientName = extractPatientNameFromRawSegments(row.rawSegments);
+  if (patientName?.firstName) params.set("firstName", patientName.firstName);
+  if (patientName?.lastName) params.set("lastName", patientName.lastName);
+  if (row.clp01ClaimControlNumber) params.set("sourceClientId", row.clp01ClaimControlNumber);
+  if (row.payerClaimControlNumber) params.set("mrn", row.payerClaimControlNumber);
+  return `/clients?${params.toString()}`;
+}
+
 interface EditedFields {
   paymentAmount?: number;
   patientResponsibility?: number;
@@ -757,7 +787,7 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                               className={styles.btn}
                               onClick={(ev) => {
                                 ev.stopPropagation();
-                                window.open(`/clients/new?prefill=era&eraBatchId=${encodeURIComponent(batchId)}`, "_blank");
+                                window.open(buildAddPatientUrl(batchId, row), "_blank", "noopener,noreferrer");
                               }}
                               title="Create a new patient record for this ERA claim"
                             >
@@ -770,7 +800,7 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                             className={styles.btn}
                             onClick={(ev) => {
                               ev.stopPropagation();
-                              window.open(`/clients/new?prefill=era&eraBatchId=${encodeURIComponent(batchId)}`, "_blank");
+                              window.open(buildAddPatientUrl(batchId, row), "_blank", "noopener,noreferrer");
                             }}
                             title="Create a new patient record for this ERA claim"
                           >
