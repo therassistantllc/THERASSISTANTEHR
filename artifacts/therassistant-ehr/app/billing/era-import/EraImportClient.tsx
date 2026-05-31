@@ -1068,6 +1068,13 @@ export default function EraImportClient() {
     [],
   );
 
+  const addPatient = useCallback((b: BatchListItem) => {
+    const url = `/clients/new?prefill=era&eraBatchId=${encodeURIComponent(b.id)}`;
+    if (typeof window !== "undefined") {
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+  }, []);
+
   // ── Row actions (spec: Import ERA, Review payments, Post payments, Mark duplicate, Export report)
   const rowActions: RowAction<BatchListItem>[] = useMemo(
     () => [
@@ -1081,6 +1088,12 @@ export default function EraImportClient() {
         id: "review",
         label: "Review payments",
         onClick: (b) => reviewPayments(b),
+      },
+      {
+        id: "add-patient",
+        label: "Add patient",
+        onClick: (b) => addPatient(b),
+        disabled: (b) => b.counts.unmatched === 0,
       },
       {
         id: "post",
@@ -1101,7 +1114,7 @@ export default function EraImportClient() {
         onClick: (b) => exportReport(b),
       },
     ],
-    [busyId, exportReport, importing, markDuplicate, postPayments, reviewPayments, triggerImport],
+    [addPatient, busyId, exportReport, importing, markDuplicate, postPayments, reviewPayments, triggerImport],
   );
 
   // ── Header actions
@@ -1373,6 +1386,12 @@ export default function EraImportClient() {
         onClick: () => reviewPayments(selectedRow),
       },
       {
+        id: "add-patient",
+        label: "Add patient",
+        onClick: () => addPatient(selectedRow),
+        disabled: selectedRow.counts.unmatched === 0,
+      },
+      {
         id: "post",
         label: "Post payments",
         variant: "primary",
@@ -1391,7 +1410,7 @@ export default function EraImportClient() {
         onClick: () => exportReport(selectedRow),
       },
     ];
-  }, [busyId, exportReport, importing, markDuplicate, postPayments, reviewPayments, selectedRow, triggerImport]);
+  }, [addPatient, busyId, exportReport, importing, markDuplicate, postPayments, reviewPayments, selectedRow, triggerImport]);
 
   const primaryTabs: PrimaryTab[] = TAB_DEFS.map((t) => ({
     id: t.id,

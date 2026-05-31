@@ -762,6 +762,18 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                             </button>
                           </>
                         ) : null}
+                        {row.claimMatchStatus === "matched" && !row.client ? (
+                          <button
+                            className={styles.btn}
+                            onClick={(ev) => {
+                              ev.stopPropagation();
+                              window.open(`/clients/new?prefill=era&eraClaimId=${row.id}`, "_blank");
+                            }}
+                            title="Create a new patient record for this ERA claim"
+                          >
+                            <Plus size={11} /> Add Patient
+                          </button>
+                        ) : null}
                         {!isPosted ? (
                           <button
                             className={`${styles.btn} ${styles.btnPrimary}`}
