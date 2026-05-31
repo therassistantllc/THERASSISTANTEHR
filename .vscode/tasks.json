@@ -1,0 +1,38 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "server:start",
+      "type": "shell",
+      "command": "pnpm",
+      "args": [
+        "--filter",
+        "@workspace/therassistant-ehr",
+        "run",
+        "dev"
+      ],
+      "isBackground": true,
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "server:stop",
+      "type": "shell",
+      "command": "sh",
+      "args": [
+        "-c",
+        "pids=$(lsof -tiTCP:8080 -sTCP:LISTEN 2>/dev/null); if [ -z \"$pids\" ]; then echo \"No process listening on port 8080\"; exit 0; fi; echo \"Stopping process(es): $pids\"; kill $pids"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": false
+      },
+      "problemMatcher": []
+    }
+  ]
+}

@@ -162,6 +162,11 @@ function normalizeParties(row: Row): ClaimPartiesSnapshot {
 
 function normalizeConnection(row: Row): AvailityConnection {
   const mode = row.mode === "production" ? "production" : "test";
+  const submitterContactPhone = (row.submitter_contact_phone as string | null | undefined) ?? null;
+  const submitterContactEmailRaw =
+    (row.submitter_contact_email as string | null | undefined)?.trim() ?? "";
+  const submitterContactEmail = submitterContactEmailRaw ||
+    (submitterContactPhone ? null : "admin@therassistant.com");
   return {
     id: asString(row.id),
     organization_id: asString(row.organization_id),
@@ -175,8 +180,8 @@ function normalizeConnection(row: Row): AvailityConnection {
     gs_receiver_code: asString(row.gs_receiver_code, "030240928"),
     x12_version: asString(row.x12_version, "005010X222A1"),
     isa_usage_indicator: mode === "production" ? "P" : "T",
-    submitter_contact_phone: (row.submitter_contact_phone as string | null | undefined) ?? null,
-    submitter_contact_email: (row.submitter_contact_email as string | null | undefined) ?? null,
+    submitter_contact_phone: submitterContactPhone,
+    submitter_contact_email: submitterContactEmail,
     is_active: asBoolean(row.is_active, true),
   };
 }
@@ -522,6 +527,18 @@ export async function rebuild837PBatchFile(args: {
   if (connErr) return { ok: false, batchId, error: connErr.message };
   if (!connectionRow) {
     return { ok: false, batchId, error: "Active Availity clearinghouse connection not found" };
+  }
+  const existingPhone = String((connectionRow as Row).submitter_contact_phone ?? "").replace(/\D/g, "");
+  const existingEmail = String((connectionRow as Row).submitter_contact_email ?? "").trim();
+  if (!existingPhone && !existingEmail) {
+    await (supabase as any)
+      .from("clearinghouse_connections")
+      .update({
+        submitter_contact_email: "admin@therassistant.com",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", asString((connectionRow as Row).id));
+    (connectionRow as Row).submitter_contact_email = "admin@therassistant.com";
   }
   const connection = normalizeConnection(connectionRow as Row);
 

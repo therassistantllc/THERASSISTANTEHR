@@ -1,4 +1,5 @@
 import type {
+  Availity837PValidationError,
   Availity837PValidationResult,
   AvailityConnection,
   ClaimPartiesSnapshot,
@@ -80,9 +81,25 @@ function makeFileName(timestamp: Date): string {
   return `THERASSISTANT_837P_${yyyyMMdd}_${hhmmss}.837`;
 }
 
+function dedupeValidationIssues(
+  issues: Availity837PValidationError[],
+): Availity837PValidationError[] {
+  const seen = new Set<string>();
+  const deduped: Availity837PValidationError[] = [];
+
+  for (const issue of issues) {
+    const key = `${issue.loop}|${issue.segment}|${issue.field}|${issue.message}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(issue);
+  }
+
+  return deduped;
+}
+
 function mergeValidation(results: Availity837PValidationResult[]): Availity837PValidationResult {
-  const errors = results.flatMap((r) => r.errors);
-  const warnings = results.flatMap((r) => r.warnings);
+  const errors = dedupeValidationIssues(results.flatMap((r) => r.errors));
+  const warnings = dedupeValidationIssues(results.flatMap((r) => r.warnings));
   return { isValid: errors.length === 0, errors, warnings };
 }
 

@@ -85,6 +85,14 @@ export async function POST(req: NextRequest) {
   // never persisted to encrypted_credentials and never echoed back to the client.
   const { sftp_password, api_key, ...rest } = body;
   const encryptedCredentials = sftp_password ? { sftp_password } : null;
+  const submitterContactPhone = rest.submitter_contact_phone
+    ? String(rest.submitter_contact_phone).replace(/\D/g, "").slice(0, 20) || null
+    : null;
+  const submitterContactEmailInput = rest.submitter_contact_email
+    ? String(rest.submitter_contact_email).trim().slice(0, 80) || null
+    : null;
+  const submitterContactEmail = submitterContactEmailInput ||
+    (submitterContactPhone ? null : "admin@therassistant.com");
 
   const { data, error } = await supabase
     .from("clearinghouse_connections")
@@ -109,14 +117,10 @@ export async function POST(req: NextRequest) {
       outbound_folder: rest.outbound_folder ? String(rest.outbound_folder) : null,
       api_base_url: rest.api_base_url ? String(rest.api_base_url) : null,
       auth_type: rest.auth_type ? String(rest.auth_type) : null,
-      // Loop 1000A PER (Submitter EDI Contact Information) — TR3 005010X222A1
-      // requires at least one of TE/EM/FX. Phone is stored digits-only.
-      submitter_contact_phone: rest.submitter_contact_phone
-        ? String(rest.submitter_contact_phone).replace(/\D/g, "").slice(0, 20) || null
-        : null,
-      submitter_contact_email: rest.submitter_contact_email
-        ? String(rest.submitter_contact_email).trim().slice(0, 80) || null
-        : null,
+      // Loop 1000A PER requires at least one contact method. Default to
+      // system submitter email when both phone/email are omitted.
+      submitter_contact_phone: submitterContactPhone,
+      submitter_contact_email: submitterContactEmail,
       eligibility_service_type_code: String(rest.eligibility_service_type_code ?? "98"),
       eligibility_transaction_set: String(rest.eligibility_transaction_set ?? "270"),
       is_active: Boolean(rest.is_active ?? true),
@@ -201,6 +205,25 @@ export async function PATCH(req: NextRequest) {
     const raw = updates.submitter_contact_email;
     const trimmed = typeof raw === "string" ? raw.trim().slice(0, 80) : "";
     updates.submitter_contact_email = trimmed || null;
+  }
+
+  // Ensure PATCH writes keep at least one contact channel by defaulting the
+  // submitter email when callers clear both values.
+  const patchedPhone =
+    "submitter_contact_phone" in updates
+      ? ((updates.submitter_contact_phone as string | null | undefined) ?? null)
+      : undefined;
+  const patchedEmail =
+    "submitter_contact_email" in updates
+      ? ((updates.submitter_contact_email as string | null | undefined) ?? null)
+      : undefined;
+  if (
+    patchedPhone !== undefined &&
+    patchedEmail !== undefined &&
+    !patchedPhone &&
+    !patchedEmail
+  ) {
+    updates.submitter_contact_email = "admin@therassistant.com";
   }
 
   // Handle SFTP password update: store in encrypted_credentials (legacy path).
