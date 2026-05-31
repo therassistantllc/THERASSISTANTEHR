@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { buildTextReportPdf } from "@/lib/pdf/textReportPdf";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireOrgAccess } from "@/lib/auth/requireOrgAccess";
 
@@ -47,6 +48,45 @@ function parseCodes(value: unknown): string[] {
   );
 }
 
+function cleanText(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function reportTextFromPayload(report: Record<string, unknown>): string {
+  const direct = cleanText(report.reportText);
+  if (direct.length) return direct;
+
+  const sections = Array.isArray(report.detailedSections)
+    ? report.detailedSections as Array<Record<string, unknown>>
+    : [];
+
+  if (sections.length) {
+    return sections.map((section) => [
+      `CODE: ${cleanText(section.code) || "Not specified"}`,
+      `DESCRIPTION: ${cleanText(section.description) || "Not specified"}`,
+      `REIMBURSEMENT RANGE: ${cleanText(section.reimbursementRange) || "Verify payer schedule"}`,
+      `WHY THE CODE IS SUPPORTED: ${cleanText(section.whyCodeSupported) || "Not specified"}`,
+      `LEGAL CITATIONS: ${cleanText(section.legalCitations) || "Not specified"}`,
+      `MEDICAL NECESSITY STANDARD: ${cleanText(section.medicalNecessityStandard) || "Not specified"}`,
+      `REQUIRED DOCUMENTATION: ${cleanText(section.requiredDocumentation) || "Not specified"}`,
+      `SUGGESTED DOCUMENTATION LANGUAGE: ${cleanText(section.suggestedDocumentationLanguage) || "Not specified"}`,
+      `COMMON DEFICIENCIES: ${cleanText(section.commonDeficiencies) || "Not specified"}`,
+    ].join("\n")).join("\n\n");
+  }
+
+  return [
+    `CODE: ${cleanText(report.codes) || "Not specified"}`,
+    `DESCRIPTION: ${cleanText(report.codingRationale) || "Not specified"}`,
+    "REIMBURSEMENT RANGE: Verify payer-specific reimbursement schedule.",
+    `WHY THE CODE IS SUPPORTED: ${cleanText(report.auditSummary) || "Not specified"}`,
+    "LEGAL CITATIONS: HCPCS Level II code set (CMS annual release); payer policy.",
+    "MEDICAL NECESSITY STANDARD: Documentation must support service level and necessity.",
+    "REQUIRED DOCUMENTATION: Clinical findings, rationale, and payer-required fields.",
+    "SUGGESTED DOCUMENTATION LANGUAGE: Include explicit clinical rationale linked to selected code.",
+    "COMMON DEFICIENCIES: Missing rationale; no linkage between findings and billed service.",
+  ].join("\n");
+}
+
 export async function POST(request: Request, context: { params: Promise<{ encounterId: string }> }) {
   try {
     const supabase = createServerSupabaseAdminClient();
@@ -88,23 +128,17 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
     const nowIso = now.toISOString();
     const dateToken = now.toISOString().slice(0, 10);
     const reportToken = safeToken(typeof report.id === "string" ? report.id : "coding-report");
-    const fileName = `coding-report-${dateToken}-${reportToken || "report"}.json`;
+    const fileName = `coding-report-${dateToken}-${reportToken || "report"}.pdf`;
     const storagePath = `encounters/${encounterId}/coding-reports/${Date.now()}-${fileName}`;
 
-    const serialized = JSON.stringify(
-      {
-        savedAt: nowIso,
-        encounterId,
-        organizationId,
-        report,
-      },
-      null,
-      2,
-    );
+    const reportText = reportTextFromPayload(report);
+    const pdfBytes = await buildTextReportPdf({
+      title: "Coding Report",
+      subtitle: `Encounter ${encounterId}`,
+      generatedAtIso: nowIso,
+      lines: reportText.split("\n"),
+    });
 
-    const reportId = typeof report.id === "string" && report.id.trim().length > 0
-      ? report.id.trim()
-      : `coding-report-${Date.now()}`;
     const suggestedCodes = parseCodes(report.suggestedCodes).length
       ? parseCodes(report.suggestedCodes)
       : parseCodes(report.codes);
@@ -158,8 +192,8 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
 
     const { error: uploadError } = await supabase.storage
       .from("mailroom-documents")
-      .upload(storagePath, serialized, {
-        contentType: "application/json",
+      .upload(storagePath, pdfBytes, {
+        contentType: "application/pdf",
         upsert: false,
       });
 
@@ -170,7 +204,7 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
     const title = `Coding Report ${dateToken}`;
     const summary = auditSummary ? auditSummary.slice(0, 1500) : null;
 
-    const fileSizeBytes = new TextEncoder().encode(serialized).length;
+    const fileSizeBytes = pdfBytes.length;
 
     const { data: inserted, error: insertError } = await supabase
       .from("documents")
@@ -182,7 +216,7 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
         document_type: "coding_report",
         title,
         file_name: fileName,
-        mime_type: "application/json",
+        mime_type: "application/pdf",
         storage_bucket: "mailroom-documents",
         storage_path: storagePath,
         file_size_bytes: fileSizeBytes,

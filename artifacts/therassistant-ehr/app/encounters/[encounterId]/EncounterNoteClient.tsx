@@ -10,6 +10,8 @@ import ClaimReadinessSidebar, { ClaimReadinessCheck } from "@/components/encount
 import SignNoteModal from "@/components/encounter/SignNoteModal";
 import ClinicianJournalPanel, { ImportResult } from "@/components/encounter/ClinicianJournalPanel";
 import CodingHelperPanel, { CodingHelperReport } from "@/components/encounter/CodingHelperPanel";
+import { buildCodingReport } from "@/components/encounter/coding-helper/buildCodingReport";
+import { scoreCodingQuestionnaire } from "@/components/encounter/coding-helper/scoring";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 import { analyzeMedicaidDocumentation } from "@/lib/encounters/medicaidCodeDetection";
 import {
@@ -504,6 +506,13 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
     setError(null);
     setMessage(null);
     try {
+      const codingReport = buildCodingReport({
+        encounterId,
+        answers: {},
+        questionnaireScore: scoreCodingQuestionnaire({}),
+        noteAnalysis: medicaidSuggestions ?? analyzeMedicaidDocumentation(medicaidDocumentationText),
+      });
+
       const response = await fetch(`/api/encounters/${encounterId}/note`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -515,12 +524,17 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
           assessment: soapNote.assessment || "",
           plan: soapNote.plan || "",
           userId: null,
+          codingReport,
         }),
       });
       const json = (await response.json()) as { success?: boolean; error?: string };
       if (!response.ok || !json.success) throw new Error(json.error ?? "Failed to sign note");
       setShowSignModal(false);
-      router.push(`/billing/charges?organizationId=${encodeURIComponent(organizationId)}`);
+      if (client?.id) {
+        router.push(`/clients/${client.id}/documents?organizationId=${encodeURIComponent(organizationId)}`);
+      } else {
+        router.push(`/billing/charges?organizationId=${encodeURIComponent(organizationId)}`);
+      }
     } catch (signError) {
       setError(signError instanceof Error ? signError.message : "Failed to sign note");
     } finally {

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { captureSignedEncounterCharge } from "@/lib/charges/signedEncounterChargeCaptureService";
 import { createClaimDraftFromChargeCapture } from "@/lib/claims/chargeCaptureClaimBridgeService";
+import { buildTextReportPdf } from "@/lib/pdf/textReportPdf";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 
 type EncounterRow = {
@@ -12,6 +13,52 @@ type EncounterRow = {
 
 function cleanText(value: unknown) {
   return typeof value === "string" ? value : "";
+}
+
+function safeToken(value: string | null | undefined): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+}
+
+function codingReportTextFromBody(body: Record<string, unknown>): string {
+  const report = body.codingReport as Record<string, unknown> | undefined;
+  if (!report || typeof report !== "object") return "";
+
+  const reportText = cleanText(report.reportText);
+  if (reportText.length) return reportText;
+
+  const sections = Array.isArray(report.detailedSections)
+    ? report.detailedSections as Array<Record<string, unknown>>
+    : [];
+
+  if (!sections.length) {
+    const codes = cleanText(report.codes);
+    const rationale = cleanText(report.codingRationale);
+    const summary = cleanText(report.auditSummary);
+    return [
+      codes ? `CODE: ${codes}` : "",
+      summary ? `WHY THE CODE IS SUPPORTED: ${summary}` : "",
+      rationale ? `SUGGESTED DOCUMENTATION LANGUAGE: ${rationale}` : "",
+    ].filter(Boolean).join("\n");
+  }
+
+  return sections.map((section) => {
+    return [
+      `CODE: ${cleanText(section.code) || "Not specified"}`,
+      `DESCRIPTION: ${cleanText(section.description) || "Not specified"}`,
+      `REIMBURSEMENT RANGE: ${cleanText(section.reimbursementRange) || "Verify payer schedule"}`,
+      `WHY THE CODE IS SUPPORTED: ${cleanText(section.whyCodeSupported) || "Not specified"}`,
+      `LEGAL CITATIONS: ${cleanText(section.legalCitations) || "Not specified"}`,
+      `MEDICAL NECESSITY STANDARD: ${cleanText(section.medicalNecessityStandard) || "Not specified"}`,
+      `REQUIRED DOCUMENTATION: ${cleanText(section.requiredDocumentation) || "Not specified"}`,
+      `SUGGESTED DOCUMENTATION LANGUAGE: ${cleanText(section.suggestedDocumentationLanguage) || "Not specified"}`,
+      `COMMON DEFICIENCIES: ${cleanText(section.commonDeficiencies) || "Not specified"}`,
+    ].join("\n");
+  }).join("\n\n");
 }
 
 async function loadEncounter(organizationId: string, encounterId: string) {
@@ -160,6 +207,7 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
 
     let chargeCapture = null;
     let claimDraft = null;
+    let createdDocuments: Array<{ id: string; type: string; title: string }> = [];
     if (action === "sign") {
       const { error: encounterUpdateError } = await supabase
         .from("encounters")
@@ -180,6 +228,119 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
           chargeCaptureId: chargeCapture.chargeId,
         });
       }
+
+      const signedAt = notePayload.signed_at ?? now;
+      const dateToken = signedAt.slice(0, 10);
+      const timestamp = Date.now();
+
+      const clinicalLines = [
+        `Encounter ID: ${encounterId}`,
+        `Note status: signed`,
+        `Signed at: ${signedAt}`,
+        "",
+        "SUBJECTIVE:",
+        notePayload.subjective || "Not documented",
+        "",
+        "OBJECTIVE:",
+        notePayload.objective || "Not documented",
+        "",
+        "ASSESSMENT:",
+        notePayload.assessment || "Not documented",
+        "",
+        "PLAN:",
+        notePayload.plan || "Not documented",
+      ];
+
+      const clinicalPdfBytes = await buildTextReportPdf({
+        title: "Clinical Note",
+        subtitle: `Encounter ${encounterId}`,
+        generatedAtIso: signedAt,
+        lines: clinicalLines,
+      });
+
+      const reportText = codingReportTextFromBody(body);
+      const codingPdfBytes = await buildTextReportPdf({
+        title: "Coding Report",
+        subtitle: `Encounter ${encounterId}`,
+        generatedAtIso: signedAt,
+        lines: reportText.length
+          ? reportText.split("\n")
+          : [
+              "CODE: None generated",
+              "DESCRIPTION: Coding helper report was not provided at sign time.",
+              "REIMBURSEMENT RANGE: Verify payer-specific fee schedule.",
+              "WHY THE CODE IS SUPPORTED: Not enough coding helper evidence was supplied.",
+              "LEGAL CITATIONS: HCPCS Level II code set (CMS annual release); payer policy.",
+              "MEDICAL NECESSITY STANDARD: Documentation must support service level and necessity.",
+              "REQUIRED DOCUMENTATION: Service details, rationale, and payer-required elements.",
+              "SUGGESTED DOCUMENTATION LANGUAGE: Add coding helper output before submission when possible.",
+              "COMMON DEFICIENCIES: Missing coding helper output; insufficient code-specific rationale.",
+            ],
+      });
+
+      const uploaderId = userId;
+      const storageBase = `encounters/${encounterId}/signed-documents`;
+      const uploads = [
+        {
+          type: "clinical_note",
+          title: `Clinical Note ${dateToken}`,
+          fileName: `clinical-note-${dateToken}-${safeToken(noteId || encounterId || "note") || "note"}.pdf`,
+          bytes: clinicalPdfBytes,
+          notes: "Signed encounter clinical note PDF.",
+        },
+        {
+          type: "coding_report",
+          title: `Coding Report ${dateToken}`,
+          fileName: `coding-report-${dateToken}-${safeToken(noteId || encounterId || "report") || "report"}.pdf`,
+          bytes: codingPdfBytes,
+          notes: "Signed encounter coding report PDF.",
+        },
+      ];
+
+      for (const upload of uploads) {
+        const storagePath = `${storageBase}/${timestamp}-${upload.fileName}`;
+        const { error: uploadError } = await supabase.storage
+          .from("mailroom-documents")
+          .upload(storagePath, upload.bytes, {
+            contentType: "application/pdf",
+            upsert: false,
+          });
+
+        if (uploadError) {
+          throw new Error(`Failed to store ${upload.type} PDF: ${uploadError.message}`);
+        }
+
+        const { data: insertedDoc, error: docInsertError } = await supabase
+          .from("documents")
+          .insert({
+            organization_id: organizationId,
+            encounter_id: encounterId,
+            client_id: encounter.client_id,
+            document_scope: "encounter",
+            document_type: upload.type,
+            title: upload.title,
+            file_name: upload.fileName,
+            mime_type: "application/pdf",
+            storage_bucket: "mailroom-documents",
+            storage_path: storagePath,
+            file_size_bytes: upload.bytes.length,
+            notes: upload.notes,
+            filed_at: signedAt,
+            uploaded_by_user_id: uploaderId,
+          })
+          .select("id, title, document_type")
+          .single();
+
+        if (docInsertError || !insertedDoc) {
+          throw docInsertError ?? new Error(`Failed to create ${upload.type} document record`);
+        }
+
+        createdDocuments.push({
+          id: String(insertedDoc.id),
+          type: String(insertedDoc.document_type ?? upload.type),
+          title: String(insertedDoc.title ?? upload.title),
+        });
+      }
     } else if (action === "save") {
       await supabase
         .from("encounters")
@@ -197,7 +358,15 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
         .eq("id", encounterId);
     }
 
-    return NextResponse.json({ success: true, noteId, encounterId, status: noteStatus, chargeCapture, claimDraft });
+    return NextResponse.json({
+      success: true,
+      noteId,
+      encounterId,
+      status: noteStatus,
+      chargeCapture,
+      claimDraft,
+      createdDocuments,
+    });
   } catch (error) {
     console.error("Encounter note API error:", error);
     return NextResponse.json(
