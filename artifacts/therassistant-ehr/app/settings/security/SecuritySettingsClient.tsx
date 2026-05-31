@@ -67,7 +67,7 @@ type Pagination = {
   hasMore: boolean;
 };
 
-type Tab = "password" | "audit";
+type Tab = "roles" | "password" | "audit";
 
 const PAGE_SIZE = 50;
 
@@ -105,7 +105,7 @@ function formatAuditValue(value: unknown): string {
 }
 
 export default function SecuritySettingsClient() {
-  const [tab, setTab] = useState<Tab>("password");
+  const [tab, setTab] = useState<Tab>("roles");
 
   return (
     <main className="app-shell">
@@ -135,6 +135,7 @@ export default function SecuritySettingsClient() {
         >
           {(
             [
+              { id: "roles", label: "Users & Roles" },
               { id: "password", label: "Password Reset" },
               { id: "audit", label: "Audit Log" },
             ] as Array<{ id: Tab; label: string }>
@@ -163,6 +164,7 @@ export default function SecuritySettingsClient() {
           })}
         </div>
         <div style={{ padding: "1.25rem" }}>
+          {tab === "roles" ? <RolesPanel /> : null}
           {tab === "password" ? <PasswordResetPanel /> : null}
           {tab === "audit" ? <AuditLogPanel /> : null}
         </div>
