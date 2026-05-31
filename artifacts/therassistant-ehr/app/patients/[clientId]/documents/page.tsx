@@ -44,6 +44,7 @@ export default function DocumentsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
 
   async function togglePatientVisible(docId: string, next: boolean) {
     setSavingId(docId);
@@ -79,7 +80,12 @@ export default function DocumentsPage() {
         const json = await r.json() as { success: boolean; documents?: DocItem[]; error?: string };
         if (cancelled) return;
         if (!json.success) throw new Error(json.error ?? "Failed");
-        setDocuments(json.documents ?? []);
+        const nextDocs = json.documents ?? [];
+        setDocuments(nextDocs);
+        setSelectedDocumentId((prev) => {
+          if (prev && nextDocs.some((doc) => doc.id === prev)) return prev;
+          return nextDocs[0]?.id ?? null;
+        });
       } catch (e: unknown) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load");
       } finally {
@@ -91,6 +97,13 @@ export default function DocumentsPage() {
   }, [clientId, orgId]);
 
   const orgQ = orgId ? `?organizationId=${encodeURIComponent(orgId)}` : "";
+  const selectedDocument = documents.find((doc) => doc.id === selectedDocumentId) ?? null;
+  const selectedDocumentUrl = selectedDocument
+    ? `/api/patients/${clientId}/documents/${selectedDocument.id}?organizationId=${encodeURIComponent(orgId)}`
+    : "";
+  const selectedMime = String(selectedDocument?.mimeType ?? "").toLowerCase();
+  const isPdf = selectedMime.includes("pdf") || String(selectedDocument?.fileName ?? "").toLowerCase().endsWith(".pdf");
+  const isImage = selectedMime.startsWith("image/");
 
   return (
     <main className="app-shell">
@@ -116,59 +129,142 @@ export default function DocumentsPage() {
       )}
 
       {documents.length > 0 && (
-        <section className="panel">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>File / Title</th>
-                <th>Type</th>
-                <th>Scope</th>
-                <th>Size</th>
-                <th>Filed</th>
-                <th>Created</th>
-                <th>Client portal</th>
-                <th>Links</th>
-              </tr>
-            </thead>
-            <tbody>
-              {documents.map((doc) => (
-                <tr key={doc.id}>
-                  <td>
-                    <div>
-                      <strong>{doc.title ?? doc.fileName ?? "Untitled"}</strong>
-                      {doc.fileName && doc.title && <div className="muted" style={{ fontSize: "12px" }}>{doc.fileName}</div>}
-                    </div>
-                  </td>
-                  <td>{doc.type ?? "—"}</td>
-                  <td>{doc.scope ?? "—"}</td>
-                  <td>{formatSize(doc.fileSizeBytes)}</td>
-                  <td>{doc.filedAt ? formatDate(doc.filedAt) : <span className="muted">Not filed</span>}</td>
-                  <td>{formatDate(doc.createdAt)}</td>
-                  <td>
-                    <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13 }}>
-                      <input
-                        type="checkbox"
-                        checked={doc.patientVisible}
-                        disabled={savingId === doc.id}
-                        onChange={(e) => togglePatientVisible(doc.id, e.target.checked)}
-                      />
-                      {doc.patientVisible ? "Visible" : "Hidden"}
-                    </label>
-                  </td>
-                  <td>
-                    <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
-                      {doc.encounterId && (
-                        <Link className="inline-link" href={`/encounters/${doc.encounterId}${orgQ}`}>Encounter</Link>
-                      )}
-                      {doc.mailroomItemId && (
-                        <Link className="inline-link" href={`/mailroom/${doc.mailroomItemId}${orgQ}`}>Mailroom</Link>
-                      )}
-                    </div>
-                  </td>
+        <section
+          className="panel"
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
+            gap: 16,
+            alignItems: "start",
+          }}
+        >
+          <div>
+            <h3 style={{ marginTop: 0 }}>Documents</h3>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th aria-label="Select" />
+                  <th>File / Title</th>
+                  <th>Type</th>
+                  <th>Filed</th>
+                  <th>Client portal</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {documents.map((doc) => {
+                  const selected = doc.id === selectedDocumentId;
+                  return (
+                    <tr
+                      key={doc.id}
+                      onClick={() => setSelectedDocumentId(doc.id)}
+                      style={{
+                        cursor: "pointer",
+                        background: selected ? "rgba(29, 78, 216, 0.08)" : undefined,
+                      }}
+                    >
+                      <td>
+                        <input
+                          type="radio"
+                          name="selectedDocument"
+                          checked={selected}
+                          onChange={() => setSelectedDocumentId(doc.id)}
+                          aria-label={`Select ${doc.title ?? doc.fileName ?? "document"}`}
+                        />
+                      </td>
+                      <td>
+                        <div>
+                          <strong>{doc.title ?? doc.fileName ?? "Untitled"}</strong>
+                          {doc.fileName && doc.title ? (
+                            <div className="muted" style={{ fontSize: "12px" }}>{doc.fileName}</div>
+                          ) : null}
+                        </div>
+                      </td>
+                      <td>{doc.type ?? "—"}</td>
+                      <td>{doc.filedAt ? formatDate(doc.filedAt) : <span className="muted">Not filed</span>}</td>
+                      <td>
+                        <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+                          <input
+                            type="checkbox"
+                            checked={doc.patientVisible}
+                            disabled={savingId === doc.id}
+                            onChange={(e) => togglePatientVisible(doc.id, e.target.checked)}
+                            onClick={(event) => event.stopPropagation()}
+                          />
+                          {doc.patientVisible ? "Visible" : "Hidden"}
+                        </label>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div>
+            <h3 style={{ marginTop: 0 }}>Document Preview</h3>
+            {!selectedDocument ? (
+              <p className="muted" style={{ marginTop: 0 }}>
+                Select a document to preview.
+              </p>
+            ) : (
+              <div style={{ display: "grid", gap: 10 }}>
+                <div className="detail-list">
+                  <p><strong>Title:</strong> {selectedDocument.title ?? selectedDocument.fileName ?? "Untitled"}</p>
+                  <p><strong>Type:</strong> {selectedDocument.type ?? "—"}</p>
+                  <p><strong>Scope:</strong> {selectedDocument.scope ?? "—"}</p>
+                  <p><strong>Size:</strong> {formatSize(selectedDocument.fileSizeBytes)}</p>
+                  <p><strong>Created:</strong> {formatDate(selectedDocument.createdAt)}</p>
+                </div>
+
+                {(isPdf || isImage) ? (
+                  <div
+                    style={{
+                      border: "1px solid var(--border-color, #CBD5E1)",
+                      borderRadius: 8,
+                      minHeight: 520,
+                      overflow: "hidden",
+                      background: "#fff",
+                    }}
+                  >
+                    {isPdf ? (
+                      <iframe
+                        title="Document preview"
+                        src={selectedDocumentUrl}
+                        style={{ width: "100%", height: 520, border: 0 }}
+                      />
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={selectedDocumentUrl}
+                        alt={selectedDocument.title ?? selectedDocument.fileName ?? "Document preview"}
+                        style={{ width: "100%", height: 520, objectFit: "contain", background: "#f8fafc" }}
+                      />
+                    )}
+                  </div>
+                ) : (
+                  <div className="empty-state" style={{ margin: 0 }}>
+                    Preview is not available for this file type.
+                  </div>
+                )}
+
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <a className="button button-secondary" href={selectedDocumentUrl} target="_blank" rel="noreferrer">
+                    Open File
+                  </a>
+                  {selectedDocument.encounterId ? (
+                    <Link className="button button-secondary" href={`/encounters/${selectedDocument.encounterId}${orgQ}`}>
+                      Open Encounter
+                    </Link>
+                  ) : null}
+                  {selectedDocument.mailroomItemId ? (
+                    <Link className="button button-secondary" href={`/mailroom/${selectedDocument.mailroomItemId}${orgQ}`}>
+                      Open Mailroom Item
+                    </Link>
+                  ) : null}
+                </div>
+              </div>
+            )}
+          </div>
         </section>
       )}
     </main>

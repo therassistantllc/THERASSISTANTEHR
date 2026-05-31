@@ -6,6 +6,12 @@ import {
   clearPortalSessionCookie,
   getPortalSession,
 } from "@/lib/portal/session";
+import {
+  applyPortalTemplate,
+  normalizePortalSettings,
+  type PortalSettings,
+  PORTAL_SETTINGS_KEY,
+} from "@/lib/portal/portalSettings";
 import { startInvoiceCheckout } from "@/lib/portal/invoiceCheckout";
 
 async function resolveAppBaseUrl(): Promise<string> {
@@ -53,6 +59,7 @@ function formatDate(iso: string | null): string {
 type PortalData = {
   patientName: string;
   practiceName: string;
+  portalSettings: PortalSettings;
   appointments: Array<{
     id: string;
     startsAt: string | null;
@@ -102,7 +109,7 @@ async function loadPortalData(
 
   const nowIso = new Date().toISOString();
 
-  const [clientRes, orgRes, apptsRes, invoicesRes, docsRes] = await Promise.all([
+  const [clientRes, orgRes, apptsRes, invoicesRes, docsRes, portalSettingsRes] = await Promise.all([
     supabase
       .from("clients")
       .select("first_name, last_name, preferred_name")
@@ -140,6 +147,12 @@ async function loadPortalData(
       .is("archived_at", null)
       .order("created_at", { ascending: false })
       .limit(20),
+    supabase
+      .from("system_settings")
+      .select("setting_value")
+      .eq("organization_id", organizationId)
+      .eq("setting_key", PORTAL_SETTINGS_KEY)
+      .maybeSingle(),
   ]);
 
   const client = (clientRes.data ?? {}) as Row;
@@ -147,6 +160,7 @@ async function loadPortalData(
     value((orgRes.data as Row | null)?.name) || "Your care team";
   const patientName =
     value(client.preferred_name) || value(client.first_name) || "there";
+  const portalSettings = normalizePortalSettings(portalSettingsRes.data?.setting_value);
 
   const apptRows = (apptsRes.data ?? []) as Row[];
   const providerIds = Array.from(
@@ -245,6 +259,7 @@ async function loadPortalData(
   return {
     patientName,
     practiceName,
+    portalSettings,
     appointments,
     balance: { total, invoices },
     documents,
@@ -318,14 +333,25 @@ export default async function PatientPortalHomePage() {
     );
   }
 
-  const { patientName, practiceName, appointments, balance, documents } = data;
+  const { patientName, practiceName, appointments, balance, documents, portalSettings } = data;
+  const portalDisplayName = portalSettings.portalDisplayName || practiceName;
+  const welcomeHeading =
+    applyPortalTemplate(portalSettings.welcomeHeadingTemplate, { patientName, practiceName }) || `Hi, ${patientName}`;
+  const welcomeMessage =
+    applyPortalTemplate(portalSettings.welcomeMessage, { patientName, practiceName }) ||
+    "Welcome to your portal.";
+  const supportMessage =
+    applyPortalTemplate(portalSettings.supportMessage, { patientName, practiceName }) ||
+    `Only documents your care team has shared appear here. To request another document, please contact ${practiceName}.`;
+  const accentColor = portalSettings.accentColor;
 
   return (
     <main className="portal-shell">
       <header className="portal-header">
         <div>
-          <div className="eyebrow">{practiceName}</div>
-          <h1>Hi, {patientName}</h1>
+          <div className="eyebrow" style={{ color: accentColor }}>{portalDisplayName}</div>
+          <h1>{welcomeHeading}</h1>
+          <p className="muted" style={{ margin: "6px 0 0" }}>{welcomeMessage}</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <Link href="/portal/journal" className="button button-secondary">
@@ -542,8 +568,7 @@ export default async function PatientPortalHomePage() {
           ))
         )}
         <p className="muted" style={{ fontSize: 13, marginTop: 12, marginBottom: 0 }}>
-          Only documents your care team has shared appear here. To request another document,
-          please contact {practiceName}.
+          {supportMessage}
         </p>
       </section>
     </main>

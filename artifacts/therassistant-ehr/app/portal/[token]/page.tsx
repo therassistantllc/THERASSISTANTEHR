@@ -1,4 +1,10 @@
 import { redirect } from "next/navigation";
+import {
+  applyPortalTemplate,
+  normalizePortalSettings,
+  type PortalSettings,
+  PORTAL_SETTINGS_KEY,
+} from "@/lib/portal/portalSettings";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { getPortalSession, setPortalSessionCookie } from "@/lib/portal/session";
 
@@ -19,13 +25,20 @@ type LoadResult = {
   } | null;
   client: Row | null;
   practice: string;
+  portalSettings: PortalSettings;
   error: string | null;
 };
 
 async function loadInvite(token: string): Promise<LoadResult> {
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) {
-    return { invite: null, client: null, practice: "Your care team", error: "Database unavailable" };
+    return {
+      invite: null,
+      client: null,
+      practice: "Your care team",
+      portalSettings: normalizePortalSettings(null),
+      error: "Database unavailable",
+    };
   }
 
   const { data: inviteRow, error: inviteErr } = await supabase
@@ -34,11 +47,17 @@ async function loadInvite(token: string): Promise<LoadResult> {
     .eq("token", token)
     .maybeSingle();
   if (inviteErr || !inviteRow) {
-    return { invite: null, client: null, practice: "Your care team", error: "Invite not found" };
+    return {
+      invite: null,
+      client: null,
+      practice: "Your care team",
+      portalSettings: normalizePortalSettings(null),
+      error: "Invite not found",
+    };
   }
 
   const invite = inviteRow as Row;
-  const [{ data: clientRow }, { data: orgRow }] = await Promise.all([
+  const [{ data: clientRow }, { data: orgRow }, { data: portalSettingsRow }] = await Promise.all([
     supabase
       .from("clients")
       .select("first_name, last_name, preferred_name")
@@ -48,6 +67,12 @@ async function loadInvite(token: string): Promise<LoadResult> {
       .from("organizations")
       .select("name")
       .eq("id", value(invite.organization_id))
+      .maybeSingle(),
+    supabase
+      .from("system_settings")
+      .select("setting_value")
+      .eq("organization_id", value(invite.organization_id))
+      .eq("setting_key", PORTAL_SETTINGS_KEY)
       .maybeSingle(),
   ]);
 
@@ -62,6 +87,7 @@ async function loadInvite(token: string): Promise<LoadResult> {
     },
     client: clientRow as Row | null,
     practice: value((orgRow as Row | null)?.name) || "Your care team",
+    portalSettings: normalizePortalSettings(portalSettingsRow?.setting_value),
     error: null,
   };
 }
@@ -105,7 +131,8 @@ export default async function PatientPortalInvitePage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  const { invite, client, practice, error } = await loadInvite(token);
+  const { invite, client, practice, portalSettings, error } = await loadInvite(token);
+  const portalDisplayName = portalSettings.portalDisplayName || practice;
 
   if (error || !invite) {
     return (
@@ -120,9 +147,9 @@ export default async function PatientPortalInvitePage({
   if (invite.status === "revoked") {
     return (
       <NoticeShell
-        practice={practice}
+        practice={portalDisplayName}
         title="Invite revoked"
-        body={`This portal invite has been revoked. Please contact ${practice} for a new invite.`}
+        body={`This portal invite has been revoked. Please contact ${portalDisplayName} for a new invite.`}
       />
     );
   }
@@ -130,9 +157,9 @@ export default async function PatientPortalInvitePage({
   if (isExpired(invite.expiresAt) || invite.status === "expired") {
     return (
       <NoticeShell
-        practice={practice}
+        practice={portalDisplayName}
         title="Invite expired"
-        body={`This portal invite has expired. Please contact ${practice} to request a fresh invitation.`}
+        body={`This portal invite has expired. Please contact ${portalDisplayName} to request a fresh invitation.`}
       />
     );
   }
@@ -199,19 +226,30 @@ export default async function PatientPortalInvitePage({
   }
 
   const alreadyAccepted = invite.status === "accepted";
+  const inviteCopy =
+    applyPortalTemplate(portalSettings.welcomeMessage, {
+      patientName,
+      practiceName: practice,
+    }) ||
+    `${practice} has invited you to access your client portal. Continue to view your upcoming appointments, balance, and shared documents.`;
+  const supportCopy =
+    applyPortalTemplate(portalSettings.supportMessage, {
+      patientName,
+      practiceName: practice,
+    }) ||
+    `If you have questions, please contact ${practice} directly.`;
 
   return (
     <main className="portal-shell-narrow">
       <div className="portal-header">
         <div>
-          <div className="eyebrow">{practice}</div>
+          <div className="eyebrow" style={{ color: portalSettings.accentColor }}>{portalDisplayName}</div>
           <h1>Welcome, {patientName}</h1>
         </div>
       </div>
       <section className="panel">
         <p style={{ marginTop: 0, color: "var(--text)" }}>
-          {practice} has invited you to access your client portal. Continue to view your upcoming
-          appointments, balance, and shared documents.
+          {inviteCopy}
         </p>
         <form action={acceptInvite}>
           <button type="submit" className="button">
@@ -219,7 +257,7 @@ export default async function PatientPortalInvitePage({
           </button>
         </form>
         <p className="muted" style={{ fontSize: 13, marginTop: 20, marginBottom: 0 }}>
-          If you have questions, please contact {practice} directly.
+          {supportCopy}
         </p>
       </section>
     </main>

@@ -32,6 +32,11 @@ const SETTINGS_SECTIONS = [
     description: "Default diagnosis codes, fee schedules, and billing rules.",
   },
   {
+    label: "Patient Portal",
+    href: "/settings/portal",
+    description: "Edit and preview portal branding, welcome copy, and support messaging.",
+  },
+  {
     label: "Reference Code Sets",
     href: "/settings/code-sets",
     description: "When ICD-10-CM, HCPCS, and CPT reference data were last loaded — flags stale releases.",

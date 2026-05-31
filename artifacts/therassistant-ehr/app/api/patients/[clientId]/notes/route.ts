@@ -56,6 +56,10 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
       signedAt: note.signed_at as string | null,
       createdAt: note.created_at as string | null,
       hasSoapNote: Boolean(note.subjective || note.objective || note.assessment || note.plan),
+      subjective: (note.subjective as string | null) ?? null,
+      objective: (note.objective as string | null) ?? null,
+      assessment: (note.assessment as string | null) ?? null,
+      plan: (note.plan as string | null) ?? null,
     }));
 
     return NextResponse.json({ success: true, notes: items, encounters: encounters ?? [], total: items.length });
