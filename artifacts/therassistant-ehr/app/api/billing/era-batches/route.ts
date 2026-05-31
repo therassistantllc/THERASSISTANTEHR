@@ -38,12 +38,11 @@ type BatchRow = {
 };
 
 type ChildRow = {
-  era_import_batch_id: string;
-  claim_match_status: string;
-  posting_status: string;
-  clp02_claim_status_code: string | null;
-  clp04_payment_amount: number | string;
-  professional_claim_id: string | null;
+  batch_id: string;
+  match_status: string;
+  payment_import_status: string;
+  net_amount: number | string;
+  claim_id: string | null;
   client_id: string | null;
 };
 
@@ -104,14 +103,14 @@ export async function GET(request: Request) {
     const includeArchivedParam = searchParams.get("includeArchived");
     const includeArchived = includeArchivedParam === "1" || includeArchivedParam === "true";
 
-    // Universal filter rail values that require joining era_claim_payments →
+    // Universal filter rail values that require joining payment_import_items →
     // professional_claims → claim_parties_snapshot → clients to be evaluated.
     // We resolve them to a concrete set of batch ids first, then restrict the
     // batches query, so paging/limit honors the filter rather than truncating
     // pre-filter.
     const patientFilter = searchParams.get("client")?.trim() || null;
     // Typeahead picker sends the canonical client UUID instead of (or in
-    // addition to) the partial name. When set we restrict era_claim_payments
+    // addition to) the partial name. When set we restrict payment_import_items
     // by client_id directly — no ilike fuzziness — so a selected suggestion
     // always lands on a stable identifier.
     const clientIdFilter = searchParams.get("clientId")?.trim() || null;
@@ -238,11 +237,11 @@ export async function GET(request: Request) {
         restrictBatchIds = [];
       } else {
         let ecpQuery = supabase
-          .from("era_claim_payments")
-          .select("era_import_batch_id")
+          .from("payment_import_items")
+          .select("batch_id")
           .eq("organization_id", organizationId)
           .is("archived_at", null);
-        if (claimIdSet) ecpQuery = ecpQuery.in("professional_claim_id", Array.from(claimIdSet));
+        if (claimIdSet) ecpQuery = ecpQuery.in("claim_id", Array.from(claimIdSet));
         if (clientIdSet) ecpQuery = ecpQuery.in("client_id", Array.from(clientIdSet));
         const { data: ecpRows, error: ecpErr } = await ecpQuery.limit(10000);
         if (ecpErr) {
@@ -250,8 +249,8 @@ export async function GET(request: Request) {
         }
         restrictBatchIds = Array.from(
           new Set(
-            ((ecpRows ?? []) as Array<{ era_import_batch_id: string }>).map(
-              (r) => r.era_import_batch_id,
+            ((ecpRows ?? []) as Array<{ batch_id: string }>).map(
+              (r) => r.batch_id,
             ),
           ),
         );
@@ -263,7 +262,7 @@ export async function GET(request: Request) {
     }
 
     let batchQuery = supabase
-      .from("era_import_batches")
+      .from("v_era_queue_from_payment_imports")
       .select(
         "id, organization_id, source, file_name, import_status, total_claims, total_payment_amount, total_patient_responsibility, payer_identifier, payer_name, eft_or_check_number, payment_date, payment_method_code, imported_at, created_at, updated_at, archived_at, parsed_summary",
       )
@@ -309,16 +308,16 @@ export async function GET(request: Request) {
     const childRows: ChildRow[] = [];
     if (batchIds.length > 0) {
       const { data: children } = await supabase
-        .from("era_claim_payments")
+        .from("payment_import_items")
         .select(
-          "era_import_batch_id, claim_match_status, posting_status, clp02_claim_status_code, clp04_payment_amount, professional_claim_id, client_id",
+          "batch_id, match_status, payment_import_status, net_amount, claim_id, client_id",
         )
         .eq("organization_id", organizationId)
-        .in("era_import_batch_id", batchIds)
+        .in("batch_id", batchIds)
         .is("archived_at", null);
       childRows.push(...((children ?? []) as ChildRow[]));
       for (const child of childRows) {
-        const bucket = childMap.get(child.era_import_batch_id) ?? {
+        const bucket = childMap.get(child.batch_id) ?? {
           total: 0,
           matched: 0,
           unmatched: 0,
@@ -329,20 +328,23 @@ export async function GET(request: Request) {
           totalApplied: 0,
         };
         bucket.total += 1;
-        if (child.claim_match_status === "matched") bucket.matched += 1;
-        else bucket.unmatched += 1;
-        if (child.posting_status === "blocked") bucket.blocked += 1;
-        if (child.posting_status === "posted") {
-          bucket.posted += 1;
-          bucket.totalApplied += asNumber(child.clp04_payment_amount);
+        if (child.match_status === "matched" || child.match_status === "manual_matched") {
+          bucket.matched += 1;
         }
-        if (child.clp02_claim_status_code === "4") bucket.denied += 1;
-        if (asNumber(child.clp04_payment_amount) < 0) bucket.recoupment += 1;
-        childMap.set(child.era_import_batch_id, bucket);
+        else bucket.unmatched += 1;
+        if (child.payment_import_status === "needs_review" || child.payment_import_status === "failed") {
+          bucket.blocked += 1;
+        }
+        if (child.payment_import_status === "posted") {
+          bucket.posted += 1;
+          bucket.totalApplied += asNumber(child.net_amount);
+        }
+        if (asNumber(child.net_amount) < 0) bucket.recoupment += 1;
+        childMap.set(child.batch_id, bucket);
       }
 
       const claimIds = Array.from(
-        new Set(childRows.map((c) => c.professional_claim_id).filter((id): id is string => !!id)),
+        new Set(childRows.map((c) => c.claim_id).filter((id): id is string => !!id)),
       );
       const clientIds = Array.from(
         new Set(childRows.map((c) => c.client_id).filter((id): id is string => !!id)),
@@ -382,7 +384,7 @@ export async function GET(request: Request) {
       );
 
       for (const child of childRows) {
-        const batchKey = child.era_import_batch_id;
+        const batchKey = child.batch_id;
         const client = child.client_id ? clientsById.get(child.client_id) ?? null : null;
         if (client) {
           const name = [client.first_name, client.last_name].filter(Boolean).join(" ").trim();
@@ -391,8 +393,8 @@ export async function GET(request: Request) {
             patientsByBatch.get(batchKey)!.add(name);
           }
         }
-        if (child.professional_claim_id) {
-          const claim = claimsById.get(child.professional_claim_id);
+        if (child.claim_id) {
+          const claim = claimsById.get(child.claim_id);
           if (claim) {
             if (claim.place_of_service) {
               if (!practicesByBatch.has(batchKey)) practicesByBatch.set(batchKey, new Set());
@@ -401,7 +403,7 @@ export async function GET(request: Request) {
             dosFromByBatch.set(batchKey, minDate(dosFromByBatch.get(batchKey) ?? null, claim.date_of_service_from));
             dosToByBatch.set(batchKey, maxDate(dosToByBatch.get(batchKey) ?? null, claim.date_of_service_to));
           }
-          const party = partiesByClaim.get(child.professional_claim_id);
+          const party = partiesByClaim.get(child.claim_id);
           if (party) {
             const name = [party.rendering_provider_first_name, party.rendering_provider_last_name_or_org]
               .filter(Boolean)

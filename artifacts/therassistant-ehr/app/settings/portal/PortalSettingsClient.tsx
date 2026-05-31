@@ -36,6 +36,7 @@ export default function PortalSettingsClient() {
   const [settings, setSettings] = useState<PortalSettings>(DEFAULT_PORTAL_SETTINGS);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [testingPortal, setTestingPortal] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -94,6 +95,53 @@ export default function PortalSettingsClient() {
       setStatusError(err instanceof Error ? err.message : "Failed to save portal settings");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function testPortal() {
+    if (typeof window === "undefined") return;
+    setTestingPortal(true);
+    setStatus(null);
+    setStatusError(null);
+    try {
+      const clientsRes = await fetch(
+        `/api/clients?organizationId=${encodeURIComponent(organizationId)}&limit=1&offset=0`,
+        { cache: "no-store" },
+      );
+      const clientsJson = (await clientsRes.json().catch(() => null)) as
+        | { success?: boolean; error?: string; clients?: Array<{ id?: string; name?: string }> }
+        | null;
+      if (!clientsRes.ok || !clientsJson?.success) {
+        throw new Error(clientsJson?.error ?? "Failed to load a test client for portal preview");
+      }
+
+      const testClient = clientsJson.clients?.[0];
+      const testClientId = String(testClient?.id ?? "").trim();
+      if (!testClientId) {
+        throw new Error("No clients found. Add a client first, then run Test Portal.");
+      }
+
+      const inviteRes = await fetch("/api/portal/invites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId: testClientId, delivery: "clipboard" }),
+      });
+      const inviteJson = (await inviteRes.json().catch(() => null)) as
+        | { success?: boolean; error?: string; invite?: { url?: string } }
+        | null;
+      if (!inviteRes.ok || !inviteJson?.success || !inviteJson.invite?.url) {
+        throw new Error(inviteJson?.error ?? "Failed to create a portal invite for test mode");
+      }
+
+      const inviteUrl = String(inviteJson.invite.url).trim();
+      const fullUrl = inviteUrl.startsWith("http") ? inviteUrl : `${window.location.origin}${inviteUrl}`;
+      window.open(fullUrl, "_blank", "noopener,noreferrer");
+      const testClientName = String(testClient?.name ?? "the selected client").trim() || "the selected client";
+      setStatus(`Opened portal test invite for ${testClientName}. Click Continue to portal in the new tab.`);
+    } catch (err) {
+      setStatusError(err instanceof Error ? err.message : "Failed to open portal test session");
+    } finally {
+      setTestingPortal(false);
     }
   }
 
@@ -224,7 +272,13 @@ export default function PortalSettingsClient() {
             <button type="button" className="button" onClick={saveSettings} disabled={saving || loading}>
               {saving ? "Saving…" : "Save Portal Settings"}
             </button>
+            <button type="button" className="button button-secondary" onClick={testPortal} disabled={loading || testingPortal}>
+              {testingPortal ? "Opening test…" : "Test Portal"}
+            </button>
           </div>
+          <p className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+            Test Portal now creates a temporary invite link and opens the real client portal in a new tab.
+          </p>
         </div>
 
         <div>
@@ -248,6 +302,54 @@ export default function PortalSettingsClient() {
               <div className="panel" style={{ margin: 0, background: "#fff" }}>
                 <strong style={{ color: settings.accentColor || DEFAULT_PORTAL_SETTINGS.accentColor }}>Upcoming Appointments</strong>
                 <p className="muted" style={{ marginBottom: 0 }}>Therapy follow-up · Tue 3:00 PM</p>
+              </div>
+              <div className="panel" style={{ margin: 0, background: "#fff" }}>
+                <strong style={{ color: settings.accentColor || DEFAULT_PORTAL_SETTINGS.accentColor }}>Check-In Preview</strong>
+                <p className="muted" style={{ margin: "6px 0 10px", fontSize: 12 }}>
+                  This is how the pre-session question flow appears to patients.
+                </p>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <div>
+                    <p style={{ margin: 0, fontSize: 12, fontWeight: 600, color: "#0F172A" }}>
+                      What would you like to focus on today?
+                    </p>
+                    <p className="muted" style={{ margin: "3px 0 0", fontSize: 12 }}>
+                      Anxiety and stress management
+                    </p>
+                  </div>
+                  <div>
+                    <p style={{ margin: 0, fontSize: 12, fontWeight: 600, color: "#0F172A" }}>
+                      Anything your provider should know before session?
+                    </p>
+                    <p className="muted" style={{ margin: "3px 0 0", fontSize: 12 }}>
+                      Sleep has been worse this week and I had two panic episodes.
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="panel" style={{ margin: 0, background: "#fff" }}>
+                <strong style={{ color: settings.accentColor || DEFAULT_PORTAL_SETTINGS.accentColor }}>Journal Preview</strong>
+                <p className="muted" style={{ margin: "6px 0 10px", fontSize: 12 }}>
+                  Patients can add reflections, patterns, triggers, coping entries, and voice notes.
+                </p>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <div style={{ border: "1px solid #E2E8F0", borderRadius: 8, padding: "8px 10px" }}>
+                    <p style={{ margin: 0, fontSize: 12, fontWeight: 600, color: "#0F172A" }}>
+                      Reflection entry
+                    </p>
+                    <p className="muted" style={{ margin: "4px 0 0", fontSize: 12 }}>
+                      I noticed my mood improved after taking a walk and using breathing exercises.
+                    </p>
+                  </div>
+                  <div style={{ border: "1px solid #E2E8F0", borderRadius: 8, padding: "8px 10px" }}>
+                    <p style={{ margin: 0, fontSize: 12, fontWeight: 600, color: "#0F172A" }}>
+                      Trigger entry
+                    </p>
+                    <p className="muted" style={{ margin: "4px 0 0", fontSize: 12 }}>
+                      Trigger: conflict at work · Intensity: 7/10
+                    </p>
+                  </div>
+                </div>
               </div>
               <div className="panel" style={{ margin: 0, background: "#fff" }}>
                 <strong style={{ color: settings.accentColor || DEFAULT_PORTAL_SETTINGS.accentColor }}>Balance</strong>
