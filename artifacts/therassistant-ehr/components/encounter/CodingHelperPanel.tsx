@@ -229,6 +229,22 @@ export default function CodingHelperPanel(props: Props) {
           <p style={{ marginBottom: 8 }}><strong>Summary:</strong> {latestReport.auditSummary}</p>
           <p style={{ marginBottom: 8 }}><strong>Coding rationale:</strong> {latestReport.codingRationale}</p>
           <p style={{ marginBottom: 8 }}><strong>Documentation gaps:</strong> {latestReport.documentationGaps.length ? latestReport.documentationGaps.join(" | ") : "None"}</p>
+          <div style={{ marginBottom: 8 }}>
+            <strong>Structured report:</strong>
+            <pre
+              style={{
+                marginTop: 8,
+                padding: 12,
+                borderRadius: 8,
+                background: "rgba(15, 23, 42, 0.06)",
+                whiteSpace: "pre-wrap",
+                fontSize: 12,
+                lineHeight: 1.45,
+              }}
+            >
+              {latestReport.reportText}
+            </pre>
+          </div>
           <p style={{ marginBottom: 0 }}><strong>Source encounter:</strong> {latestReport.sourceEncounterId}</p>
         </article>
       ) : null}
