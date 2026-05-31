@@ -14,6 +14,10 @@ type NoteItem = {
   signedAt: string | null;
   createdAt: string | null;
   hasSoapNote: boolean;
+  subjective?: string | null;
+  objective?: string | null;
+  assessment?: string | null;
+  plan?: string | null;
 };
 
 function formatDate(v: string | null | undefined) {
@@ -39,6 +43,7 @@ export default function NotesPage() {
   const [notes, setNotes] = useState<NoteItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!clientId || !orgId) return;
@@ -49,7 +54,12 @@ export default function NotesPage() {
         const json = await r.json() as { success: boolean; notes?: NoteItem[]; error?: string };
         if (cancelled) return;
         if (!json.success) throw new Error(json.error ?? "Failed");
-        setNotes(json.notes ?? []);
+        const nextNotes = json.notes ?? [];
+        setNotes(nextNotes);
+        setSelectedNoteId((prev) => {
+          if (prev && nextNotes.some((note) => note.id === prev)) return prev;
+          return nextNotes[0]?.id ?? null;
+        });
       } catch (e: unknown) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load");
       } finally {
@@ -61,6 +71,8 @@ export default function NotesPage() {
   }, [clientId, orgId]);
 
   const orgQ = orgId ? `?organizationId=${encodeURIComponent(orgId)}` : "";
+  const selectedNote = notes.find((note) => note.id === selectedNoteId) ?? null;
+  const selectedNoteStatus = String(selectedNote?.noteStatus ?? "").toLowerCase();
 
   return (
     <main className="app-shell">
@@ -84,42 +96,105 @@ export default function NotesPage() {
       )}
 
       {notes.length > 0 && (
-        <section className="panel">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Encounter Date</th>
-                <th>Note Type</th>
-                <th>Status</th>
-                <th>Signed</th>
-                <th>SOAP</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {notes.map((note) => (
-                <tr key={note.id}>
-                  <td>{formatDate(note.encounterDate)}</td>
-                  <td>{note.noteType ?? "—"}</td>
-                  <td><span className={statusClass(note.noteStatus)}>{note.noteStatus ?? "draft"}</span></td>
-                  <td>{note.signedAt ? formatDate(note.signedAt) : <span className="muted">Unsigned</span>}</td>
-                  <td>{note.hasSoapNote ? <span className="status status-green">Yes</span> : "—"}</td>
-                  <td>
-                    <Link className="button button-secondary" href={`/encounters/${note.encounterId}${orgQ}`}>
-                      Open Encounter
-                    </Link>
-                    {" "}
-                    <Link
-                      className="button"
-                      href={`/encounters/${note.encounterId}${orgQ}${orgQ ? "&" : "?"}edit=1`}
-                    >
-                      {String(note.noteStatus ?? "").toLowerCase() === "signed" ? "Amend Note" : "Edit Note"}
-                    </Link>
-                  </td>
+        <section
+          className="panel"
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
+            gap: 16,
+            alignItems: "start",
+          }}
+        >
+          <div>
+            <h3 style={{ marginTop: 0 }}>Notes</h3>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th aria-label="Select" />
+                  <th>Encounter Date</th>
+                  <th>Type</th>
+                  <th>Status</th>
+                  <th>Signed</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {notes.map((note) => {
+                  const selected = note.id === selectedNoteId;
+                  return (
+                    <tr
+                      key={note.id}
+                      onClick={() => setSelectedNoteId(note.id)}
+                      style={{
+                        cursor: "pointer",
+                        background: selected ? "rgba(29, 78, 216, 0.08)" : undefined,
+                      }}
+                    >
+                      <td>
+                        <input
+                          type="radio"
+                          name="selectedNote"
+                          checked={selected}
+                          onChange={() => setSelectedNoteId(note.id)}
+                          aria-label={`Select note ${formatDate(note.encounterDate)}`}
+                        />
+                      </td>
+                      <td>{formatDate(note.encounterDate)}</td>
+                      <td>{note.noteType ?? "—"}</td>
+                      <td><span className={statusClass(note.noteStatus)}>{note.noteStatus ?? "draft"}</span></td>
+                      <td>{note.signedAt ? formatDate(note.signedAt) : <span className="muted">Unsigned</span>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div>
+            <h3 style={{ marginTop: 0 }}>Note Preview</h3>
+            {!selectedNote ? (
+              <p className="muted" style={{ marginTop: 0 }}>
+                Select a note to preview.
+              </p>
+            ) : (
+              <div style={{ display: "grid", gap: 10 }}>
+                <div className="detail-list">
+                  <p><strong>Encounter Date:</strong> {formatDate(selectedNote.encounterDate)}</p>
+                  <p><strong>Encounter Status:</strong> {selectedNote.encounterStatus ?? "—"}</p>
+                  <p><strong>Note Status:</strong> {selectedNote.noteStatus ?? "draft"}</p>
+                  <p><strong>Signed:</strong> {selectedNote.signedAt ? formatDate(selectedNote.signedAt) : "Unsigned"}</p>
+                </div>
+
+                <article className="panel" style={{ margin: 0 }}>
+                  <h4 style={{ marginTop: 0, marginBottom: 8 }}>Subjective</h4>
+                  <p style={{ whiteSpace: "pre-wrap", margin: 0 }}>{selectedNote.subjective?.trim() || "Not documented"}</p>
+                </article>
+                <article className="panel" style={{ margin: 0 }}>
+                  <h4 style={{ marginTop: 0, marginBottom: 8 }}>Objective</h4>
+                  <p style={{ whiteSpace: "pre-wrap", margin: 0 }}>{selectedNote.objective?.trim() || "Not documented"}</p>
+                </article>
+                <article className="panel" style={{ margin: 0 }}>
+                  <h4 style={{ marginTop: 0, marginBottom: 8 }}>Assessment</h4>
+                  <p style={{ whiteSpace: "pre-wrap", margin: 0 }}>{selectedNote.assessment?.trim() || "Not documented"}</p>
+                </article>
+                <article className="panel" style={{ margin: 0 }}>
+                  <h4 style={{ marginTop: 0, marginBottom: 8 }}>Plan</h4>
+                  <p style={{ whiteSpace: "pre-wrap", margin: 0 }}>{selectedNote.plan?.trim() || "Not documented"}</p>
+                </article>
+
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <Link className="button button-secondary" href={`/encounters/${selectedNote.encounterId}${orgQ}`}>
+                    Open Encounter
+                  </Link>
+                  <Link
+                    className="button"
+                    href={`/encounters/${selectedNote.encounterId}${orgQ}${orgQ ? "&" : "?"}edit=1`}
+                  >
+                    {selectedNoteStatus === "signed" ? "Amend Note" : "Edit Note"}
+                  </Link>
+                </div>
+              </div>
+            )}
+          </div>
         </section>
       )}
     </main>
