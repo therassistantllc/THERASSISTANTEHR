@@ -616,6 +616,7 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                 const isModified = Boolean(e);
                 const isBlocked = row.validation.blocking.length > 0;
                 const isPosted = row.postingStatus === "posted";
+                const hasPatient = Boolean(row.client);
                 const rowClass = isPosted
                   ? styles.posted
                   : isBlocked
@@ -743,8 +744,10 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                           <>
                             <button
                               className={styles.btn}
+                              disabled={!hasPatient}
                               onClick={(ev) => {
                                 ev.stopPropagation();
+                                if (!hasPatient) return;
                                 void openMatchModal(row.id);
                               }}
                             >
@@ -754,7 +757,7 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                               className={styles.btn}
                               onClick={(ev) => {
                                 ev.stopPropagation();
-                                window.open(`/clients/new?prefill=era&eraClaimId=${row.id}`, "_blank");
+                                window.open(`/clients/new?prefill=era&eraBatchId=${encodeURIComponent(batchId)}`, "_blank");
                               }}
                               title="Create a new patient record for this ERA claim"
                             >
@@ -767,7 +770,7 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                             className={styles.btn}
                             onClick={(ev) => {
                               ev.stopPropagation();
-                              window.open(`/clients/new?prefill=era&eraClaimId=${row.id}`, "_blank");
+                              window.open(`/clients/new?prefill=era&eraBatchId=${encodeURIComponent(batchId)}`, "_blank");
                             }}
                             title="Create a new patient record for this ERA claim"
                           >
@@ -777,9 +780,10 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                         {!isPosted ? (
                           <button
                             className={`${styles.btn} ${styles.btnPrimary}`}
-                            disabled={isBlocked || posting === row.id}
+                            disabled={isBlocked || posting === row.id || !hasPatient}
                             onClick={(ev) => {
                               ev.stopPropagation();
+                              if (!hasPatient) return;
                               void postOne(rawRow);
                             }}
                           >
