@@ -9,7 +9,7 @@ import {
 } from "@/lib/payments/postingEngine";
 import { requireOrgAccess } from "@/lib/auth/requireOrgAccess";
 
-type ClaimUpdate = Database["public"]["Tables"]["claims"]["Update"];
+type ClaimUpdate = Database["public"]["Tables"]["professional_claims"]["Update"];
 
 function generateUuid() {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -97,7 +97,7 @@ export async function POST(request: Request) {
     }
 
     const { data: claimData, error: claimError } = await supabase
-      .from("claims")
+      .from("professional_claims")
       .select("id, client_id, payer_responsibility_amount, patient_responsibility_amount")
       .eq("organization_id", organizationId)
       .eq("id", claimId)
@@ -179,7 +179,7 @@ export async function POST(request: Request) {
     }
 
     const { error: updateError } = await supabase
-      .from("claims")
+      .from("professional_claims")
       .update(claimPatch)
       .eq("id", claimData.id)
       .eq("organization_id", organizationId)

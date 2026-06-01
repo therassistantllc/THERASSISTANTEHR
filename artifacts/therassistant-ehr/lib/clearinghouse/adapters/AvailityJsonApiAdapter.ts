@@ -406,7 +406,7 @@ async function persistClaimStatusResponse(params: {
   }
 
   await supabase
-    .from("claims")
+    .from("professional_claims")
     .update({ claim_status: normalizeClaimRecordStatus(inquiryStatus), updated_at: now })
     .eq("id", params.claimId);
 

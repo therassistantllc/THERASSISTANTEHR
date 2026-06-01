@@ -165,8 +165,21 @@ export async function createClaim(
   };
 
   const { error: serviceLineError } = await supabase
-    .from("claim_service_lines")
-    .insert(claimServiceLineData);
+    .from("professional_claim_service_lines")
+    .insert({
+      claim_id: claim.id,
+      line_number: 1,
+      service_date_from: serviceDate,
+      service_date_to: serviceDate,
+      procedure_code: "90834",
+      modifiers: [],
+      charge_amount: "150.00",
+      units: 1,
+      diagnosis_pointers: ["1"],
+      place_of_service: "11",
+      rendering_provider_npi: null,
+      authorization_number: null,
+    });
 
   if (serviceLineError) {
     return { success: false, error: serviceLineError.message };

@@ -110,7 +110,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ itemI
       if (!data) return NextResponse.json({ success: false, error: "Encounter not found" }, { status: 404 });
     } else if (destination === "claim") {
       const { data, error } = await supabase
-        .from("claims")
+        .from("professional_claims")
         .select("id")
         .eq("organization_id", organizationId)
         .eq("id", targetId!)

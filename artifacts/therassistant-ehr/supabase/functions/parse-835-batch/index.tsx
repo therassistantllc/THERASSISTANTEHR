@@ -214,7 +214,7 @@ serve(async (req: Request) => {
           const itemFileHash = `${fileHash}:${importedItemRef || claimIndex + 1}`;
 
           const { data: matchedClaim } = await supabase
-            .from("claims")
+            .from("professional_claims")
             .select("id, client_id")
             .eq("organization_id", organizationId)
             .or(

@@ -134,7 +134,7 @@ export async function POST(request: Request) {
 
     if (paymentImportItem.claim_id) {
       const claimUpdate = await supabase
-        .from("claims")
+        .from("professional_claims")
         .update({
           claim_status: "paid",
           paid_at: now,

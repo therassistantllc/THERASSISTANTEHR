@@ -115,7 +115,7 @@ export async function POST(request: Request) {
 
       if (patientControlNumber) {
         const { data: claimNumberMatch } = await supabase
-          .from("claims")
+          .from("professional_claims")
           .select("id, client_id")
           .eq("organization_id", organizationId)
           .eq("claim_number", patientControlNumber)
@@ -127,7 +127,7 @@ export async function POST(request: Request) {
 
       if (!matchedClaim && patientControlNumber && isUuid(patientControlNumber)) {
         const { data: idMatch } = await supabase
-          .from("claims")
+          .from("professional_claims")
           .select("id, client_id")
           .eq("organization_id", organizationId)
           .eq("id", patientControlNumber)

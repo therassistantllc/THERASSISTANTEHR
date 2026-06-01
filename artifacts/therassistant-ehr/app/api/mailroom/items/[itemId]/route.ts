@@ -139,35 +139,28 @@ export async function GET(request: Request, context: { params: Promise<{ itemId:
     let claim: { id: string; claimNumber: string; serviceDateFrom: string; payerName: string; archived: boolean } | null = null;
     if (claimId) {
       const { data: claimRow } = await supabase
-        .from("claims")
-        .select("id, claim_number, date_of_service_from, insurance_policy_id, archived_at")
+        .from("professional_claims")
+        .select("id, claim_number, payer_profile_id, first_billed_date, archived_at")
         .eq("organization_id", organizationId)
         .eq("id", claimId)
         .maybeSingle();
       if (claimRow) {
         const cl = claimRow as DbRow;
         let payerName = "";
-        const policyId = clean(cl.insurance_policy_id);
-        if (policyId) {
+        const payerProfileId = clean(cl.payer_profile_id);
+        if (payerProfileId) {
           const { data: policy } = await supabase
-            .from("insurance_policies")
-            .select("payer_id")
-            .eq("id", policyId)
+            .from("payer_profiles")
+            .select("payer_name")
+            .eq("organization_id", organizationId)
+            .eq("id", payerProfileId)
             .maybeSingle();
-          const payerId = clean((policy as DbRow | null)?.payer_id);
-          if (payerId) {
-            const { data: payer } = await supabase
-              .from("insurance_payers")
-              .select("payer_name")
-              .eq("id", payerId)
-              .maybeSingle();
-            payerName = clean((payer as DbRow | null)?.payer_name);
-          }
+          payerName = clean((policy as DbRow | null)?.payer_name);
         }
         claim = {
           id: clean(cl.id),
           claimNumber: clean(cl.claim_number),
-          serviceDateFrom: clean(cl.date_of_service_from),
+          serviceDateFrom: clean(cl.first_billed_date),
           payerName,
           archived: Boolean(cl.archived_at),
         };

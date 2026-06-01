@@ -131,7 +131,7 @@ export async function POST(request: Request) {
     if (supabase && claimControlNumbers.length > 0) {
       // Try claim_number match
       const { data: byNumber } = await supabase
-        .from("claims")
+        .from("professional_claims")
         .select("id, claim_number, client_id, clients(first_name, last_name)")
         .eq("organization_id", organizationId)
         .in("claim_number", claimControlNumbers);
@@ -152,7 +152,7 @@ export async function POST(request: Request) {
       );
       if (uuidNumbers.length > 0) {
         const { data: byId } = await supabase
-          .from("claims")
+          .from("professional_claims")
           .select("id, client_id, clients(first_name, last_name)")
           .eq("organization_id", organizationId)
           .in("id", uuidNumbers);

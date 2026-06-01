@@ -196,7 +196,7 @@ export async function POST(
       const organizationId = guard.organizationId;
 
       const claim = await (supabase as DbRow)
-        .from("claims")
+        .from("professional_claims")
         .select("id")
         .eq("id", claimId)
         .eq("organization_id", organizationId)
@@ -315,7 +315,7 @@ export async function POST(
     }
 
     const claim = await (supabase as DbRow)
-      .from("claims")
+      .from("professional_claims")
       .select("id")
       .eq("id", claimId)
       .eq("organization_id", organizationId)

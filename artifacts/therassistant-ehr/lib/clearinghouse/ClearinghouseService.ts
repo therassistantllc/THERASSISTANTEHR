@@ -40,12 +40,12 @@ interface AppClaim {
   organization_id: string;
   client_id?: string | null;
   encounter_id?: string | null;
-  insurance_policy_id?: string | null;
+  payer_profile_id?: string | null;
+  claim_number?: string | null;
   claim_status?: string | null;
-  total_charge_amount?: number | string | null;
-  provider_id?: string | null;
+  total_charge?: number | string | null;
   created_at?: string | null;
-  date_of_service_from?: string | null;
+  first_billed_date?: string | null;
 }
 
 function uuid() {
@@ -463,7 +463,7 @@ export class ClearinghouseService {
       throw new Error("SUPABASE_SERVICE_ROLE_KEY is required for clearinghouse server routes.");
     }
 
-    const claimResp = await supabase.from("claims").select("*").eq("id", input.claimId).maybeSingle();
+    const claimResp = await supabase.from("professional_claims").select("*").eq("id", input.claimId).maybeSingle();
     if (claimResp.error || !claimResp.data) {
       throw new Error("Claim not found.");
     }
@@ -480,8 +480,8 @@ export class ClearinghouseService {
     };
 
     let policy: InsurancePolicy | null = null;
-    if (claim.insurance_policy_id) {
-      const policyResp = await supabase.from("insurance_policies").select("*").eq("id", claim.insurance_policy_id).maybeSingle();
+    if (claim.payer_profile_id) {
+      const policyResp = await supabase.from("payer_profiles").select("*").eq("id", claim.payer_profile_id).maybeSingle();
       policy = (policyResp.data as InsurancePolicy | null) ?? null;
     }
 
@@ -492,10 +492,10 @@ export class ClearinghouseService {
       clearinghouseConnectionId: connection.id,
       payerId: policy?.payer_id ?? null,
       payerName: policy?.plan_name ?? "Mock Payer",
-      claimAmount: typeof claim.total_charge_amount === "number" ? claim.total_charge_amount : Number.parseFloat(String(claim.total_charge_amount ?? "0")) || 0,
+      claimAmount: typeof claim.total_charge === "number" ? claim.total_charge : Number.parseFloat(String(claim.total_charge ?? "0")) || 0,
       memberId: policy?.subscriber_id ?? policy?.policy_number ?? null,
       currentClaimStatus: claim.claim_status ?? null,
-      dateOfService: claim.date_of_service_from ?? null,
+      dateOfService: claim.first_billed_date ?? null,
     };
 
     const outbound = await insertTransaction({
@@ -590,7 +590,7 @@ export class ClearinghouseService {
         : claim.claim_status ?? "submitted";
 
     await supabase
-      .from("claims")
+      .from("professional_claims")
       .update({
         claim_status: nextClaimStatus,
         updated_at: new Date().toISOString(),

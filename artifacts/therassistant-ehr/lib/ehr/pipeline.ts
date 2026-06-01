@@ -423,15 +423,19 @@ export async function createClaimFromEncounter(
   for (const line of lines ?? []) {
     const sequenceNumber = lineNumber;
 
-    await supabase.from("claim_service_lines").insert({
+    await supabase.from("professional_claim_service_lines").insert({
       claim_id: claim.id,
-      encounter_service_line_id: line.id,
-      sequence_number: sequenceNumber,
-      cpt_hcpcs_code: line.cpt_hcpcs_code,
-      units: line.units,
+      line_number: sequenceNumber,
+      service_date_from: encounter.service_date ?? todayIso(),
+      service_date_to: encounter.service_date ?? todayIso(),
+      procedure_code: line.cpt_hcpcs_code,
+      modifiers: [],
       charge_amount: line.charge_amount,
-      service_date: encounter.service_date ?? todayIso(),
-      place_of_service_code: line.place_of_service_code ?? "11",
+      units: line.units,
+      diagnosis_pointers: ["1"],
+      place_of_service: line.place_of_service_code ?? "11",
+      rendering_provider_npi: null,
+      authorization_number: null,
     });
 
     lineNumber += 1;
