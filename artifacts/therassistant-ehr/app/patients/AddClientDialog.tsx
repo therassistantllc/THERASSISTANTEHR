@@ -83,7 +83,6 @@ export default function AddClientDialog({ open, organizationId, onClose, onCreat
     form.firstName.trim().length > 0 &&
     form.lastName.trim().length > 0 &&
     form.dateOfBirth.trim().length > 0 &&
-    form.phone.trim().length > 0 &&
     !busy;
 
   function trimmedOrUndefined(v: string) {
@@ -105,7 +104,7 @@ export default function AddClientDialog({ open, organizationId, onClose, onCreat
           firstName: form.firstName.trim(),
           lastName: form.lastName.trim(),
           dateOfBirth: form.dateOfBirth.trim(),
-          phone: form.phone.trim(),
+          phone: trimmedOrUndefined(form.phone),
           email: trimmedOrUndefined(form.email),
           preferredName: trimmedOrUndefined(form.preferredName),
           sexAtBirth: trimmedOrUndefined(form.sexAtBirth),
@@ -203,12 +202,11 @@ export default function AddClientDialog({ open, organizationId, onClose, onCreat
                     style={inputStyle}
                   />
                 </Field>
-                <Field label="Primary phone" required>
+                <Field label="Primary phone">
                   <input
                     type="tel"
                     value={form.phone}
                     onChange={(e) => setField("phone", e.target.value)}
-                    required
                     style={inputStyle}
                   />
                 </Field>

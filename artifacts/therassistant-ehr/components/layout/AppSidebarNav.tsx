@@ -245,7 +245,7 @@ export default function AppSidebarNav() {
 
           {paymentsExpanded ? (
             <div style={{ paddingLeft: 12 }}>
-              <SubNavLinkIcon href="/billing/era-import" icon={<CreditCardIcon />} label="ERA" prefixes={["/billing/era-import", "/billing/payments", "/billing/unmatched-era", "/billing/paper-checks", "/billing/partial-payments", "/billing/unposted-payments", "/billing/recoupments", "/billing/refunds", "/billing/credit-balances", "/billing/vcc", "/billing/reconciliation-exceptions", "/billing/fax-queue", "/billing/orphaned-batches"]} pathname={pathname} />
+              <SubNavLinkIcon href="/billing/payments/era" icon={<CreditCardIcon />} label="ERA" prefixes={["/billing/payments", "/billing/era-import", "/billing/unmatched-era", "/billing/paper-checks", "/billing/partial-payments", "/billing/unposted-payments", "/billing/recoupments", "/billing/refunds", "/billing/credit-balances", "/billing/vcc", "/billing/reconciliation-exceptions", "/billing/fax-queue", "/billing/orphaned-batches"]} pathname={pathname} />
               <SubNavLinkIcon href="/billing/patient-balances" icon={<UsersIcon />} label="Patient Balances" prefixes={["/billing/patient-balances", "/billing/patient-responsibility", "/billing/patient-billing", "/billing/bad-debt-review", "/billing/write-offs"]} pathname={pathname} />
             </div>
           ) : null}

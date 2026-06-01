@@ -176,8 +176,6 @@ export async function POST(request: Request) {
     if (dobDate.getTime() > Date.now()) {
       return NextResponse.json({ success: false, error: "Date of birth cannot be in the future" }, { status: 400 });
     }
-    if (!phone) return NextResponse.json({ success: false, error: "Primary phone is required" }, { status: 400 });
-
     const ALLOWED_SEX_AT_BIRTH = new Set(["female", "male", "intersex", "unknown", "declined"]);
     if (sexAtBirthRaw && !ALLOWED_SEX_AT_BIRTH.has(sexAtBirthRaw)) {
       return NextResponse.json({ success: false, error: "Invalid sex at birth value" }, { status: 400 });
@@ -194,7 +192,7 @@ export async function POST(request: Request) {
       first_name: firstName,
       last_name: lastName,
       date_of_birth: dateOfBirth,
-      phone,
+      phone: phone || null,
       email: email || null,
       preferred_name: preferredName || null,
       mrn: mrn || null,

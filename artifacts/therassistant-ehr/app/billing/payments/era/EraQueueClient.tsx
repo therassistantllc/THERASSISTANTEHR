@@ -62,6 +62,118 @@ function formatDate(iso: string | null): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
+function QuickAddPatientModal({
+  organizationId,
+  payerName,
+  onClose,
+  onCreated,
+}: {
+  organizationId: string;
+  payerName: string;
+  onClose: () => void;
+  onCreated: (message: string) => Promise<void> | void;
+}) {
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [dateOfBirth, setDateOfBirth] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!firstName.trim() || !lastName.trim() || !dateOfBirth.trim()) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/clients", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          organizationId,
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          dateOfBirth: dateOfBirth.trim(),
+          sexAtBirth: "unknown",
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error ?? "Failed to create client");
+      await onCreated("Patient created.");
+    } catch (submissionError) {
+      setError(submissionError instanceof Error ? submissionError.message : "Failed to create client");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Quick add patient"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !saving) onClose();
+      }}
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 70,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "rgba(15, 23, 42, 0.38)",
+        padding: 16,
+      }}
+    >
+      <form
+        onSubmit={handleSubmit}
+        style={{
+          width: "min(440px, 100%)",
+          borderRadius: 18,
+          border: "1px solid #CBD5E1",
+          background: "#FFFFFF",
+          boxShadow: "0 24px 60px rgba(15, 23, 42, 0.18)",
+          overflow: "hidden",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 18px", borderBottom: "1px solid #E2E8F0" }}>
+          <div>
+            <strong style={{ display: "block", fontSize: 16, color: "#0F172A" }}>Quick Add Patient</strong>
+            <span style={{ display: "block", marginTop: 4, fontSize: 12, color: "#64748B" }}>{payerName}</span>
+          </div>
+          <button type="button" onClick={onClose} disabled={saving} style={{ border: "none", background: "transparent", fontSize: 22, lineHeight: 1, color: "#64748B", cursor: saving ? "not-allowed" : "pointer" }}>
+            ×
+          </button>
+        </div>
+        <div style={{ padding: 18, display: "grid", gap: 14 }}>
+          <p style={{ margin: 0, fontSize: 13, color: "#475569" }}>This quick add stays on the ERA screen. Only name and date of birth are required.</p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: "#475569" }}>
+              <span>First name *</span>
+              <input type="text" value={firstName} onChange={(event) => setFirstName(event.target.value)} required autoFocus style={{ border: "1px solid #CBD5E1", borderRadius: 10, padding: "10px 12px", fontSize: 14 }} />
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: "#475569" }}>
+              <span>Last name *</span>
+              <input type="text" value={lastName} onChange={(event) => setLastName(event.target.value)} required style={{ border: "1px solid #CBD5E1", borderRadius: 10, padding: "10px 12px", fontSize: 14 }} />
+            </label>
+          </div>
+          <label style={{ display: "grid", gap: 6, fontSize: 12, color: "#475569" }}>
+            <span>Date of birth *</span>
+            <input type="date" value={dateOfBirth} onChange={(event) => setDateOfBirth(event.target.value)} required max={new Date().toISOString().slice(0, 10)} style={{ border: "1px solid #CBD5E1", borderRadius: 10, padding: "10px 12px", fontSize: 14 }} />
+          </label>
+          {error ? <div style={{ color: "#B91C1C", fontSize: 12, fontWeight: 600 }}>{error}</div> : null}
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+            <button type="button" onClick={onClose} disabled={saving} className={styles.btn}>Cancel</button>
+            <button type="submit" disabled={saving || !firstName.trim() || !lastName.trim() || !dateOfBirth.trim()} className={`${styles.btn} ${styles.btnPrimary}`}>
+              {saving ? "Saving..." : "Save Patient"}
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 export default function EraQueueClient() {
   const organizationId = DEFAULT_ORG_ID;
   const [items, setItems] = useState<BatchListItem[]>([]);
@@ -72,6 +184,7 @@ export default function EraQueueClient() {
   const [includeArchived, setIncludeArchived] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+  const [addPatientBatch, setAddPatientBatch] = useState<BatchListItem | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -190,6 +303,9 @@ export default function EraQueueClient() {
         <button className={styles.btn} onClick={() => void load()} disabled={loading}>
           <RefreshCw size={12} /> Refresh
         </button>
+        <Link href="/billing/era-import" className={styles.btn}>
+          <Upload size={12} /> Upload / Import Workspace
+        </Link>
         <label
           className={`${styles.btn} ${styles.btnPrimary}`}
           style={{ cursor: importing ? "not-allowed" : "pointer", opacity: importing ? 0.6 : 1 }}
@@ -369,13 +485,7 @@ export default function EraQueueClient() {
                               : "No unmatched claims in this batch"
                           }
                           disabled={b.counts.unmatched === 0}
-                          onClick={() => {
-                            window.open(
-                              `/clients?prefill=era&eraBatchId=${encodeURIComponent(b.id)}`,
-                              "_blank",
-                              "noopener,noreferrer",
-                            );
-                          }}
+                          onClick={() => setAddPatientBatch(b)}
                         >
                           <Plus size={12} /> Add Patient
                         </button>
@@ -442,6 +552,19 @@ export default function EraQueueClient() {
           </table>
         )}
       </div>
+
+      {addPatientBatch ? (
+        <QuickAddPatientModal
+          organizationId={organizationId}
+          payerName={addPatientBatch.payer.name}
+          onClose={() => setAddPatientBatch(null)}
+          onCreated={async (message) => {
+            setAddPatientBatch(null);
+            setFlash(message);
+            await load();
+          }}
+        />
+      ) : null}
     </div>
   );
 }

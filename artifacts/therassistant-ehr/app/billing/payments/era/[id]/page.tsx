@@ -1,12 +1,12 @@
-import { redirect } from "next/navigation";
+import EraPosterClient from "./EraPosterClient";
 
 export const dynamic = "force-dynamic";
 
-export default async function EraPosterLegacyRedirect({
+export default async function EraPosterPage({
   params,
 }: {
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  redirect(`/billing/era-import/${id}`);
+  return <EraPosterClient batchId={id} />;
 }

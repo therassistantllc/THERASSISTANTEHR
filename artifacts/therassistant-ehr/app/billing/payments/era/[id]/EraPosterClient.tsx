@@ -159,34 +159,36 @@ function formatDate(iso: string | null | undefined): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-function extractPatientNameFromRawSegments(rawSegments: string[] | undefined): {
-  firstName: string;
-  lastName: string;
-} | null {
-  if (!Array.isArray(rawSegments)) return null;
-  for (const segment of rawSegments) {
-    const parts = String(segment ?? "").split("*");
-    if (parts[0] !== "NM1" || parts[1] !== "QC") continue;
-    const lastName = String(parts[3] ?? "").trim();
-    const firstName = String(parts[4] ?? "").trim();
-    if (firstName || lastName) {
-      return { firstName, lastName };
-    }
+function normalizeEraDate(value: string): string {
+  const trimmed = value.trim();
+  if (/^\d{8}$/.test(trimmed)) {
+    return `${trimmed.slice(0, 4)}-${trimmed.slice(4, 6)}-${trimmed.slice(6, 8)}`;
   }
-  return null;
+  return trimmed;
 }
 
-function buildAddPatientUrl(batchId: string, row: ClaimPayment): string {
-  const params = new URLSearchParams({
-    prefill: "era",
-    eraBatchId: batchId,
-  });
-  const patientName = extractPatientNameFromRawSegments(row.rawSegments);
-  if (patientName?.firstName) params.set("firstName", patientName.firstName);
-  if (patientName?.lastName) params.set("lastName", patientName.lastName);
-  if (row.clp01ClaimControlNumber) params.set("sourceClientId", row.clp01ClaimControlNumber);
-  if (row.payerClaimControlNumber) params.set("mrn", row.payerClaimControlNumber);
-  return `/clients?${params.toString()}`;
+function extractPatientPrefillFromRawSegments(rawSegments: string[] | undefined): {
+  firstName: string;
+  lastName: string;
+  dateOfBirth: string;
+} | null {
+  if (!Array.isArray(rawSegments)) return null;
+  let firstName = "";
+  let lastName = "";
+  let dateOfBirth = "";
+  for (const segment of rawSegments) {
+    const parts = String(segment ?? "").split("*");
+    if (parts[0] === "NM1" && parts[1] === "QC") {
+      lastName = String(parts[3] ?? "").trim();
+      firstName = String(parts[4] ?? "").trim();
+    }
+    if (parts[0] === "DMG") {
+      const rawDob = String(parts[2] ?? "").replace(/[^0-9-]/g, "");
+      if (rawDob) dateOfBirth = normalizeEraDate(rawDob);
+    }
+  }
+  if (!firstName && !lastName && !dateOfBirth) return null;
+  return { firstName, lastName, dateOfBirth };
 }
 
 interface EditedFields {
@@ -210,6 +212,186 @@ const ADJUSTMENT_TYPES = [
   "other",
 ];
 
+function AddPatientModal({
+  row,
+  organizationId,
+  payerName,
+  onClose,
+  onCreated,
+}: {
+  row: ClaimPayment;
+  organizationId: string;
+  payerName: string;
+  onClose: () => void;
+  onCreated: (message: string) => Promise<void> | void;
+}) {
+  const prefill = extractPatientPrefillFromRawSegments(row.rawSegments);
+  const [firstName, setFirstName] = useState(prefill?.firstName ?? "");
+  const [lastName, setLastName] = useState(prefill?.lastName ?? "");
+  const [dateOfBirth, setDateOfBirth] = useState(prefill?.dateOfBirth ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!firstName.trim() || !lastName.trim() || !dateOfBirth.trim()) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const createRes = await fetch("/api/clients", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          organizationId,
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          dateOfBirth: dateOfBirth.trim(),
+          mrn: row.payerClaimControlNumber ?? undefined,
+          sourceClientId: row.clp01ClaimControlNumber || undefined,
+          sexAtBirth: "unknown",
+        }),
+      });
+      const createJson = await createRes.json();
+      if (!createRes.ok || !createJson.success) {
+        throw new Error(createJson.error ?? "Failed to create client");
+      }
+
+      const clientId = String(createJson.client?.id ?? "").trim();
+      if (!clientId) throw new Error("Client created without an id");
+
+      if (row.professionalClaim?.id) {
+        const bindRes = await fetch(`/api/billing/era-payments/${row.id}/match`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            organizationId,
+            professionalClaimId: row.professionalClaim.id,
+            clientId,
+          }),
+        });
+        const bindJson = await bindRes.json();
+        if (!bindRes.ok || !bindJson.success) {
+          throw new Error(bindJson.error ?? "Failed to attach client to ERA row");
+        }
+        await onCreated("Client created and attached. Payment can post now.");
+      } else {
+        await onCreated("Client created. Match the claim to finish posting.");
+      }
+    } catch (submissionError) {
+      setError(submissionError instanceof Error ? submissionError.message : "Failed to create client");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Add patient from ERA"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !saving) onClose();
+      }}
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 70,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "rgba(15, 23, 42, 0.38)",
+        padding: 16,
+      }}
+    >
+      <form
+        onSubmit={handleSubmit}
+        style={{
+          width: "min(460px, 100%)",
+          borderRadius: 18,
+          border: "1px solid #CBD5E1",
+          background: "#FFFFFF",
+          boxShadow: "0 24px 60px rgba(15, 23, 42, 0.18)",
+          overflow: "hidden",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 18px", borderBottom: "1px solid #E2E8F0" }}>
+          <div>
+            <strong style={{ display: "block", fontSize: 16, color: "#0F172A" }}>Add Patient</strong>
+            <span style={{ display: "block", marginTop: 4, fontSize: 12, color: "#64748B" }}>{payerName}</span>
+          </div>
+          <button type="button" onClick={onClose} disabled={saving} style={{ border: "none", background: "transparent", fontSize: 22, lineHeight: 1, color: "#64748B", cursor: saving ? "not-allowed" : "pointer" }}>
+            ×
+          </button>
+        </div>
+
+        <div style={{ padding: 18, display: "grid", gap: 14 }}>
+          <p style={{ margin: 0, fontSize: 13, color: "#475569" }}>
+            Create the missing patient record from this ERA. Only name and date of birth are required here.
+          </p>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: "#475569" }}>
+              <span>First name *</span>
+              <input
+                type="text"
+                value={firstName}
+                onChange={(event) => setFirstName(event.target.value)}
+                required
+                autoFocus
+                style={{ border: "1px solid #CBD5E1", borderRadius: 10, padding: "10px 12px", fontSize: 14 }}
+              />
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: "#475569" }}>
+              <span>Last name *</span>
+              <input
+                type="text"
+                value={lastName}
+                onChange={(event) => setLastName(event.target.value)}
+                required
+                style={{ border: "1px solid #CBD5E1", borderRadius: 10, padding: "10px 12px", fontSize: 14 }}
+              />
+            </label>
+          </div>
+
+          <label style={{ display: "grid", gap: 6, fontSize: 12, color: "#475569" }}>
+            <span>Date of birth *</span>
+            <input
+              type="date"
+              value={dateOfBirth}
+              onChange={(event) => setDateOfBirth(event.target.value)}
+              required
+              max={new Date().toISOString().slice(0, 10)}
+              style={{ border: "1px solid #CBD5E1", borderRadius: 10, padding: "10px 12px", fontSize: 14 }}
+            />
+          </label>
+
+          {row.clp01ClaimControlNumber || row.payerClaimControlNumber ? (
+            <div style={{ borderRadius: 12, background: "#F8FAFC", padding: 12, fontSize: 12, color: "#475569" }}>
+              {row.clp01ClaimControlNumber ? <div><strong>Claim ref:</strong> {row.clp01ClaimControlNumber}</div> : null}
+              {row.payerClaimControlNumber ? <div><strong>Payer control:</strong> {row.payerClaimControlNumber}</div> : null}
+            </div>
+          ) : null}
+
+          {error ? <div style={{ color: "#B91C1C", fontSize: 12, fontWeight: 600 }}>{error}</div> : null}
+
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+            <button type="button" onClick={onClose} disabled={saving} className={styles.btn}>
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={saving || !firstName.trim() || !lastName.trim() || !dateOfBirth.trim()}
+              className={`${styles.btn} ${styles.btnPrimary}`}
+            >
+              {saving ? "Saving..." : "Save Patient"}
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 export default function EraPosterClient({ batchId }: { batchId: string }) {
   const organizationId = DEFAULT_ORG_ID;
   const [batch, setBatch] = useState<BatchDetail | null>(null);
@@ -226,6 +408,7 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
   const [posting, setPosting] = useState<string | null>(null);
   const [autoMatching, setAutoMatching] = useState(false);
   const [activeRawId, setActiveRawId] = useState<string | null>(null);
+  const [addPatientRow, setAddPatientRow] = useState<ClaimPayment | null>(null);
   const [adjustmentDraft, setAdjustmentDraft] = useState<{
     scope: "claim_level" | "provider_level" | "service_line";
     adjustmentType: string;
@@ -391,6 +574,12 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
     }
   };
 
+  const handlePatientCreated = async (message: string) => {
+    setAddPatientRow(null);
+    setFlash(message);
+    await load();
+  };
+
   const postAllReady = async () => {
     const ready = claimPayments.filter(
       (r) =>
@@ -531,7 +720,7 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
         <div className={styles.emptyState}>
           {error ?? "Batch not found."}
           <div style={{ marginTop: 12 }}>
-            <Link href="/billing/era-import" className={styles.btn}>← Back to ERA Import</Link>
+            <Link href="/billing/payments/era" className={styles.btn}>← Back to ERA Queue</Link>
           </div>
         </div>
       </div>
@@ -541,8 +730,11 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
   return (
     <div className={styles.page}>
       <header className={styles.header}>
+        <Link href="/billing/payments/era" className={styles.btnGhost}>
+          <ChevronLeft size={14} /> ERA Queue
+        </Link>
         <Link href="/billing/era-import" className={styles.btnGhost}>
-          <ChevronLeft size={14} /> ERA Import
+          Upload / Import Workspace
         </Link>
         <div className={styles.title}>{batch.payer.name}</div>
         <span className={styles.crumb}>
@@ -787,7 +979,7 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                               className={styles.btn}
                               onClick={(ev) => {
                                 ev.stopPropagation();
-                                window.open(buildAddPatientUrl(batchId, row), "_blank", "noopener,noreferrer");
+                                setAddPatientRow(rawRow);
                               }}
                               title="Create a new patient record for this ERA claim"
                             >
@@ -800,7 +992,7 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                             className={styles.btn}
                             onClick={(ev) => {
                               ev.stopPropagation();
-                              window.open(buildAddPatientUrl(batchId, row), "_blank", "noopener,noreferrer");
+                              setAddPatientRow(rawRow);
                             }}
                             title="Create a new patient record for this ERA claim"
                           >
@@ -854,6 +1046,16 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
               </tr>
             </tfoot>
           </table>
+
+          {addPatientRow && batch ? (
+            <AddPatientModal
+              row={addPatientRow}
+              organizationId={organizationId}
+              payerName={batch.payer.name}
+              onClose={() => setAddPatientRow(null)}
+              onCreated={handlePatientCreated}
+            />
+          ) : null}
 
           <div className={styles.adjustmentsSection}>
             <div className={styles.adjustmentsHeader}>

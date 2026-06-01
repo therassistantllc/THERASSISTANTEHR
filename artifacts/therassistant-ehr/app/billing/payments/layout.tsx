@@ -4,7 +4,8 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 
 const TABS = [
-  { label: "ERA Import", href: "/billing/payments/era", match: "/billing/payments/era" },
+  { label: "ERA Queue", href: "/billing/payments/era", match: "/billing/payments/era" },
+  { label: "ERA Import", href: "/billing/era-import", match: "/billing/era-import" },
   { label: "Manual Insurance", href: "/billing/payments/manual-insurance", match: "/billing/payments/manual-insurance" },
   { label: "Client Payments", href: "/billing/payments/patient", match: "/billing/payments/patient" },
   { label: "Posted", href: "/billing/payments/posted", match: "/billing/payments/posted" },
