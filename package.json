@@ -6,7 +6,12 @@
     "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
     "build": "pnpm run typecheck && pnpm -r --if-present run build",
     "typecheck:libs": "tsc --build",
-    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
+    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
+    "test:routes": "tsx scripts/testing/route-audit.ts",
+    "test:schema": "tsx scripts/testing/schema-readiness.ts",
+    "test:billing-smoke": "tsx scripts/testing/billing-smoke.ts",
+    "test:x12": "tsx scripts/testing/x12-validate.ts",
+    "test:system": "pnpm test:routes && pnpm test:schema && pnpm test:billing-smoke"
   },
   "private": true,
   "devDependencies": {
@@ -24,3 +29,4 @@
     }
   }
 }
+

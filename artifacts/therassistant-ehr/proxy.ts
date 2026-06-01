@@ -4,6 +4,22 @@ import type { NextRequest } from "next/server";
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
+  // Dev bypass: skip auth gate entirely when ALLOW_DEV_AUTH_BYPASS=true
+  if (
+    process.env.NODE_ENV === "development" &&
+    process.env.ALLOW_DEV_AUTH_BYPASS === "true"
+  ) {
+    if (pathname === "/login") {
+      const url = request.nextUrl.clone();
+      url.pathname = "/settings";
+      url.search = "";
+      return NextResponse.redirect(url);
+    }
+    const headers = new Headers(request.headers);
+    headers.set("x-pathname", pathname);
+    return NextResponse.next({ request: { headers } });
+  }
+
   const isPublicPath =
     pathname === "/login" ||
     pathname === "/logout" ||
