@@ -300,7 +300,7 @@ export default function AppSidebarNav() {
           <SubNavLinkIcon href="/billing/claims" icon={<ClipboardIcon />} label="Claims" prefixes={CLAIMS_PREFIXES} pathname={pathname} />
           <SubNavLinkIcon href="/billing/837p-batches" icon={<ClipboardIcon />} label="837P Batches" prefixes={BATCHES_837P_PREFIXES} pathname={pathname} />
           <SubNavLinkIcon href="/billing/rejections-999" icon={<XCircleIcon />} label="Rejections" prefixes={REJECTIONS_PREFIXES} pathname={pathname} />
-          <SubNavLinkIcon href="/billing/denials" icon={<XCircleIcon />} label="Denials" prefixes={["/billing/denials", "/billing/denials-by-carc", "/billing/denials-by-rarc", "/billing/partial-denials", "/billing/underpayments", "/billing/timely-filing", "/billing/medical-necessity", "/billing/medical-review", "/billing/aging", "/billing/payer-rejections", "/billing/claim-submission"]} pathname={pathname} />
+          <SubNavLinkIcon href="/billing/denials" icon={<XCircleIcon />} label="Denials" prefixes={["/billing/denials", "/billing/denials-by-carc", "/billing/denials-by-rarc", "/billing/partial-denials", "/billing/underpayments", "/billing/timely-filing", "/billing/medical-necessity", "/billing/medical-review", "/billing/aging", "/billing/claim-submission"]} pathname={pathname} />
 
           {/* ── Payments submenu ───────────────────────────────────── */}
           <button
@@ -356,7 +356,7 @@ export default function AppSidebarNav() {
           <SubNavLinkIcon href="/settings/security" icon={<LockIcon />} label="Security" prefixes={["/settings/security"]} pathname={pathname} />
           <SubNavLinkIcon href="/settings/system-readiness" icon={<GearIcon />} label="System Readiness" prefixes={["/settings/system-readiness"]} pathname={pathname} />
           <SubNavLinkIcon href="/settings/audit-log" icon={<ChartIcon />} label="Audit Log" prefixes={["/settings/audit-log"]} pathname={pathname} />
-          <SubNavLinkIcon href="/settings" icon={<GearIcon />} label="More Settings" prefixes={["/settings/mailroom", "/settings/code-sets", "/settings", "/admin"]} pathname={pathname} />
+          <SubNavLinkIcon href="/settings" icon={<GearIcon />} label="More Settings" prefixes={["/settings/mailroom", "/settings/code-sets", "/admin"]} pathname={pathname} />
         </div>
       ) : null}
 
