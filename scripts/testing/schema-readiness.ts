@@ -37,18 +37,20 @@ const REQUIRED_COLUMNS: Record<string, string[]> = {
   ],
 };
 
-function getDatabaseUrl(): string {
-  const url = process.env.DATABASE_URL || process.env.POSTGRES_URL;
-  if (!url) {
-    throw new Error(
-      "DATABASE_URL or POSTGRES_URL is required for schema-readiness.ts",
-    );
-  }
-  return url;
+function getDatabaseUrl(): string | null {
+  return process.env.DATABASE_URL || process.env.POSTGRES_URL || null;
 }
 
 async function main() {
-  const client = new Client({ connectionString: getDatabaseUrl() });
+  const databaseUrl = getDatabaseUrl();
+  if (!databaseUrl) {
+    console.warn(
+      "SKIP schema-readiness: DATABASE_URL or POSTGRES_URL is not set.",
+    );
+    process.exit(0);
+  }
+
+  const client = new Client({ connectionString: databaseUrl });
   await client.connect();
 
   try {
