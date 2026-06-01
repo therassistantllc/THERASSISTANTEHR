@@ -285,15 +285,16 @@ export default function ChargeCaptureClient() {
           .map((row) => row.claimId)
           .filter((id): id is string => typeof id === "string" && id.length > 0),
       )];
-      if (claimIds.length === 0) {
-        showToast("No ready claims are currently selected for batching.");
-        return;
-      }
+
+      const body =
+        claimIds.length > 0
+          ? { organizationId: orgId, claimIds }
+          : { organizationId: orgId, scopeAllReady: true };
 
       const res = await fetch("/api/billing/charges/batches", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ organizationId: orgId, claimIds }),
+        body: JSON.stringify(body),
       });
       const json = await res.json();
       if (!res.ok || !json.success) {
