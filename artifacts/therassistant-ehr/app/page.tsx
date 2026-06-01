@@ -7,7 +7,7 @@ export default async function HomePage() {
     process.env.NODE_ENV === "development" &&
     process.env.ALLOW_DEV_AUTH_BYPASS === "true"
   ) {
-    redirect("/settings");
+    redirect("/calendar");
   }
 
   const jar = await cookies();

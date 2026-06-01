@@ -43,13 +43,13 @@ export default async function AppShell({ children }: { children: React.ReactNode
           <span className={styles.brandTag}>EHR</span>
         </Link>
         {orgName ? (
-          <Link href="/settings/organizations" className={styles.orgName} title="Manage organizations" style={{ textDecoration: "none" }}>
+          <span className={styles.orgName} title="Organization" style={{ textDecoration: "none" }}>
             {orgName}
-          </Link>
+          </span>
         ) : (
-          <Link href="/settings/organizations" className={styles.orgName} title="Create an organization" style={{ textDecoration: "none" }}>
+          <span className={styles.orgName} title="Organization" style={{ textDecoration: "none" }}>
             + Add organization
-          </Link>
+          </span>
         )}
         <div className={styles.topbarSpacer} />
         <div className={styles.topbarRight}>

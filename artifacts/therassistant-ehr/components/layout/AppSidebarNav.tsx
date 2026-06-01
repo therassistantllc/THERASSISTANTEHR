@@ -53,38 +53,10 @@ function InboxIcon() {
   );
 }
 
-function UserCheckIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-      <circle cx="8.5" cy="7" r="4" />
-      <polyline points="17 11 19 13 23 9" />
-    </svg>
-  );
-}
-
-function BuildingIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="2" y="3" width="20" height="19" rx="1" />
-      <path d="M8 21V8M16 21V8M2 12h20M2 17h20" />
-    </svg>
-  );
-}
-
 function ShieldIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-    </svg>
-  );
-}
-
-function LockIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
     </svg>
   );
 }
@@ -133,15 +105,6 @@ function CreditCardIcon() {
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <rect x="2" y="5" width="20" height="14" rx="2" ry="2" />
       <line x1="2" y1="10" x2="22" y2="10" />
-    </svg>
-  );
-}
-
-function GearIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
     </svg>
   );
 }
@@ -252,17 +215,14 @@ const PAYMENTS_PREFIXES = [
 export default function AppSidebarNav() {
   const pathname = usePathname();
 
-  const adminActive = active(pathname, ["/settings", "/admin"]);
   const billingGroupActive = pathname.startsWith("/billing");
   const billingRouteActive = pathname.startsWith("/billing");
   const paymentsActive = PAYMENTS_PREFIXES.some((p) => pathname.startsWith(p));
 
-  const [adminOpen, setAdminOpen] = useState(adminActive || false);
   const [billingOpen, setBillingOpen] = useState(billingRouteActive || false);
   const [paymentsOpen, setPaymentsOpen] = useState(paymentsActive || false);
 
   const billingExpanded = billingOpen || billingRouteActive;
-  const adminExpanded = adminOpen || adminActive;
   const paymentsExpanded = billingExpanded || paymentsOpen || paymentsActive;
 
   return (
@@ -326,39 +286,6 @@ export default function AppSidebarNav() {
           ) : null}
 
           <SubNavLinkIcon href="/billing/reports" icon={<ChartIcon />} label="Reports" prefixes={["/billing/reports"]} pathname={pathname} />
-        </div>
-      ) : null}
-
-      {/* ── ADMIN ────────────────────────────────────────────── */}
-      <div className={styles.navSectionSpacer} />
-      <div className={styles.navSection}>Admin</div>
-
-      <button
-        type="button"
-        className={`${styles.navItem} ${styles.navItemCollapsible} ${adminActive ? styles.navItemActive : ""}`}
-        onClick={() => setAdminOpen((o) => !o)}
-        aria-expanded={adminExpanded}
-      >
-        <span className={styles.navIcon}><GearIcon /></span>
-        Admin
-        <ChevronIcon open={adminExpanded} />
-      </button>
-
-      {adminExpanded ? (
-        <div className={styles.subnav}>
-          <SubNavLinkIcon href="/settings/users" icon={<UsersIcon />} label="Users & Provider Profiles" prefixes={["/settings/users", "/settings/providers", "/admin/provider-credentialing"]} pathname={pathname} />
-          <SubNavLinkIcon href="/settings/organization" icon={<BuildingIcon />} label="Organization Profile" prefixes={["/settings/organization", "/settings/organizations"]} pathname={pathname} />
-          <SubNavLinkIcon href="/settings/billing-defaults" icon={<ClipboardIcon />} label="Billing Setup" prefixes={["/settings/billing-defaults", "/settings/code-sets", "/admin/fee-schedules"]} pathname={pathname} />
-          <SubNavLinkIcon href="/settings/payers" icon={<ShieldIcon />} label="Payers" prefixes={["/settings/payers"]} pathname={pathname} />
-          <SubNavLinkIcon href="/settings/clearinghouse" icon={<GearIcon />} label="Clearinghouse" prefixes={["/settings/clearinghouse", "/settings/trading-partner", "/settings/baa"]} pathname={pathname} />
-          <SubNavLinkIcon href="/settings/service-locations" icon={<BuildingIcon />} label="Service Locations" prefixes={["/settings/service-locations"]} pathname={pathname} />
-          <SubNavLinkIcon href="/settings/payer-enrollments" icon={<ShieldIcon />} label="Eligibility Setup" prefixes={["/settings/payer-enrollments"]} pathname={pathname} />
-          <SubNavLinkIcon href="/billing/payments" icon={<CreditCardIcon />} label="ERA / Payment Setup" prefixes={["/billing/payments", "/billing/era-import", "/billing/unmatched-era", "/billing/partial-payments", "/billing/unposted-payments", "/billing/vcc", "/billing/paper-checks", "/billing/refunds", "/billing/credit-balances", "/billing/recoupments", "/billing/reconciliation-exceptions"]} pathname={pathname} />
-          <SubNavLinkIcon href="/settings/mailroom" icon={<InboxIcon />} label="Mailroom Routing" prefixes={["/settings/mailroom"]} pathname={pathname} />
-          <SubNavLinkIcon href="/settings/portal" icon={<UserCheckIcon />} label="Patient Portal" prefixes={["/settings/portal"]} pathname={pathname} />
-          <SubNavLinkIcon href="/settings/security" icon={<LockIcon />} label="Security" prefixes={["/settings/security"]} pathname={pathname} />
-          <SubNavLinkIcon href="/settings/system-readiness" icon={<GearIcon />} label="System Readiness" prefixes={["/settings/system-readiness"]} pathname={pathname} />
-          <SubNavLinkIcon href="/settings/audit-log" icon={<ChartIcon />} label="Audit Log" prefixes={["/settings/audit-log"]} pathname={pathname} />
         </div>
       ) : null}
 
