@@ -72,6 +72,12 @@ function toProcedureComposite(line: ProfessionalClaimServiceLine): string {
   return ["HC", sanitizeX12(line.procedure_code), ...modifiers].join(X12.componentSeparator);
 }
 
+function rawSeg(...elements: Array<string | number | null | undefined>): string {
+  return elements
+    .map((element) => (element === null || element === undefined ? "" : String(element)))
+    .join(X12.elementSeparator) + X12.segmentTerminator;
+}
+
 function makeFileName(timestamp: Date): string {
   const yyyyMMdd = formatDateYYYYMMDD(timestamp);
   const hhmmss =
@@ -252,7 +258,7 @@ function emitClaimSegments(ctx: BuildClaimContext): string[] {
   // /api/billing/corrected-claims action persist '7' or '8' here.
   const claimFrequency = sanitizeX12(claim.claim_frequency_code || "1") || "1";
   segments.push(
-    buildSegment([
+    rawSeg(
       "CLM",
       sanitizeX12(claim.patient_account_number),
       totalCharge,
@@ -263,7 +269,7 @@ function emitClaimSegments(ctx: BuildClaimContext): string[] {
       "A",
       claim.release_of_information === false ? "N" : "Y",
       claim.signature_on_file === false ? "N" : "Y",
-    ]),
+    ),
   );
 
   // 2300 REF*F8 — Payer Claim Control Number (original claim ICN). Required
@@ -283,9 +289,7 @@ function emitClaimSegments(ctx: BuildClaimContext): string[] {
   const diagnosisCodes = (claim.diagnosis_codes ?? []).filter(Boolean).slice(0, 12);
   diagnosisCodes.forEach((code, index) => {
     const qualifier = index === 0 ? "ABK" : "ABF";
-    segments.push(
-      buildSegment(["HI", `${qualifier}${X12.componentSeparator}${sanitizeX12(code).replace(/\./g, "")}`]),
-    );
+    segments.push(rawSeg("HI", `${qualifier}${X12.componentSeparator}${sanitizeX12(code).replace(/\./g, "")}`));
   });
 
   if (parties.rendering_same_as_billing === false) {
@@ -344,7 +348,7 @@ function emitClaimSegments(ctx: BuildClaimContext): string[] {
   serviceLines.forEach((line, index) => {
     segments.push(buildSegment(["LX", index + 1]));
     segments.push(
-      buildSegment([
+      rawSeg(
         "SV1",
         toProcedureComposite(line),
         formatMoney(Number(line.charge_amount)),
@@ -353,7 +357,7 @@ function emitClaimSegments(ctx: BuildClaimContext): string[] {
         sanitizeX12(line.place_of_service || claim.place_of_service),
         "",
         toPointerList(line),
-      ]),
+      ),
     );
     segments.push(buildSegment(["DTP", "472", "D8", formatDateYYYYMMDD(line.service_date_from)]));
     // Loop 2430 — per-line ERA breakdown (SVD/CAS/DTP*573). Emits only

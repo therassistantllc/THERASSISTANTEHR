@@ -118,12 +118,10 @@ function makeInput(claimOverrides: Partial<ProfessionalClaim> = {}): Availity837
   };
 }
 
-// NOTE: buildSegment's sanitizeX12 strips colons from element values, so the
-// CLM05 composite `POS:B:freq` renders as "POS B freq" in the on-the-wire
-// output. We split on whitespace to recover the third component.
+// CLM05 is a composite using ISA16 (component separator), currently ':'.
 function clmFreqOf(clm: string): string {
   const facility = clm.split("*")[5] ?? "";
-  return facility.split(/\s+/)[2] ?? "";
+  return facility.split(":")[2] ?? "";
 }
 
 function firstClmFreq(content: string): string {
