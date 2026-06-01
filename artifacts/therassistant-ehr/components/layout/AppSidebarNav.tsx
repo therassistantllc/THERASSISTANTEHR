@@ -340,23 +340,25 @@ export default function AppSidebarNav() {
         aria-expanded={adminExpanded}
       >
         <span className={styles.navIcon}><GearIcon /></span>
-        Settings
+        Admin
         <ChevronIcon open={adminExpanded} />
       </button>
 
       {adminExpanded ? (
         <div className={styles.subnav}>
-          <SubNavLinkIcon href="/settings/users" icon={<UsersIcon />} label="Users & Clinicians" prefixes={["/settings/users", "/settings/providers"]} pathname={pathname} />
-          <SubNavLinkIcon href="/settings/organizations" icon={<BuildingIcon />} label="Organizations" prefixes={["/settings/organization", "/settings/organizations"]} pathname={pathname} />
+          <SubNavLinkIcon href="/settings/users" icon={<UsersIcon />} label="Users & Provider Profiles" prefixes={["/settings/users", "/settings/providers", "/admin/provider-credentialing"]} pathname={pathname} />
+          <SubNavLinkIcon href="/settings/organization" icon={<BuildingIcon />} label="Organization Profile" prefixes={["/settings/organization", "/settings/organizations"]} pathname={pathname} />
+          <SubNavLinkIcon href="/settings/billing-defaults" icon={<ClipboardIcon />} label="Billing Setup" prefixes={["/settings/billing-defaults", "/settings/code-sets", "/admin/fee-schedules"]} pathname={pathname} />
           <SubNavLinkIcon href="/settings/payers" icon={<ShieldIcon />} label="Payers" prefixes={["/settings/payers"]} pathname={pathname} />
-          <SubNavLinkIcon href="/settings/clearinghouse" icon={<GearIcon />} label="Clearinghouse" prefixes={["/settings/clearinghouse", "/settings/trading-partner", "/settings/payer-enrollments", "/settings/baa"]} pathname={pathname} />
+          <SubNavLinkIcon href="/settings/clearinghouse" icon={<GearIcon />} label="Clearinghouse" prefixes={["/settings/clearinghouse", "/settings/trading-partner", "/settings/baa"]} pathname={pathname} />
           <SubNavLinkIcon href="/settings/service-locations" icon={<BuildingIcon />} label="Service Locations" prefixes={["/settings/service-locations"]} pathname={pathname} />
-          <SubNavLinkIcon href="/settings/billing-defaults" icon={<ClipboardIcon />} label="Billing Defaults" prefixes={["/settings/billing-defaults"]} pathname={pathname} />
+          <SubNavLinkIcon href="/settings/payer-enrollments" icon={<ShieldIcon />} label="Eligibility Setup" prefixes={["/settings/payer-enrollments"]} pathname={pathname} />
+          <SubNavLinkIcon href="/billing/payments" icon={<CreditCardIcon />} label="ERA / Payment Setup" prefixes={["/billing/payments", "/billing/era-import", "/billing/unmatched-era", "/billing/partial-payments", "/billing/unposted-payments", "/billing/vcc", "/billing/paper-checks", "/billing/refunds", "/billing/credit-balances", "/billing/recoupments", "/billing/reconciliation-exceptions"]} pathname={pathname} />
+          <SubNavLinkIcon href="/settings/mailroom" icon={<InboxIcon />} label="Mailroom Routing" prefixes={["/settings/mailroom"]} pathname={pathname} />
           <SubNavLinkIcon href="/settings/portal" icon={<UserCheckIcon />} label="Patient Portal" prefixes={["/settings/portal"]} pathname={pathname} />
           <SubNavLinkIcon href="/settings/security" icon={<LockIcon />} label="Security" prefixes={["/settings/security"]} pathname={pathname} />
           <SubNavLinkIcon href="/settings/system-readiness" icon={<GearIcon />} label="System Readiness" prefixes={["/settings/system-readiness"]} pathname={pathname} />
           <SubNavLinkIcon href="/settings/audit-log" icon={<ChartIcon />} label="Audit Log" prefixes={["/settings/audit-log"]} pathname={pathname} />
-          <SubNavLinkIcon href="/settings" icon={<GearIcon />} label="More Settings" prefixes={["/settings/mailroom", "/settings/code-sets", "/admin"]} pathname={pathname} />
         </div>
       ) : null}
 

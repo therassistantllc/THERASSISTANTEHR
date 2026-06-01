@@ -25,17 +25,25 @@ export async function GET(request: Request) {
     }
 
     const { data, error } = await supabase
-      .from("insurance_payers")
-      .select("id, payer_name, payer_id, payer_category")
+      .from("payer_profiles")
+      .select("id, payer_name, availity_payer_id, payer_type")
       .eq("organization_id", organizationId)
-      .is("archived_at", null)
+      .eq("is_active", true)
       .order("payer_name", { ascending: true });
 
     if (error) {
       return NextResponse.json({ success: false, error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ success: true, payers: data ?? [] });
+    // Map payer_profiles columns to the shape the payer-picker UI expects
+    const payers = (data ?? []).map((p) => ({
+      id: p.id,
+      payer_name: p.payer_name,
+      payer_id: p.availity_payer_id ?? null,
+      payer_category: p.payer_type ?? null,
+    }));
+
+    return NextResponse.json({ success: true, payers });
   } catch (error) {
     return NextResponse.json(
       {

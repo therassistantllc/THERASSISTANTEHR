@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, useCallback } from "react";
 
 export type ServiceLine = {
   id: string;
@@ -20,6 +20,7 @@ type Props = {
   onChange: (updated: ServiceLine[]) => void;
   disabled?: boolean;
   serviceDate?: string;
+  organizationId?: string;
 };
 
 // Common CPT codes for behavioral health
@@ -46,7 +47,7 @@ const PLACE_OF_SERVICE_OPTIONS = [
   { code: "31", name: "Skilled Nursing Facility" },
 ];
 
-export default function CptCodePanel({ serviceLines, onChange, disabled = false, serviceDate = "" }: Props) {
+export default function CptCodePanel({ serviceLines, onChange, disabled = false, serviceDate = "", organizationId }: Props) {
   const idCounter = useRef(0);
   const [searchText, setSearchText] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -65,9 +66,29 @@ export default function CptCodePanel({ serviceLines, onChange, disabled = false,
     ).slice(0, 5);
   }, [searchText, serviceLines]);
 
-  function addServiceLine(code: string) {
+  const lookupFeeScheduleRate = useCallback(async (code: string): Promise<number> => {
+    if (!organizationId) return 0;
+    try {
+      const res = await fetch(
+        `/api/billing/fee-schedules?organizationId=${encodeURIComponent(organizationId)}&q=${encodeURIComponent(code)}`,
+        { cache: "no-store" },
+      );
+      if (!res.ok) return 0;
+      const json = await res.json() as { rows?: Array<{ procedureCode: string; billedRate: number | null }> };
+      const match = (json.rows ?? []).find(
+        (r) => r.procedureCode.toUpperCase() === code.toUpperCase() && r.billedRate != null && r.billedRate > 0
+      );
+      return match?.billedRate ?? 0;
+    } catch {
+      return 0;
+    }
+  }, [organizationId]);
+
+  async function addServiceLine(code: string) {
     if (!code.trim()) return;
     if (serviceLines.some((s) => s.cpt_hcpcs_code === code)) return;
+
+    const chargeAmount = await lookupFeeScheduleRate(code.trim().toUpperCase());
 
     const newLine: ServiceLine = {
       id: `service-${++idCounter.current}`,
@@ -78,7 +99,7 @@ export default function CptCodePanel({ serviceLines, onChange, disabled = false,
       modifier_3: "",
       modifier_4: "",
       units: 1,
-      charge_amount: 0,
+      charge_amount: chargeAmount,
       place_of_service_code: "10",
     };
 

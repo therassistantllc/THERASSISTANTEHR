@@ -158,16 +158,42 @@ export async function POST(
     }
 
     const { data: payer, error: payerErr } = await supabase
-      .from("insurance_payers")
-      .select("id, organization_id, archived_at")
+      .from("payer_profiles")
+      .select("id, organization_id, is_active, payer_name, availity_payer_id")
       .eq("id", payerId)
       .eq("organization_id", organizationId)
       .maybeSingle();
     if (payerErr) {
       return NextResponse.json({ success: false, error: payerErr.message }, { status: 500 });
     }
-    if (!payer || payer.archived_at) {
+    if (!payer || !payer.is_active) {
       return NextResponse.json({ success: false, error: "Payer not found for this organization" }, { status: 400 });
+    }
+
+    // insurance_policies.payer_id still FKs to insurance_payers. Resolve or
+    // auto-create the corresponding insurance_payers row so the FK is satisfied
+    // while payer_profiles remains the authoritative admin-managed source.
+    const { data: existingIp } = await supabase
+      .from("insurance_payers")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("payer_id", payer.availity_payer_id)
+      .is("archived_at", null)
+      .maybeSingle();
+
+    let resolvedPayerId: string;
+    if (existingIp) {
+      resolvedPayerId = String(existingIp.id);
+    } else {
+      const { data: newIp, error: ipErr } = await supabase
+        .from("insurance_payers")
+        .insert({ organization_id: organizationId, payer_name: payer.payer_name, payer_id: payer.availity_payer_id })
+        .select("id")
+        .maybeSingle();
+      if (ipErr || !newIp) {
+        return NextResponse.json({ success: false, error: "Failed to sync payer record" }, { status: 500 });
+      }
+      resolvedPayerId = String(newIp.id);
     }
 
     // Default subscriber to the client themselves when the user didn't
@@ -199,7 +225,7 @@ export async function POST(
       return NextResponse.json({ success: false, error: existingErr.message }, { status: 500 });
     }
     if (existingActive) {
-      const samePayer = String(existingActive.payer_id) === payerId;
+      const samePayer = String(existingActive.payer_id) === resolvedPayerId;
       const sameMember =
         (existingActive.policy_number ?? "").trim() === policyNumber.trim();
       if (samePayer && sameMember) {
@@ -278,7 +304,7 @@ export async function POST(
       organization_id: organizationId,
       client_id: clientId,
       priority,
-      payer_id: payerId,
+      payer_id: resolvedPayerId,
       plan_name: s(body.planName),
       policy_number: policyNumber,
       group_number: s(body.groupNumber),

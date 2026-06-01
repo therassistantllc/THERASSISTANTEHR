@@ -524,6 +524,36 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
     setError(null);
     setMessage(null);
     try {
+      // Persist service lines and diagnoses to the DB before signing so the
+      // charge-capture service can read them from encounter_service_lines.
+      const billingRes = await fetch(`/api/encounters/${encounterId}/billing-details`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          organizationId,
+          diagnoses: diagnoses.map((d) => ({
+            diagnosis_code: d.diagnosis_code,
+            diagnosis_description: d.diagnosis_description,
+            is_primary: d.is_primary,
+          })),
+          serviceLines: serviceLines.map((s) => ({
+            service_date: s.service_date,
+            cpt_hcpcs_code: s.cpt_hcpcs_code,
+            modifier_1: s.modifier_1,
+            modifier_2: s.modifier_2,
+            modifier_3: s.modifier_3,
+            modifier_4: s.modifier_4,
+            units: s.units,
+            charge_amount: s.charge_amount,
+            place_of_service_code: s.place_of_service_code,
+          })),
+        }),
+      });
+      const billingJson = (await billingRes.json()) as { success?: boolean; error?: string };
+      if (!billingRes.ok || !billingJson.success) {
+        throw new Error(billingJson.error ?? "Failed to save service lines before signing");
+      }
+
       const codingReport = buildCodingReport({
         encounterId,
         answers: {},
@@ -869,7 +899,7 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
           </article>
           <SoapNoteEditor data={soapNote} onChange={setSoapNote} disabled={finalized} />
           <DiagnosisPicker diagnoses={diagnoses} onChange={setDiagnoses} disabled={finalized} />
-          <CptCodePanel serviceLines={serviceLines} onChange={setServiceLines} disabled={finalized} serviceDate={encounter.service_date || undefined} />
+          <CptCodePanel serviceLines={serviceLines} onChange={setServiceLines} disabled={finalized} serviceDate={encounter.service_date || undefined} organizationId={organizationId} />
           {summary.coverage?.isMedicaid && medicaidCodeTags.length > 0 ? (
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: "-0.75rem" }}>
               <span className="muted" style={{ fontSize: 12 }}>Suggested codes:</span>

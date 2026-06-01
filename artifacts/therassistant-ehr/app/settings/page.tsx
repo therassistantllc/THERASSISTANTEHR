@@ -1,75 +1,106 @@
 import Link from "next/link";
 
-const SETTINGS_SECTIONS = [
+type SettingsCard = {
+  label: string;
+  href: string;
+  description: string;
+};
+
+type SettingsSection = {
+  title: string;
+  cards: SettingsCard[];
+};
+
+const SETTINGS_SECTIONS: SettingsSection[] = [
   {
-    label: "Organizations",
-    href: "/settings/organizations",
-    description: "List, add, and edit your organizations — practice name, NPI, tax ID, billing address, and provider assignments.",
+    title: "Practice Setup",
+    cards: [
+      {
+        label: "Organization Profile",
+        href: "/settings/organization",
+        description: "Practice identity, organization records, and core profile settings.",
+      },
+      {
+        label: "Users & Provider Profiles",
+        href: "/settings/users",
+        description: "User access, clinician mappings, and provider profile management.",
+      },
+      {
+        label: "Service Locations",
+        href: "/settings/service-locations",
+        description: "Facilities, place-of-service setup, and location defaults.",
+      },
+    ],
   },
   {
-    label: "Users & Clinicians",
-    href: "/settings/users",
-    description: "All user accounts in one place, including clinician/provider user mapping and role access.",
+    title: "Billing Setup",
+    cards: [
+      {
+        label: "Payers",
+        href: "/settings/payers",
+        description: "Payer profiles, identifiers, and billing relationships.",
+      },
+      {
+        label: "Clearinghouse",
+        href: "/settings/clearinghouse",
+        description: "Clearinghouse credentials, connectivity, and submission plumbing.",
+      },
+      {
+        label: "Eligibility Setup",
+        href: "/settings/payer-enrollments",
+        description: "Eligibility enrollment configuration and payer-specific readiness.",
+      },
+      {
+        label: "ERA / Payment Setup",
+        href: "/billing/payments",
+        description: "Insurance payment workflows, ERA processing, and posting controls.",
+      },
+      {
+        label: "Billing Defaults",
+        href: "/settings/billing-defaults",
+        description: "Claiming defaults, billing rules, and coding baseline configuration.",
+      },
+    ],
   },
   {
-    label: "Clearinghouse / Availity",
-    href: "/settings/clearinghouse",
-    description: "Clearinghouse connection settings and test submission tools.",
+    title: "Operations",
+    cards: [
+      {
+        label: "Mailroom Routing",
+        href: "/settings/mailroom",
+        description: "Inbound document routing, filing behavior, and mailroom controls.",
+      },
+      {
+        label: "Patient Portal",
+        href: "/settings/portal",
+        description: "Portal messaging, access surfaces, and client-facing experience settings.",
+      },
+      {
+        label: "Workqueue Rules",
+        href: "/admin/payer-rules",
+        description: "Rule-driven workflow routing and payer-response automation behavior.",
+      },
+    ],
   },
   {
-    label: "Payer Profiles",
-    href: "/settings/payers",
-    description: "Payer IDs, enrollment status, and Availity payer mappings.",
-  },
-  {
-    label: "Service Locations",
-    href: "/settings/service-locations",
-    description: "Practice locations, place-of-service codes, and NPI assignments.",
-  },
-  {
-    label: "Billing Defaults",
-    href: "/settings/billing-defaults",
-    description: "Default diagnosis codes, fee schedules, and billing rules.",
-  },
-  {
-    label: "Patient Portal",
-    href: "/settings/portal",
-    description: "Edit and preview portal branding, welcome copy, and support messaging.",
-  },
-  {
-    label: "Reference Code Sets",
-    href: "/settings/code-sets",
-    description: "When ICD-10-CM, HCPCS, and CPT reference data were last loaded — flags stale releases.",
-  },
-  {
-    label: "Note Templates",
-    href: "/admin/note-templates",
-    description: "Pre-populated note scaffolding per service type or CPT so clinicians don't start from blank.",
-  },
-  {
-    label: "Payer Rules",
-    href: "/admin/payer-rules",
-    description: "Auto-flag claims when payers respond with specific RARC/CARC codes so billers can react faster.",
-  },
-  {
-    label: "Security & Access",
-    href: "/settings/security",
-    description: "Password policy, two-factor authentication, and audit logs.",
-  },
-  {
-    label: "Mail Room Settings",
-    href: "/settings/mailroom",
-    description: "Mail routing rules, document categories, and filing workflows.",
-  },
-  {
-    label: "System Readiness",
-    href: "/settings/system-readiness",
-    description: "Configuration checklist — verify the system is ready to generate and submit claims.",
-  },
-  {
-    label: "Settings Audit Log",
-    href: "/settings/audit-log",
-    description: "One place to see who changed any system setting — billing defaults, 277CA auto-routing, payer connections. Filter by setting, user, and date.",
+    title: "Oversight",
+    cards: [
+      {
+        label: "System Readiness",
+        href: "/settings/system-readiness",
+        description: "Operational readiness checks for claim generation and transmission.",
+      },
+      {
+        label: "Security",
+        href: "/settings/security",
+        description: "Access policy and security posture controls for administration.",
+      },
+      {
+        label: "Audit Log",
+        href: "/settings/audit-log",
+        description: "Trace setting changes and administrative events over time.",
+      },
+    ],
   },
 ];
 
@@ -79,23 +110,39 @@ export default function SettingsPage() {
       <section className="hero-panel">
         <div>
           <p className="eyebrow">Administration</p>
-          <h1>Practice Settings</h1>
-          <p className="hero-copy">Manage your practice configuration, users, credentialing, and billing defaults.</p>
+          <h1>Settings</h1>
+          <p className="hero-copy">
+            Configure practice, billing, and operations from one structured setup center.
+          </p>
         </div>
       </section>
 
-      <section className="metric-grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}>
-        {SETTINGS_SECTIONS.map((section) => (
-          <Link key={section.label} href={section.href} style={{ textDecoration: "none" }}>
-            <article className="metric-card" style={{ cursor: "pointer", minHeight: "96px" }}>
-              <strong>{section.label}</strong>
-              <span style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", marginTop: "4px" }}>
-                {section.description}
-              </span>
-            </article>
-          </Link>
-        ))}
-      </section>
+      {SETTINGS_SECTIONS.map((section) => (
+        <section key={section.title} style={{ marginTop: 20 }}>
+          <h2 style={{ marginBottom: 12 }}>{section.title}</h2>
+          <div
+            className="metric-grid"
+            style={{ gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}
+          >
+            {section.cards.map((card) => (
+              <Link key={card.label} href={card.href} style={{ textDecoration: "none" }}>
+                <article className="metric-card" style={{ cursor: "pointer", minHeight: "96px" }}>
+                  <strong>{card.label}</strong>
+                  <span
+                    style={{
+                      fontSize: "var(--text-sm)",
+                      color: "var(--text-secondary)",
+                      marginTop: "4px",
+                    }}
+                  >
+                    {card.description}
+                  </span>
+                </article>
+              </Link>
+            ))}
+          </div>
+        </section>
+      ))}
     </main>
   );
 }

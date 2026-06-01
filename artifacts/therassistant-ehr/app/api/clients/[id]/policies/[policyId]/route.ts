@@ -228,8 +228,8 @@ export async function PATCH(
     // policy lookup so we don't leak payer existence to other orgs.
     if (typeof update.payer_id === "string") {
       const { data: payer, error: payerError } = await supabase
-        .from("insurance_payers")
-        .select("id, organization_id, archived_at")
+        .from("payer_profiles")
+        .select("id, organization_id, is_active, payer_name, availity_payer_id")
         .eq("id", update.payer_id)
         .eq("organization_id", organizationId)
         .maybeSingle();
@@ -239,11 +239,35 @@ export async function PATCH(
           { status: 500 },
         );
       }
-      if (!payer || payer.archived_at) {
+      if (!payer || !payer.is_active) {
         return NextResponse.json(
           { success: false, error: "Payer not found for this organization" },
           { status: 400 },
         );
+      }
+      // Resolve payer_profiles → insurance_payers to satisfy the FK on insurance_policies
+      const { data: existingIp } = await supabase
+        .from("insurance_payers")
+        .select("id")
+        .eq("organization_id", organizationId)
+        .eq("payer_id", payer.availity_payer_id)
+        .is("archived_at", null)
+        .maybeSingle();
+      if (existingIp) {
+        update.payer_id = String(existingIp.id);
+      } else {
+        const { data: newIp, error: ipErr } = await supabase
+          .from("insurance_payers")
+          .insert({ organization_id: organizationId, payer_name: payer.payer_name, payer_id: payer.availity_payer_id })
+          .select("id")
+          .maybeSingle();
+        if (ipErr || !newIp) {
+          return NextResponse.json(
+            { success: false, error: "Failed to sync payer record" },
+            { status: 500 },
+          );
+        }
+        update.payer_id = String(newIp.id);
       }
     }
 
