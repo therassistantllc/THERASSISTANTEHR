@@ -1018,7 +1018,7 @@ export default function ChargeCaptureClient() {
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal header */}
-            <div style={{ background: "#0F2D63", color: "#fff", padding: "12px 20px", borderRadius: "10px 10px 0 0", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ background: "#1E293B", color: "#fff", padding: "12px 20px", borderRadius: "10px 10px 0 0", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <div>
                 <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase" }}>CMS-1500 Health Insurance Claim Form</div>
                 <div style={{ fontSize: 11, opacity: .7, marginTop: 2 }}>{editRow.client.name} · {editRow.payer?.name ?? "Unknown Payer"}</div>
@@ -1054,8 +1054,11 @@ export default function ChargeCaptureClient() {
                   <FieldBox label="11. Insured's Policy / Group #">
                     <ReadonlyVal>{editDetail.policy?.policyNumber ?? "—"}</ReadonlyVal>
                   </FieldBox>
-                  <FieldBox label="5. Insurance Plan / Program Name">
+                  <FieldBox label="11c. Insurance Plan or Program Name">
                     <ReadonlyVal>{editDetail.payer?.name ?? "—"}{editDetail.policy?.planName ? ` — ${editDetail.policy.planName}` : ""}</ReadonlyVal>
+                  </FieldBox>
+                  <FieldBox label="26. Patient Account No.">
+                    <ReadonlyVal>{editDetail.client?.accountNumber ?? "—"}</ReadonlyVal>
                   </FieldBox>
                 </div>
 
@@ -1107,7 +1110,7 @@ export default function ChargeCaptureClient() {
                       <span style={{ fontSize: 11, color: "#94A3B8" }}>11=Office · 02=Telehealth · 21=Inpatient</span>
                     </div>
                   </FieldBox>
-                  <FieldBox label="33. Rendering Provider NPI">
+                  <FieldBox label="33a. Billing Provider NPI (Rendering)">
                     <ReadonlyVal>{editDetail.provider?.npi ?? "—"}</ReadonlyVal>
                   </FieldBox>
                   <FieldBox label="31. Signature of Physician">
@@ -1142,7 +1145,7 @@ export default function ChargeCaptureClient() {
                           <td style={{ padding: 4, border: "1px solid #E2E8F0" }}><input type="text" value={sl.renderingProviderNpi} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], renderingProviderNpi:e.target.value}; setEditServiceLines(n); }} placeholder="NPI" style={slInputStyle(100)} /></td>
                           <td style={{ padding: 4, border: "1px solid #E2E8F0" }}><input type="text" value={sl.authorizationNumber} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], authorizationNumber:e.target.value}; setEditServiceLines(n); }} placeholder="Auth #" style={slInputStyle(90)} /></td>
                           <td style={{ padding: 4, border: "1px solid #E2E8F0", textAlign: "center" }}>
-                            <button type="button" onClick={() => setEditServiceLines((s) => s.filter((_, i) => i !== idx))} style={{ background: "none", border: "none", color: "#EF4444", cursor: "pointer", fontSize: 16, lineHeight: 1 }} title="Remove line">×</button>
+                            <button type="button" onClick={() => setEditServiceLines((s) => s.filter((_, i) => i !== idx))} style={{ background: "none", border: "none", color: "#64748B", cursor: "pointer", fontSize: 16, lineHeight: 1 }} title="Remove line">×</button>
                           </td>
                         </tr>
                       ))}
@@ -1180,7 +1183,7 @@ export default function ChargeCaptureClient() {
                     type="button"
                     disabled={editSaving}
                     onClick={() => void saveEdit()}
-                    style={{ padding: "8px 22px", borderRadius: 6, border: "none", background: "#0F2D63", color: "#fff", fontWeight: 700, fontSize: 14, cursor: editSaving ? "not-allowed" : "pointer" }}
+                    style={{ padding: "8px 22px", borderRadius: 6, border: "none", background: "#1E293B", color: "#fff", fontWeight: 700, fontSize: 14, cursor: editSaving ? "not-allowed" : "pointer" }}
                   >
                     {editSaving ? "Saving…" : "Save Charge"}
                   </button>

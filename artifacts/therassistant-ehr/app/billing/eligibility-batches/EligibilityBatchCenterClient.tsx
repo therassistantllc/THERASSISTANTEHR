@@ -60,6 +60,13 @@ export default function EligibilityBatchCenterClient() {
   const [importBatchId, setImportBatchId] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [diagnostics, setDiagnostics] = useState<{
+    totalAppointmentsInMonth: number;
+    excludedNoPolicyId: number;
+    excludedCanceledOrNoShow: number;
+    excludedAlreadyCheckedThisMonth: number;
+    includedCandidates: number;
+  } | null>(null);
 
   const selectedIds = useMemo(
     () => Object.entries(selected).filter(([, checked]) => checked).map(([id]) => id),
@@ -92,6 +99,7 @@ export default function EligibilityBatchCenterClient() {
 
       const rows = payload.candidates || [];
       setCandidates(rows);
+      setDiagnostics(payload.diagnostics ?? null);
 
       const nextSelected: Record<string, boolean> = {};
       for (const row of rows) {
@@ -221,6 +229,23 @@ export default function EligibilityBatchCenterClient() {
         {message ? (
           <div className="mt-4 rounded-md border bg-gray-50 p-3 text-sm text-gray-800">
             {message}
+          </div>
+        ) : null}
+
+        {diagnostics ? (
+          <div className="mt-4 rounded-md border border-gray-200 bg-gray-50 p-3">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Appointment Breakdown — {month}</p>
+            <div className="flex flex-wrap gap-4 text-sm">
+              <span><strong>{diagnostics.totalAppointmentsInMonth}</strong> total appointments in month</span>
+              <span className="text-gray-400">·</span>
+              <span><strong className="text-green-700">{diagnostics.includedCandidates}</strong> eligible candidates</span>
+              <span className="text-gray-400">·</span>
+              <span><strong className="text-amber-600">{diagnostics.excludedAlreadyCheckedThisMonth}</strong> already verified this month</span>
+              <span className="text-gray-400">·</span>
+              <span><strong className="text-amber-600">{diagnostics.excludedNoPolicyId}</strong> no insurance policy on file</span>
+              <span className="text-gray-400">·</span>
+              <span><strong className="text-amber-600">{diagnostics.excludedCanceledOrNoShow}</strong> canceled / no-show</span>
+            </div>
           </div>
         ) : null}
       </section>

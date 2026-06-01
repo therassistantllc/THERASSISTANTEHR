@@ -37,11 +37,71 @@ export async function GET(request: Request) {
 
     if (error) throw error;
 
+    // ── Diagnostic pass: explain why appointments may be excluded ──────────
+    // Run non-blocking; failures produce null diagnostics, not a 500.
+    let diagnostics: {
+      totalAppointmentsInMonth: number;
+      excludedNoPolicyId: number;
+      excludedCanceledOrNoShow: number;
+      excludedAlreadyCheckedThisMonth: number;
+      includedCandidates: number;
+    } | null = null;
+
+    try {
+      // Count all non-archived appointments in the month for this org
+      const { count: totalCount } = await supabase
+        .from("appointments")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", guard.organizationId)
+        .is("archived_at", null)
+        .gte("scheduled_start_at", `${monthStart}T00:00:00.000Z`)
+        .lt("scheduled_start_at", `${monthEndText}T00:00:00.000Z`);
+
+      // Count appointments missing an insurance policy link
+      const { count: noPolicyCount } = await supabase
+        .from("appointments")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", guard.organizationId)
+        .is("archived_at", null)
+        .is("insurance_policy_id", null)
+        .gte("scheduled_start_at", `${monthStart}T00:00:00.000Z`)
+        .lt("scheduled_start_at", `${monthEndText}T00:00:00.000Z`);
+
+      // Count canceled / no-show appointments
+      const { count: canceledCount } = await supabase
+        .from("appointments")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", guard.organizationId)
+        .is("archived_at", null)
+        .in("status", ["canceled", "no_show", "no-show"])
+        .gte("scheduled_start_at", `${monthStart}T00:00:00.000Z`)
+        .lt("scheduled_start_at", `${monthEndText}T00:00:00.000Z`);
+
+      // Count appointments that already have an eligibility check this month
+      const { count: alreadyCheckedCount } = await supabase
+        .from("eligibility_checks")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", guard.organizationId)
+        .gte("created_at", `${monthStart}T00:00:00.000Z`)
+        .lt("created_at", `${monthEndText}T00:00:00.000Z`);
+
+      diagnostics = {
+        totalAppointmentsInMonth: totalCount ?? 0,
+        excludedNoPolicyId: noPolicyCount ?? 0,
+        excludedCanceledOrNoShow: canceledCount ?? 0,
+        excludedAlreadyCheckedThisMonth: alreadyCheckedCount ?? 0,
+        includedCandidates: Array.isArray(data) ? data.length : 0,
+      };
+    } catch {
+      // Diagnostics are best-effort; do not fail the main response
+    }
+
     return NextResponse.json({
       success: true,
       month: monthStart,
       count: Array.isArray(data) ? data.length : 0,
       candidates: data ?? [],
+      ...(diagnostics ? { diagnostics } : {}),
     });
   } catch (error) {
     return NextResponse.json(

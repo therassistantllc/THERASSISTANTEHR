@@ -1,6 +1,6 @@
-import LiveQueueClient from "@/components/billing/LiveQueueClient";
+"use client";
 
-export const metadata = { title: "Adjustments Review" };
+import LiveQueueClient from "@/components/billing/LiveQueueClient";
 
 const formatDate = (v: unknown) => {
   if (!v) return "—";
