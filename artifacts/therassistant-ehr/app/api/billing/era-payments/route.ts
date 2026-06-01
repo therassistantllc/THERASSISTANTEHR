@@ -289,6 +289,18 @@ export async function GET(request: Request) {
       const patientResponsibility = money(payload.patient_responsibility);
       const casAdjustments = (Array.isArray(payload.adjustments) ? payload.adjustments : []) as CasAdjustment[];
       const serviceLines = (Array.isArray(payload.service_lines) ? payload.service_lines : []) as ServiceLine[];
+      const payloadPatientFirstName =
+        payload.patient_first_name === null || payload.patient_first_name === undefined
+          ? payload.patientFirstName
+          : payload.patient_first_name;
+      const payloadPatientLastName =
+        payload.patient_last_name === null || payload.patient_last_name === undefined
+          ? payload.patientLastName
+          : payload.patient_last_name;
+      const payloadPatientDisplayName = [payloadPatientFirstName, payloadPatientLastName]
+        .map((value) => (value == null ? "" : String(value).trim()))
+        .filter(Boolean)
+        .join(" ");
 
       return {
         id: row.id,
@@ -342,7 +354,12 @@ export async function GET(request: Request) {
               displayName:
                 [client.first_name, client.last_name].filter(Boolean).join(" ").trim() || "Unknown client",
             }
-          : null,
+          : payloadPatientDisplayName
+            ? {
+                id: null,
+                displayName: payloadPatientDisplayName,
+              }
+            : null,
         payer: { id: null, name: parsedPayerName ?? "Unknown payer" },
         checkNumber,
         importedAt: batch?.imported_at ?? null,

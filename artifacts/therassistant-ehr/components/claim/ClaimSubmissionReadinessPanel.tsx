@@ -126,7 +126,10 @@ export default function ClaimSubmissionReadinessPanel({
   }, [organizationId, claimId, encounterId]);
 
   useEffect(() => {
-    load();
+    const timer = setTimeout(() => {
+      void load();
+    }, 0);
+    return () => clearTimeout(timer);
   }, [load]);
 
   const sysFindings = useMemo(() => data?.systemReadiness.findings ?? [], [data]);

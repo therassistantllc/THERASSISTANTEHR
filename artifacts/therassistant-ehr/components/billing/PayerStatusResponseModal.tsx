@@ -115,30 +115,33 @@ export default function PayerStatusResponseModal({
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    fetch(
-      `/api/billing/claims/${claimId}/status-inquiries/${inquiryId}?organizationId=${encodeURIComponent(organizationId)}`,
-      { cache: "no-store" },
-    )
-      .then((r) => r.json())
-      .then((j) => {
-        if (cancelled) return;
-        if (j?.success === false) {
-          setError(j.error || "Failed to load inquiry");
-        } else {
-          setInquiry(j.inquiry as InquiryDetail);
-          setLines((j.lines ?? []) as InquiryDetailLine[]);
-        }
-        setLoading(false);
-      })
-      .catch((e) => {
-        if (cancelled) return;
-        setError(e instanceof Error ? e.message : "Failed");
-        setLoading(false);
-      });
+    const timer = setTimeout(() => {
+      setLoading(true);
+      setError(null);
+      fetch(
+        `/api/billing/claims/${claimId}/status-inquiries/${inquiryId}?organizationId=${encodeURIComponent(organizationId)}`,
+        { cache: "no-store" },
+      )
+        .then((r) => r.json())
+        .then((j) => {
+          if (cancelled) return;
+          if (j?.success === false) {
+            setError(j.error || "Failed to load inquiry");
+          } else {
+            setInquiry(j.inquiry as InquiryDetail);
+            setLines((j.lines ?? []) as InquiryDetailLine[]);
+          }
+          setLoading(false);
+        })
+        .catch((e) => {
+          if (cancelled) return;
+          setError(e instanceof Error ? e.message : "Failed");
+          setLoading(false);
+        });
+    }, 0);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [claimId, inquiryId, organizationId]);
 

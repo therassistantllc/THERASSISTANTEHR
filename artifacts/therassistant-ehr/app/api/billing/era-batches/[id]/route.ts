@@ -190,6 +190,18 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
           row.raw_item_payload && typeof row.raw_item_payload === "object"
             ? (row.raw_item_payload as Record<string, unknown>)
             : {};
+        const payloadPatientFirstName =
+          payload.patient_first_name === null || payload.patient_first_name === undefined
+            ? payload.patientFirstName
+            : payload.patient_first_name;
+        const payloadPatientLastName =
+          payload.patient_last_name === null || payload.patient_last_name === undefined
+            ? payload.patientLastName
+            : payload.patient_last_name;
+        const payloadPatientDisplayName = [payloadPatientFirstName, payloadPatientLastName]
+          .map((value) => (value == null ? "" : String(value).trim()))
+          .filter(Boolean)
+          .join(" ");
         const cas = asArray<{ groupCode?: string; reasonCode?: string; amount?: number }>(
           payload.adjustments,
         );
@@ -275,7 +287,12 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
                   [client.first_name, client.last_name].filter(Boolean).join(" ").trim() ||
                   "Unknown client",
               }
-            : null,
+            : payloadPatientDisplayName
+              ? {
+                  id: null,
+                  displayName: payloadPatientDisplayName,
+                }
+              : null,
           validation,
           suggestions: allSuggestions,
           createdAt: row.created_at,

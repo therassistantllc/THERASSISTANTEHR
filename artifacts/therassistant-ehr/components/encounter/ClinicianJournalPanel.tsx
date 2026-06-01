@@ -96,7 +96,10 @@ export default function ClinicianJournalPanel({
   }, [clientId, organizationId, since, windowSinceLastSigned, excludeEncounterId, mode]);
 
   useEffect(() => {
-    void load();
+    const timer = setTimeout(() => {
+      void load();
+    }, 0);
+    return () => clearTimeout(timer);
   }, [load]);
 
   const visible = useMemo(

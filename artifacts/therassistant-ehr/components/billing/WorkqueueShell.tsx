@@ -310,7 +310,14 @@ export default function WorkqueueShell<TRow>(props: WorkqueueShellProps<TRow>) {
   // programmatically jump the user to a specific tab (e.g. "Fix claim"
   // focusing the 837P field checklist) without losing the default UX
   // for queues that don't need that control.
-  const activeTabId = activeDetailTabId ?? internalActiveTabId;
+  const requestedTabId = activeDetailTabId ?? internalActiveTabId;
+  const activeTabId = useMemo(() => {
+    if (!detailTabs || detailTabs.length === 0) return null;
+    if (requestedTabId && detailTabs.some((t) => t.id === requestedTabId)) {
+      return requestedTabId;
+    }
+    return detailTabs[0].id;
+  }, [detailTabs, requestedTabId]);
   const setActiveTabId = useCallback(
     (id: string) => {
       setInternalActiveTabId(id);
@@ -318,16 +325,6 @@ export default function WorkqueueShell<TRow>(props: WorkqueueShellProps<TRow>) {
     },
     [onDetailTabChange],
   );
-
-  useEffect(() => {
-    if (!detailTabs || detailTabs.length === 0) {
-      setInternalActiveTabId(null);
-      return;
-    }
-    if (!activeTabId || !detailTabs.some((t) => t.id === activeTabId)) {
-      setInternalActiveTabId(detailTabs[0].id);
-    }
-  }, [detailTabs, activeTabId]);
 
   const activeTab = useMemo(
     () => detailTabs?.find((t) => t.id === activeTabId) ?? null,

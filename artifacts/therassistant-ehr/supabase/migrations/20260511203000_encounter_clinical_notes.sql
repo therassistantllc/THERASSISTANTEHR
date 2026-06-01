@@ -1,3 +1,4 @@
+
 create extension if not exists pgcrypto;
 
 create table if not exists public.encounter_clinical_notes (

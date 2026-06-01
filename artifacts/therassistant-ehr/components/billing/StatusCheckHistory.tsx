@@ -57,29 +57,32 @@ export default function StatusCheckHistory({
 
   useEffect(() => {
     let cancelled = false;
-    setInquiries(null);
-    setTransactions([]);
-    setError(null);
-    fetch(
-      `/api/billing/claims/${claimId}/status-inquiries?organizationId=${encodeURIComponent(organizationId)}`,
-      { cache: "no-store" },
-    )
-      .then((r) => r.json())
-      .then((j) => {
-        if (cancelled) return;
-        if (j?.success === false) {
-          setError(j.error || "Failed to load status check history");
-          setInquiries([]);
-          return;
-        }
-        setInquiries((j?.inquiries ?? []) as Inquiry[]);
-        setTransactions((j?.transactions ?? []) as EdiTx[]);
-      })
-      .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : "Failed");
-      });
+    const timer = setTimeout(() => {
+      setInquiries(null);
+      setTransactions([]);
+      setError(null);
+      fetch(
+        `/api/billing/claims/${claimId}/status-inquiries?organizationId=${encodeURIComponent(organizationId)}`,
+        { cache: "no-store" },
+      )
+        .then((r) => r.json())
+        .then((j) => {
+          if (cancelled) return;
+          if (j?.success === false) {
+            setError(j.error || "Failed to load status check history");
+            setInquiries([]);
+            return;
+          }
+          setInquiries((j?.inquiries ?? []) as Inquiry[]);
+          setTransactions((j?.transactions ?? []) as EdiTx[]);
+        })
+        .catch((e) => {
+          if (!cancelled) setError(e instanceof Error ? e.message : "Failed");
+        });
+    }, 0);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [claimId, organizationId, bumpKey]);
 
