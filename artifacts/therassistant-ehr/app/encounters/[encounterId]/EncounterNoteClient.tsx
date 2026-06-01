@@ -89,6 +89,17 @@ type EncounterMailroomDocument = {
   mailroomItemId: string | null;
 };
 
+function formatDocumentTypeLabel(value: string | null | undefined): string {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) return "—";
+  if (normalized === "coding_report") return "Coding report PDF";
+  return normalized
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 export default function EncounterNoteClient({ encounterId }: { encounterId: string }) {
   const router = useRouter();
   const organizationId = useMemo(() => getOrganizationId(), []);
@@ -298,6 +309,11 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
       cancelled = true;
     };
   }, [encounterId, organizationId]);
+
+  const visibleMailroomDocs = useMemo(
+    () => mailroomDocs.filter((doc) => Boolean(doc.mailroomItemId) || doc.type === "coding_report"),
+    [mailroomDocs],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -792,7 +808,7 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
           </article>
           <article className="panel">
             <h2>Mailroom Documents</h2>
-            {mailroomDocs.length === 0 ? (
+            {visibleMailroomDocs.length === 0 ? (
               <p className="muted" style={{ margin: 0 }}>
                 No mailroom documents have been filed to this encounter yet.
               </p>
@@ -807,7 +823,7 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
                   </tr>
                 </thead>
                 <tbody>
-                  {mailroomDocs.map((doc) => {
+                  {visibleMailroomDocs.map((doc) => {
                     const href = doc.mailroomItemId
                       ? `/mailroom/${doc.mailroomItemId}?organizationId=${encodeURIComponent(organizationId)}`
                       : null;
@@ -819,7 +835,7 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
                             <div className="muted" style={{ fontSize: 12 }}>{doc.fileName}</div>
                           ) : null}
                         </td>
-                        <td>{doc.type ?? "—"}</td>
+                        <td>{formatDocumentTypeLabel(doc.type)}</td>
                         <td>{formatDate(doc.filedAt ?? doc.createdAt)}</td>
                         <td style={{ textAlign: "right" }}>
                           {href ? (

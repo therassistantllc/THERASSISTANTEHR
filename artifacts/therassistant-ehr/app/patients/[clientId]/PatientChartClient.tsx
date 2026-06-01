@@ -353,6 +353,17 @@ function statusClass(value: string | null | undefined) {
   return "status";
 }
 
+function formatDocumentTypeLabel(value: string | null | undefined): string {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) return "—";
+  if (normalized === "coding_report") return "Coding report PDF";
+  return normalized
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 type DemographicAuditEntry = {
   id: string;
   createdAt: string;
@@ -2241,7 +2252,7 @@ export default function PatientChartClient({
       <section className="panel" style={{ marginBottom: "16px" }}>
         <h2>Mailroom Documents</h2>
         {(() => {
-          const mailroomDocs = details.documents.filter((d) => !!d.mailroomItemId);
+          const mailroomDocs = details.documents.filter((d) => !!d.mailroomItemId || d.type === "coding_report");
           if (mailroomDocs.length === 0) {
             return (
               <p className="muted" style={{ margin: 0 }}>
@@ -2272,7 +2283,7 @@ export default function PatientChartClient({
                           <div className="muted" style={{ fontSize: 12 }}>{doc.fileName}</div>
                         ) : null}
                       </td>
-                      <td>{doc.type ?? dash}</td>
+                      <td>{formatDocumentTypeLabel(doc.type)}</td>
                       <td>{doc.filedAt ? formatDate(doc.filedAt) : (doc.createdAt ? formatDate(doc.createdAt) : dash)}</td>
                       <td style={{ textAlign: "right" }}>
                         {href ? (
