@@ -184,7 +184,7 @@ export default function AppSidebarNav() {
   const pathname = usePathname();
 
   const adminActive = active(pathname, ["/settings", "/admin"]);
-  const billingGroupActive = pathname.startsWith("/billing") && !pathname.startsWith("/billing/reports");
+  const billingGroupActive = pathname.startsWith("/billing");
   const billingRouteActive = pathname.startsWith("/billing");
   const paymentsActive = PAYMENTS_PREFIXES.some((p) => pathname.startsWith(p));
 
@@ -202,7 +202,7 @@ export default function AppSidebarNav() {
       {/* ── HOME ─────────────────────────────────────────────── */}
       <div className={styles.navSection}>Home</div>
 
-      <NavLink href="/calendar" icon={<CalendarIcon />} label="Schedule" prefixes={["/calendar", "/clinician/agenda"]} exact={pathname === "/"} pathname={pathname} />
+      <NavLink href="/calendar" icon={<CalendarIcon />} label="Schedule" prefixes={["/calendar", "/clinician/agenda"]} pathname={pathname} />
       <NavLink href="/clients" icon={<UsersIcon />} label="Clients" prefixes={["/clients", "/patients"]} pathname={pathname} />
       <NavLink href="/inbox" icon={<TasksIcon />} label="Inbox" prefixes={["/inbox"]} pathname={pathname} />
       <NavLink href="/chat" icon={<ChatIcon />} label="Chat" prefixes={["/chat"]} pathname={pathname} />
@@ -227,7 +227,8 @@ export default function AppSidebarNav() {
         <div className={styles.subnav}>
           <SubNavLinkIcon href="/billing/my-inbox" icon={<TasksIcon />} label="Dashboard" prefixes={["/billing/my-inbox", "/billing/executive-priority"]} pathname={pathname} badge={<MyInboxBadge />} />
           <SubNavLinkIcon href="/billing/charge-capture" icon={<ClipboardIcon />} label="Charges" prefixes={["/billing/charge-capture", "/billing/charges"]} pathname={pathname} />
-          <SubNavLinkIcon href="/billing/claims" icon={<ClipboardIcon />} label="Claims" prefixes={["/billing/claims", "/billing/documentation-pending", "/billing/no-response", "/billing/claim-readiness", "/billing/837p-batches", "/billing/batches", "/billing/claim-edit-dashboard", "/billing/duplicate-claim-review", "/billing/rejections-999", "/billing/rejections-277ca", "/billing/resubmissions", "/billing/corrected-claims", "/billing/submitted-claims", "/billing/payer-received", "/billing/appeals", "/billing/cob-issues", "/billing/secondary-billing", "/billing/transmission-failures", "/billing/claim-build-errors", "/billing/claim-hold", "/billing/ready-to-generate", "/billing/eligibility-issues", "/billing/authorization-required", "/billing/provider-enrollment-issues", "/billing/adjustments-review", "/billing/audit-queue", "/billing/compliance-audit", "/billing/compliance-holds", "/billing/orphaned-batches", "/billing/blocked-claims"]} pathname={pathname} />
+          <SubNavLinkIcon href="/billing/eligibility-batches" icon={<ShieldIcon />} label="Eligibility" prefixes={["/billing/eligibility-batches", "/billing/eligibility-issues"]} pathname={pathname} />
+          <SubNavLinkIcon href="/billing/claims" icon={<ClipboardIcon />} label="Claims" prefixes={["/billing/claims", "/billing/documentation-pending", "/billing/no-response", "/billing/claim-readiness", "/billing/837p-batches", "/billing/batches", "/billing/claim-edit-dashboard", "/billing/duplicate-claim-review", "/billing/rejections-999", "/billing/rejections-277ca", "/billing/resubmissions", "/billing/corrected-claims", "/billing/submitted-claims", "/billing/payer-received", "/billing/appeals", "/billing/cob-issues", "/billing/secondary-billing", "/billing/transmission-failures", "/billing/claim-build-errors", "/billing/claim-hold", "/billing/ready-to-generate", "/billing/authorization-required", "/billing/provider-enrollment-issues", "/billing/adjustments-review", "/billing/audit-queue", "/billing/compliance-audit", "/billing/compliance-holds", "/billing/orphaned-batches", "/billing/blocked-claims"]} pathname={pathname} />
           <SubNavLinkIcon href="/billing/denials" icon={<XCircleIcon />} label="Denials" prefixes={["/billing/denials", "/billing/denials-by-carc", "/billing/denials-by-rarc", "/billing/partial-denials", "/billing/underpayments", "/billing/timely-filing", "/billing/medical-necessity", "/billing/medical-review", "/billing/aging", "/billing/payer-rejections", "/billing/claim-submission"]} pathname={pathname} />
 
           {/* ── Payments submenu ───────────────────────────────────── */}
@@ -276,7 +277,7 @@ export default function AppSidebarNav() {
           <SubNavLinkIcon href="/settings/payers" icon={<ShieldIcon />} label="Payers" prefixes={["/settings/payers"]} pathname={pathname} />
           <SubNavLinkIcon href="/settings/portal" icon={<UserCheckIcon />} label="Patient Portal" prefixes={["/settings/portal"]} pathname={pathname} />
           <SubNavLinkIcon href="/settings/security" icon={<LockIcon />} label="Security" prefixes={["/settings/security"]} pathname={pathname} />
-          <SubNavLinkIcon href="/settings/system-readiness" icon={<GearIcon />} label="Settings" prefixes={["/settings/system-readiness", "/settings/service-locations", "/settings/billing-defaults", "/settings/clearinghouse", "/settings/trading-partner", "/settings/payer-enrollments", "/settings/baa", "/settings/mailroom", "/admin"]} pathname={pathname} />
+          <SubNavLinkIcon href="/settings/system-readiness" icon={<GearIcon />} label="System Setup" prefixes={["/settings/system-readiness", "/settings/service-locations", "/settings/billing-defaults", "/settings/clearinghouse", "/settings/trading-partner", "/settings/payer-enrollments", "/settings/baa", "/settings/mailroom", "/admin"]} pathname={pathname} />
         </div>
       ) : null}
 
