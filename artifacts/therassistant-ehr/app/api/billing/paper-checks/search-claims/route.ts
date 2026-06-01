@@ -118,8 +118,8 @@ export async function GET(request: Request) {
           : Promise.resolve({ data: [] as DbRow[] }),
         claimIds.length
           ? (supabase as any)
-              .from("claim_service_lines")
-              .select("claim_id, service_date")
+            .from("professional_claim_service_lines")
+            .select("claim_id, service_date_from")
               .in("claim_id", claimIds)
           : Promise.resolve({ data: [] as DbRow[] }),
       ]);
@@ -141,7 +141,7 @@ export async function GET(request: Request) {
     const dosByClaim = new Map<string, { from: string | null; to: string | null }>();
     for (const r of ((serviceLineRows ?? []) as DbRow[])) {
       const cid = text(r.claim_id);
-      const d = (r.service_date as string | null) ?? null;
+      const d = (r.service_date_from as string | null) ?? null;
       if (!d) continue;
       const existing = dosByClaim.get(cid);
       if (!existing) {
