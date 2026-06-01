@@ -32,7 +32,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
 
     const [clientRes, providerRes, policyRes, apptRes, encRes, eligRes] = await Promise.all([
       charge.client_id
-        ? supabase.from("clients").select("id, first_name, last_name, date_of_birth, mrn").eq("id", charge.client_id).maybeSingle()
+        ? supabase.from("clients").select("id, first_name, last_name, date_of_birth, mrn, address_line_1, address_line_2, city, state, postal_code").eq("id", charge.client_id).maybeSingle()
         : Promise.resolve({ data: null }),
       charge.provider_id
         ? supabase.from("providers").select("id, display_name, first_name, last_name, credential, npi").eq("id", charge.provider_id).maybeSingle()
@@ -59,9 +59,34 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
         : Promise.resolve({ data: null }),
     ]);
 
+    // Fetch billing provider (is_billing_provider=true) and subscriber (for relationship_to_client)
+      const policyEarly = policyRes.data as DbRow | null;
+
+    const [billingProviderRes, subscriberRes] = await Promise.all([
+      (supabase as any)
+        .from("providers")
+        .select("id, display_name, first_name, last_name, npi, taxonomy_code")
+        .eq("organization_id", organizationId)
+        .eq("is_billing_provider", true)
+        .eq("is_active", true)
+        .is("archived_at", null)
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .maybeSingle(),
+      policyEarly?.subscriber_id
+        ? (supabase as any)
+            .from("insurance_subscribers")
+            .select("id, first_name, last_name, date_of_birth, member_id, relationship_to_client")
+            .eq("id", policyEarly.subscriber_id)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
+    ]);
+    const billingProvider = (billingProviderRes as { data: DbRow | null }).data;
+    const subscriber = (subscriberRes as { data: DbRow | null }).data;
+
     const client = clientRes.data as DbRow | null;
     const provider = providerRes.data as DbRow | null;
-    const policy = policyRes.data as DbRow | null;
+    const policy = policyEarly;
     const appointment = (apptRes as { data: DbRow | null }).data;
     const encounter = (encRes as { data: DbRow | null }).data;
     const eligibility = (eligRes as { data: DbRow | null }).data;
@@ -95,6 +120,23 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
             displayName: [client.first_name, client.last_name].map(text).filter(Boolean).join(", "),
             dateOfBirth: client.date_of_birth ?? null,
             accountNumber: text(client.mrn) || null,
+          }
+        : null,
+      clientAddress: client
+        ? {
+            line1: text(client.address_line_1) || null,
+            line2: text(client.address_line_2) || null,
+            city: text(client.city) || null,
+            state: text(client.state) || null,
+            postalCode: text(client.postal_code) || null,
+          }
+        : null,
+      subscriberRelationship: subscriber ? (text(subscriber.relationship_to_client) || "self") : null,
+      billingProvider: billingProvider
+        ? {
+            displayName: text(billingProvider.display_name) || [billingProvider.first_name, billingProvider.last_name].map(text).filter(Boolean).join(" "),
+            npi: text(billingProvider.npi) || null,
+            taxonomyCode: text(billingProvider.taxonomy_code) || null,
           }
         : null,
       provider: provider

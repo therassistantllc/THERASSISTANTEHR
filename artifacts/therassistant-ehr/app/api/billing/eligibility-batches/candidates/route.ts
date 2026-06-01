@@ -37,6 +37,118 @@ export async function GET(request: Request) {
 
     if (error) throw error;
 
+    // ── Policy fallback: appointments with insurance_policy_id = null ────────
+    // The RPC filters WHERE insurance_policy_id IS NOT NULL, so these are missed.
+    // For each such appointment we look up the client's active primary policy and
+    // synthesize a candidate row so the batch center can still run eligibility.
+    let fallbackCandidates: typeof data = [];
+    let fallbackCount = 0;
+
+    try {
+      const { data: nullPolicyAppts } = await (supabase as any)
+        .from("appointments")
+        .select("id, client_id, provider_id, scheduled_start_at")
+        .eq("organization_id", guard.organizationId)
+        .is("archived_at", null)
+        .is("insurance_policy_id", null)
+        .not("status", "in", '("canceled","no_show","no-show")')
+        .gte("scheduled_start_at", `${monthStart}T00:00:00.000Z`)
+        .lt("scheduled_start_at", `${monthEndText}T00:00:00.000Z`);
+
+      if (Array.isArray(nullPolicyAppts) && nullPolicyAppts.length > 0) {
+        // Collect unique client IDs to batch-fetch policies
+        const clientIds: string[] = [...new Set<string>(nullPolicyAppts.map((a: any) => a.client_id).filter(Boolean))];
+
+        // Fetch active policies for all those clients (prefer primary)
+        const { data: policies } = await (supabase as any)
+          .from("insurance_policies")
+          .select("id, client_id, payer_id, plan_name, policy_number, subscriber_id, priority, active_flag, archived_at")
+          .eq("organization_id", guard.organizationId)
+          .in("client_id", clientIds)
+          .eq("active_flag", true)
+          .is("archived_at", null);
+
+        // Map clientId → best policy (primary preferred, else first active)
+        const policyByClient = new Map<string, any>();
+        if (Array.isArray(policies)) {
+          for (const p of policies) {
+            const existing = policyByClient.get(p.client_id);
+            if (!existing || p.priority === "primary") {
+              policyByClient.set(p.client_id, p);
+            }
+          }
+        }
+
+        // Collect payer IDs we need
+        const payerIds = [...new Set<string>([...policyByClient.values()].map((p: any) => p.payer_id).filter(Boolean))];
+        const subscriberIds = [...new Set<string>([...policyByClient.values()].map((p: any) => p.subscriber_id).filter(Boolean))];
+
+        // Batch-fetch payers and subscribers
+        const [{ data: payers }, { data: subscribers }, { data: clients }] = await Promise.all([
+          payerIds.length > 0
+            ? (supabase as any).from("insurance_payers").select("id, payer_name, electronic_payer_id").in("id", payerIds)
+            : Promise.resolve({ data: [] }),
+          subscriberIds.length > 0
+            ? (supabase as any).from("insurance_subscribers").select("id, first_name, last_name, date_of_birth, member_id, relationship_to_client").in("id", subscriberIds)
+            : Promise.resolve({ data: [] }),
+          (supabase as any).from("clients").select("id, first_name, last_name, date_of_birth").in("id", clientIds),
+        ]);
+
+        const payerMap = new Map<string, any>((payers ?? []).map((p: any) => [p.id, p]));
+        const subMap = new Map<string, any>((subscribers ?? []).map((s: any) => [s.id, s]));
+        const clientMap = new Map<string, any>((clients ?? []).map((c: any) => [c.id, c]));
+
+        // Fetch provider names in batch (for rendering provider)
+        const providerIds = [...new Set<string>(nullPolicyAppts.map((a: any) => a.provider_id).filter(Boolean))];
+        const { data: providerRows } = providerIds.length > 0
+          ? await (supabase as any).from("providers").select("id, display_name, first_name, last_name").in("id", providerIds)
+          : { data: [] };
+        const providerMap = new Map<string, any>((providerRows ?? []).map((p: any) => [p.id, p]));
+
+        // Build synthetic candidates — only for appointments where client has exactly 1 resolvable policy
+        const existingApptIds = new Set<string>((Array.isArray(data) ? data : []).map((c: any) => c.appointment_id));
+
+        for (const appt of nullPolicyAppts) {
+          if (existingApptIds.has(appt.id)) continue; // RPC already included it somehow
+          const policy = policyByClient.get(appt.client_id);
+          if (!policy) continue; // no active policy found — truly excluded
+          const payer = payerMap.get(policy.payer_id);
+          if (!payer) continue; // no payer resolved
+          const subscriber = subMap.get(policy.subscriber_id);
+          const client = clientMap.get(appt.client_id);
+          const provider = providerMap.get(appt.provider_id);
+          const providerName = provider
+            ? (provider.display_name || [provider.first_name, provider.last_name].filter(Boolean).join(" "))
+            : null;
+
+          fallbackCandidates.push({
+            appointment_id: appt.id,
+            client_id: appt.client_id,
+            insurance_policy_id: policy.id,
+            payer_id: policy.payer_id,
+            payer_name: payer.payer_name ?? null,
+            electronic_payer_id: payer.electronic_payer_id ?? null,
+            service_date: appt.scheduled_start_at ? appt.scheduled_start_at.slice(0, 10) : null,
+            client_first_name: client?.first_name ?? null,
+            client_last_name: client?.last_name ?? null,
+            client_dob: client?.date_of_birth ?? null,
+            subscriber_first_name: subscriber?.first_name ?? client?.first_name ?? null,
+            subscriber_last_name: subscriber?.last_name ?? client?.last_name ?? null,
+            subscriber_dob: subscriber?.date_of_birth ?? null,
+            subscriber_member_id: subscriber?.member_id ?? policy.policy_number ?? null,
+            relationship_to_client: subscriber?.relationship_to_client ?? "self",
+            provider_name: providerName ?? null,
+            _fallback: true,
+          });
+          fallbackCount++;
+        }
+      }
+    } catch {
+      // Fallback is best-effort; do not fail the main response
+    }
+
+    const allCandidates = [...(Array.isArray(data) ? data : []), ...fallbackCandidates];
+
     // ── Diagnostic pass: explain why appointments may be excluded ──────────
     // Run non-blocking; failures produce null diagnostics, not a 500.
     let diagnostics: {
@@ -45,6 +157,7 @@ export async function GET(request: Request) {
       excludedCanceledOrNoShow: number;
       excludedAlreadyCheckedThisMonth: number;
       includedCandidates: number;
+     usedClientPolicyFallback?: number;
     } | null = null;
 
     try {
@@ -90,7 +203,8 @@ export async function GET(request: Request) {
         excludedNoPolicyId: noPolicyCount ?? 0,
         excludedCanceledOrNoShow: canceledCount ?? 0,
         excludedAlreadyCheckedThisMonth: alreadyCheckedCount ?? 0,
-        includedCandidates: Array.isArray(data) ? data.length : 0,
+        includedCandidates: allCandidates.length,
+        ...(fallbackCount > 0 ? { usedClientPolicyFallback: fallbackCount } : {}),
       };
     } catch {
       // Diagnostics are best-effort; do not fail the main response
@@ -99,8 +213,8 @@ export async function GET(request: Request) {
     return NextResponse.json({
       success: true,
       month: monthStart,
-      count: Array.isArray(data) ? data.length : 0,
-      candidates: data ?? [],
+      count: allCandidates.length,
+      candidates: allCandidates,
       ...(diagnostics ? { diagnostics } : {}),
     });
   } catch (error) {

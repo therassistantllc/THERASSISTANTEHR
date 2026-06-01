@@ -586,6 +586,68 @@ function CancelModal({
   );
 }
 
+
+function VoidModal({
+  row,
+  organizationId,
+  onClose,
+  onDone,
+}: {
+  row: HoldRow;
+  organizationId: string;
+  onClose: () => void;
+  onDone: (message: string) => void;
+}) {
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/billing/claims/${row.id}/void`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ organizationId, reason }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error ?? "Failed");
+      onDone(`Claim ${row.claimNumber} voided and archived`);
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <ModalShell title={`Void & archive — ${row.patientName}`} onClose={onClose}>
+      <p style={{ color: "#B91C1C", fontSize: 13, margin: "0 0 12px" }}>
+        This permanently archives the claim. It will be hidden from all queues and cannot be resubmitted.
+        Submitted or paid claims retain all data for audit purposes.
+      </p>
+      <label style={fieldLabel}>Reason (optional)</label>
+      <textarea
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        rows={3}
+        style={fieldInput}
+      />
+      {error ? <div style={{ color: "#B91C1C", marginTop: 8, fontSize: 13 }}>{error}</div> : null}
+      <div style={buttonRow}>
+        <button type="button" className="button button-secondary" onClick={onClose} disabled={saving}>
+          Keep claim
+        </button>
+        <button type="button" className="button" onClick={save} disabled={saving} style={{ background: "#7F1D1D", color: "#fff" }}>
+          {saving ? "Voiding…" : "Void & archive"}
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
+
 // ─── Detail panel sections ────────────────────────────────────────────────────
 
 function DetailKV({ label, value }: { label: string; value: React.ReactNode }) {
@@ -703,6 +765,7 @@ export default function ClaimHoldClient() {
   const [assignRow, setAssignRow] = useState<HoldRow | null>(null);
   const [noteRow, setNoteRow] = useState<HoldRow | null>(null);
   const [cancelRow, setCancelRow] = useState<HoldRow | null>(null);
+    const [voidRow, setVoidRow] = useState<HoldRow | null>(null);
   const [notesBumpKey, setNotesBumpKey] = useState(0);
   const docUploads = useClaimDocumentUploads(organizationId);
 
@@ -960,6 +1023,7 @@ export default function ClaimHoldClient() {
       { id: "assign", label: "Assign", onClick: (r) => setAssignRow(r) },
       { id: "note", label: "Add note", onClick: (r) => setNoteRow(r) },
       { id: "cancel", label: "Cancel claim", variant: "danger", onClick: (r) => setCancelRow(r) },
+      { id: "void", label: "Void & archive", variant: "danger", onClick: (r) => setVoidRow(r) },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
@@ -1076,6 +1140,13 @@ export default function ClaimHoldClient() {
           label: "Cancel claim",
           variant: "danger" as const,
           onClick: () => setCancelRow(selectedRow),
+        },
+      ]
+        {
+          id: "void",
+          label: "Void & archive",
+          variant: "danger" as const,
+          onClick: () => setVoidRow(selectedRow),
         },
       ]
     : [];
@@ -1245,6 +1316,17 @@ export default function ClaimHoldClient() {
           onClose={() => setCancelRow(null)}
           onDone={(msg) => {
             removeRow(cancelRow.id);
+            setToast(msg);
+          }}
+        />
+      ) : null}
+      {voidRow ? (
+        <VoidModal
+          row={voidRow}
+          organizationId={organizationId}
+          onClose={() => setVoidRow(null)}
+          onDone={(msg) => {
+            removeRow(voidRow.id);
             setToast(msg);
           }}
         />

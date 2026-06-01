@@ -129,6 +129,19 @@ interface ChargeDetail {
     renderingProviderNpi: string | null;
     authorizationNumber: string | null;
   }>;
+  clientAddress: {
+    line1: string | null;
+    line2: string | null;
+    city: string | null;
+    state: string | null;
+    postalCode: string | null;
+  } | null;
+  subscriberRelationship: string | null;
+  billingProvider: {
+    displayName: string;
+    npi: string | null;
+    taxonomyCode: string | null;
+  } | null;
 }
 
 interface EditSL {
@@ -1062,6 +1075,20 @@ export default function ChargeCaptureClient() {
                   </FieldBox>
                 </div>
 
+                {/* ── Patient address & relationship ── */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+                  <FieldBox label="5. Patient's Address">
+                    <ReadonlyVal>
+                      {editDetail.clientAddress?.line1
+                        ? [editDetail.clientAddress.line1, editDetail.clientAddress.line2, editDetail.clientAddress.city && `${editDetail.clientAddress.city}, ${editDetail.clientAddress.state} ${editDetail.clientAddress.postalCode}`].filter(Boolean).join(" · ")
+                        : "—"}
+                    </ReadonlyVal>
+                  </FieldBox>
+                  <FieldBox label="6. Patient Relationship to Insured">
+                    <ReadonlyVal>{editDetail.subscriberRelationship ?? "self"}</ReadonlyVal>
+                  </FieldBox>
+                </div>
+
                 {/* ── Section B: Physician / Supplier ── */}
                 <SectionHeader>Physician / Supplier Information</SectionHeader>
 
@@ -1110,8 +1137,17 @@ export default function ChargeCaptureClient() {
                       <span style={{ fontSize: 11, color: "#94A3B8" }}>11=Office · 02=Telehealth · 21=Inpatient</span>
                     </div>
                   </FieldBox>
-                  <FieldBox label="33a. Billing Provider NPI (Rendering)">
-                    <ReadonlyVal>{editDetail.provider?.npi ?? "—"}</ReadonlyVal>
+                  <FieldBox label="33a. Billing Provider NPI">
+                    <ReadonlyVal>{editDetail.billingProvider?.npi ?? editDetail.provider?.npi ?? "—"}</ReadonlyVal>
+                  </FieldBox>
+                  <FieldBox label="33b. Billing Provider Taxonomy">
+                    <ReadonlyVal>{editDetail.billingProvider?.taxonomyCode ?? "—"}</ReadonlyVal>
+                  </FieldBox>
+                  <FieldBox label="33. Billing Provider Name">
+                    <ReadonlyVal>{editDetail.billingProvider?.displayName ?? "—"}</ReadonlyVal>
+                  </FieldBox>
+                  <FieldBox label="25. Federal Tax ID">
+                    <ReadonlyVal>on file</ReadonlyVal>
                   </FieldBox>
                   <FieldBox label="31. Signature of Physician">
                     <ReadonlyVal>{editDetail.provider?.displayName ?? "—"}{editDetail.provider?.credential ? `, ${editDetail.provider.credential}` : ""}</ReadonlyVal>
@@ -1167,6 +1203,8 @@ export default function ChargeCaptureClient() {
                 {/* ── Totals row ── */}
                 <div style={{ display: "flex", gap: 16, fontSize: 12, color: "#475569", borderTop: "1px solid #E2E8F0", paddingTop: 10, marginBottom: 18 }}>
                   <span><strong style={{ color: "#0F172A" }}>28. Total Charge:</strong> {fmtMoney(editServiceLines.reduce((sum, sl) => sum + (parseFloat(sl.chargeAmount) || 0), 0))}</span>
+                  <span><strong style={{ color: "#0F172A" }}>29. Amount Paid:</strong> {fmtMoney(0)}</span>
+                  <span><strong style={{ color: "#0F172A" }}>30. Balance Due:</strong> {fmtMoney(editServiceLines.reduce((sum, sl) => sum + (parseFloat(sl.chargeAmount) || 0), 0))}</span>
                   <span><strong style={{ color: "#0F172A" }}>Lines:</strong> {editServiceLines.length}</span>
                 </div>
 
