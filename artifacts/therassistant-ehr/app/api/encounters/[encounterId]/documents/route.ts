@@ -17,19 +17,18 @@ export async function GET(request: Request, context: { params: Promise<{ encount
     if (guard instanceof NextResponse) return guard;
     const organizationId = guard.organizationId;
 
-    // Mailroom-filed documents attached to this encounter. The clinician-facing
-    // view only cares about the ones routed in from the mailroom, so we
-    // require mailroom_item_id to be present.
+    // Clinical-note context should show only the coding report generated for
+    // this encounter, not the broader mailroom/document bucket.
     const { data, error } = await supabase
       .from("documents")
       .select("id, document_type, title, file_name, mime_type, filed_at, created_at, mailroom_item_id")
       .eq("organization_id", organizationId)
       .eq("encounter_id", encounterId)
-      .not("mailroom_item_id", "is", null)
+      .eq("document_type", "coding_report")
       .is("archived_at", null)
       .order("filed_at", { ascending: false, nullsFirst: false })
       .order("created_at", { ascending: false })
-      .limit(50);
+      .limit(1);
 
     if (error) return NextResponse.json({ success: false, error: error.message }, { status: 422 });
 
@@ -47,7 +46,7 @@ export async function GET(request: Request, context: { params: Promise<{ encount
     return NextResponse.json({ success: true, documents });
   } catch (err) {
     return NextResponse.json(
-      { success: false, error: err instanceof Error ? err.message : "Failed to load encounter documents" },
+      { success: false, error: err instanceof Error ? err.message : "Failed to load encounter coding report" },
       { status: 500 },
     );
   }
