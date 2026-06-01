@@ -7,16 +7,15 @@
     "build": "pnpm run typecheck && pnpm -r --if-present run build",
     "typecheck:libs": "tsc --build",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
-    "test:routes": "tsx scripts/testing/route-audit.ts",
-    "test:schema": "tsx scripts/testing/schema-readiness.ts",
-    "test:billing-smoke": "tsx scripts/testing/billing-smoke.ts",
-    "test:x12": "tsx scripts/testing/x12-validate.ts",
+    "test:routes": "node scripts/testing/route-audit.mjs",
+    "test:schema": "node scripts/testing/schema-readiness.mjs",
+    "test:billing-smoke": "node scripts/testing/billing-smoke.mjs",
+    "test:x12": "node scripts/testing/x12-validate.mjs",
     "test:system": "pnpm test:routes && pnpm test:schema && pnpm test:billing-smoke"
   },
   "private": true,
   "devDependencies": {
     "prettier": "^3.8.3",
-    "tsx": "^4.21.0",
     "typescript": "~5.9.3"
   },
   "dependencies": {
