@@ -14,6 +14,7 @@ import { buildCodingReport } from "@/components/encounter/coding-helper/buildCod
 import { scoreCodingQuestionnaire } from "@/components/encounter/coding-helper/scoring";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 import { analyzeMedicaidDocumentation } from "@/lib/encounters/medicaidCodeDetection";
+import { defaultPlaceOfService, isAllowedPlaceOfService, placeOfServiceWarning } from "@/lib/billing/placeOfService";
 import {
   CHECK_IN_SUBJECTIVE_MARKER,
   composeCheckInSubjectiveBlock,
@@ -139,6 +140,10 @@ function formatDocumentTypeLabel(value: string | null | undefined): string {
     .join(" ");
 }
 
+function encounterIsTelehealth(summary: EncounterSummary | null): boolean {
+  return Boolean(summary?.appointment?.telehealth_url || summary?.appointment?.service_location === "telehealth");
+}
+
 export default function EncounterNoteClient({ encounterId }: { encounterId: string }) {
   const router = useRouter();
   const organizationId = useMemo(() => getOrganizationId(), []);
@@ -232,15 +237,22 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
   }, [medicaidSuggestions]);
 
   const claimReadinessChecks = useMemo((): ClaimReadinessCheck[] => {
+    const hasAllowedPos = serviceLines.every((s) => !s.place_of_service_code || isAllowedPlaceOfService(s.place_of_service_code));
     return [
       { label: "Primary diagnosis selected", isComplete: diagnoses.some((d) => d.is_primary), required: true },
       { label: "All service lines coded", isComplete: serviceLines.length > 0, required: true },
       { label: "Service line charges entered", isComplete: serviceLines.every((s) => s.charge_amount > 0), required: false },
+      { label: "Place of service is 11 or 02", isComplete: hasAllowedPos, required: true },
       { label: "Clinical note documented", isComplete: !!(soapNote.subjective || soapNote.objective || soapNote.assessment || soapNote.plan), required: true },
       { label: "Plan section completed", isComplete: !!soapNote.plan, required: false },
       { label: "Assessment section documented", isComplete: !!soapNote.assessment, required: false },
     ];
   }, [diagnoses, serviceLines, soapNote]);
+
+  const placeOfServiceWarningMessage = useMemo(() => {
+    const current = serviceLines.find((s) => placeOfServiceWarning(s.place_of_service_code));
+    return current ? placeOfServiceWarning(current.place_of_service_code) : null;
+  }, [serviceLines]);
 
   async function loadEncounter() {
     if (!organizationId) {
@@ -311,7 +323,7 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
           modifier_4: s.modifier_4 || "",
           units: s.units || 1,
           charge_amount: s.charge_amount || 0,
-          place_of_service_code: s.place_of_service_code || "10",
+          place_of_service_code: s.place_of_service_code || defaultPlaceOfService(encounterIsTelehealth(json)),
         })),
       );
     } catch (loadError) {
@@ -778,6 +790,10 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
   const client = summary.client;
   const encounter = summary.encounter;
   const appointment = summary.appointment;
+  const hasInvalidPos = serviceLines.some((s) => {
+    const pos = s.place_of_service_code?.trim() ?? "";
+    return pos.length > 0 && !isAllowedPlaceOfService(pos);
+  });
 
   return (
     <>
@@ -844,7 +860,7 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
                   saveNote();
                   saveBillingDetails();
                 }}
-                disabled={saving || finalized}
+                disabled={saving || finalized || hasInvalidPos}
               >
                 Save Draft
               </button>
@@ -852,7 +868,7 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
                 className="button"
                 type="button"
                 onClick={() => setShowSignModal(true)}
-                disabled={saving || finalized || !soapNote.subjective}
+                disabled={saving || finalized || !soapNote.subjective || hasInvalidPos}
               >
                 Sign Note
               </button>
@@ -1000,6 +1016,11 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
 
           <SoapNoteEditor data={soapNote} onChange={setSoapNote} disabled={finalized} />
           <DiagnosisPicker diagnoses={diagnoses} onChange={setDiagnoses} disabled={finalized} />
+          {placeOfServiceWarningMessage ? (
+            <div style={{ padding: "10px 12px", borderRadius: 6, background: "#FEF2F2", border: "1px solid #FECACA", color: "#991B1B", fontSize: 13 }}>
+              {placeOfServiceWarningMessage}
+            </div>
+          ) : null}
           <CptCodePanel
             serviceLines={serviceLines}
             onChange={setServiceLines}
@@ -1072,8 +1093,8 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
               <CodingHelperPanel
                 encounterId={encounterId}
                 organizationId={organizationId}
-                practiceName={summary.practice?.legalName ?? summary.practice?.name}
-                providerName={summary.provider?.name}
+                practiceName={summary.practice?.legalName ?? summary.practice?.name ?? undefined}
+                providerName={summary.provider?.name ?? undefined}
                 dateOfService={summary.encounter?.service_date}
                 clientName={client?.name}
                 payerName={summary.coverage?.primaryPayerName}

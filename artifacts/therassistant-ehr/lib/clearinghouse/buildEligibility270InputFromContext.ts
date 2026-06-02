@@ -74,6 +74,13 @@ export interface BuilderProvider {
   firstName?: string | null;
 }
 
+export interface OrganizationBillingProfile {
+  availity_submitter_id?: string | null;
+  billing_provider_name?: string | null;
+  billing_phone?: string | null;
+  billing_email?: string | null;
+}
+
 const AVAILITY_RECEIVER_ID = "030240928";
 const AVAILITY_RECEIVER_NAME = "Availity";
 
@@ -104,22 +111,34 @@ export function buildEligibility270InputFromContext(args: {
   policy: BuilderPolicy;
   /** Optional explicit provider override (e.g. from Settings UI). */
   provider?: BuilderProvider;
+  /** Organization billing profile persisted in system_settings. */
+  organizationBillingProfile?: OrganizationBillingProfile | null;
   serviceTypeCodes: string[];
   serviceDate?: string | null;
   traceId?: string;
 }): Eligibility270Input {
-  const { connection, client, policy, provider, serviceTypeCodes, serviceDate, traceId } = args;
+  const { connection, client, policy, provider, organizationBillingProfile, serviceTypeCodes, serviceDate, traceId } = args;
 
   const mode = resolveAvailityMode(connection.mode ?? null);
 
   const submitterId =
     connection.submitter_id?.trim() ||
+    organizationBillingProfile?.availity_submitter_id?.trim() ||
     process.env.AVAILITY_DEFAULT_SUBMITTER_ID ||
     "";
   const submitterName =
     connection.submitter_name?.trim() ||
+    organizationBillingProfile?.billing_provider_name?.trim() ||
     process.env.AVAILITY_DEFAULT_SUBMITTER_NAME ||
     "Therassistant EHR";
+  const submitterPhone =
+    connection.submitter_contact_phone?.trim() ||
+    organizationBillingProfile?.billing_phone?.trim() ||
+    null;
+  const submitterEmail =
+    connection.submitter_contact_email?.trim() ||
+    organizationBillingProfile?.billing_email?.trim() ||
+    null;
 
   const availityConnection: Availity270Connection = {
     id: connection.id,
@@ -135,8 +154,8 @@ export function buildEligibility270InputFromContext(args: {
     gs_receiver_code: AVAILITY_RECEIVER_ID,
     x12_version: "005010X279A1",
     isa_usage_indicator: mode === "production" ? "P" : "T",
-    submitter_contact_phone: connection.submitter_contact_phone ?? null,
-    submitter_contact_email: connection.submitter_contact_email ?? null,
+    submitter_contact_phone: submitterPhone,
+    submitter_contact_email: submitterEmail,
   };
 
   const providerNpi =

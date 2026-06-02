@@ -114,6 +114,30 @@ describe("buildEligibility270InputFromContext", () => {
     assert.equal(input.informationReceiver.firstName, "John");
     assert.equal(input.informationReceiver.entityType, "1");
   });
+
+  it("falls back to organization billing profile for submitter identity when connection is sparse", () => {
+    const input = buildEligibility270InputFromContext({
+      connection: {
+        id: "conn-2",
+        organization_id: "org-1",
+        mode: "test",
+      },
+      client: baseClient,
+      policy: basePolicy,
+      organizationBillingProfile: {
+        availity_submitter_id: "1062487",
+        billing_provider_name: "Kindly Kiera LLC",
+        billing_phone: "720-440-2617",
+        billing_email: "billing@kindlykiera.com",
+      },
+      serviceTypeCodes: ["98"],
+    });
+
+    assert.equal(input.connection.submitter_id, "1062487");
+    assert.equal(input.connection.submitter_name, "Kindly Kiera LLC");
+    assert.equal(input.connection.submitter_contact_phone, "720-440-2617");
+    assert.equal(input.connection.submitter_contact_email, "billing@kindlykiera.com");
+  });
 });
 
 describe("pickEligibilityAdapter", () => {
