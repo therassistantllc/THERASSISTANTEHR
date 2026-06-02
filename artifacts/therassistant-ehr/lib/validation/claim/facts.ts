@@ -1,6 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { FactContext, FactLoader } from "../types";
 
+const ALLOWED_PLACE_OF_SERVICE_CODES = new Set(["11", "02"]);
+
 /**
  * Canonical per-claim facts.
  *
@@ -337,10 +339,7 @@ function projectFactsForEngine(facts: CanonicalClaimFacts) {
   if (headerPosUpper) allPosOnClaim.add(headerPosUpper);
 
   // POS allow-list: if list non-empty, every POS on the claim must be in it.
-  const allowedPos = new Set(billingRules.allowed_pos_codes);
-  const disallowedPos = allowedPos.size === 0
-    ? []
-    : Array.from(allPosOnClaim).filter((p) => !allowedPos.has(p));
+  const disallowedPos = Array.from(allPosOnClaim).filter((p) => !ALLOWED_PLACE_OF_SERVICE_CODES.has(p));
 
   // CPT allow / deny.
   const cptCodes = facts.serviceLines

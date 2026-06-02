@@ -4,6 +4,7 @@ import {
   generateAvaility837PMultiClaimBatch,
   type MultiClaimBatchClaimInput,
 } from "@/lib/edi/availity837p/generate837pMultiClaimBatch";
+import { applyHardOrganizationDefaults } from "@/lib/edi/availity837p/organizationProviderOverrides";
 import type {
   AvailityConnection,
   ClaimPartiesSnapshot,
@@ -553,7 +554,10 @@ export async function rebuild837PBatchFile(args: {
   const claimInputs: MultiClaimBatchClaimInput[] = [];
   for (const claim of claims) {
     const serviceLines = linesByClaim.get(claim.id) ?? [];
-    const parties = partiesByClaim.get(claim.id);
+    const rawParties = partiesByClaim.get(claim.id);
+    const parties = rawParties
+      ? applyHardOrganizationDefaults(asString((orgRow as Row | null)?.name, ""), rawParties)
+      : null;
     if (!parties) {
       return { ok: false, batchId, error: `Claim ${claim.id} is missing its parties snapshot` };
     }
@@ -639,6 +643,19 @@ export async function rebuild837PBatchFile(args: {
     const msg = e instanceof Error ? e.message : "Failed to build 837P content";
     const errorDetail: Rebuild837PBatchErrorDetail = {
       code: "infrastructure_error",
+      message: msg,
+      errors: [{ message: msg }],
+    };
+    await persistGenerationFailure(msg, errorDetail);
+    return { ok: false, batchId, error: msg, errorDetail };
+  }
+
+  const generatedSizeBytes = Buffer.byteLength(generated.fileContent, "utf8");
+  const maxBatchBytes = 4 * 1024 * 1024;
+  if (generatedSizeBytes > maxBatchBytes) {
+    const msg = `Generated 837P file is ${generatedSizeBytes} bytes, which exceeds the 4 MB batch limit.`;
+    const errorDetail: Rebuild837PBatchErrorDetail = {
+      code: "validation_failed",
       message: msg,
       errors: [{ message: msg }],
     };

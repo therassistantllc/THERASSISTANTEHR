@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isAllowedPlaceOfService, placeOfServiceWarning } from "@/lib/billing/placeOfService";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireBillingAccess } from "@/lib/billing/requireBillingAccess";
 
@@ -319,6 +320,17 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
           };
         })
         .filter((l): l is NonNullable<typeof l> => l !== null);
+
+      for (const line of cleaned) {
+        const linePos = String(line.placeOfService ?? body.placeOfService ?? "").trim();
+        const warning = placeOfServiceWarning(linePos);
+        if (warning) {
+          return NextResponse.json(
+            { success: false, error: warning, errors: [{ field: "service_lines.place_of_service", message: warning }] },
+            { status: 422 },
+          );
+        }
+      }
       update.service_lines = cleaned;
       computedTotal = cleaned.reduce((sum, l) => sum + l.chargeAmount * l.units, 0);
       update.total_charge = Math.round(computedTotal * 100) / 100;
@@ -376,7 +388,12 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
     }
 
     if (body.placeOfService !== undefined) {
-      update.place_of_service = body.placeOfService ? String(body.placeOfService) : null;
+      const pos = body.placeOfService ? String(body.placeOfService).trim() : "";
+      if (pos && !isAllowedPlaceOfService(pos)) {
+        const warning = placeOfServiceWarning(pos) ?? `POS ${pos} is not allowed. Use 11 (office) or 02 (telehealth).`;
+        return NextResponse.json({ success: false, error: warning, errors: [{ field: "place_of_service", message: warning }] }, { status: 422 });
+      }
+      update.place_of_service = pos || null;
     }
     if (body.serviceDate !== undefined) {
       update.service_date = body.serviceDate || null;

@@ -49,6 +49,14 @@ function makeBatchNumber(suffix?: number) {
   return suffix == null ? `CC-${stamp}` : `CC-${stamp}-${suffix}`;
 }
 
+function chunkRows<T>(rows: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < rows.length; index += size) {
+    chunks.push(rows.slice(index, index + size));
+  }
+  return chunks;
+}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -481,52 +489,59 @@ export async function POST(request: Request) {
 
     for (let i = 0; i < orderedGroups.length; i++) {
       const [, group] = orderedGroups[i];
-      const ids = group.rows.map((c) => text(c.id)).filter(Boolean);
-      const totalChargeAmount = group.rows.reduce((sum, row) => sum + money(row.total_charge), 0);
-      const batchNumber = orderedGroups.length === 1 ? makeBatchNumber() : makeBatchNumber(i + 1);
+      const rowChunks = chunkRows(group.rows, 5000);
 
-      const { data: rpcData, error: rpcError } = await (supabase as any).rpc(
-        "create_837p_batch_atomic",
-        {
-          p_organization_id: organizationId,
-          p_claim_ids: ids,
-          p_batch_number: batchNumber,
-          p_payer_profile_id: group.payerProfileId,
-        },
-      );
+      for (let chunkIndex = 0; chunkIndex < rowChunks.length; chunkIndex++) {
+        const chunk = rowChunks[chunkIndex];
+        const ids = chunk.map((c) => text(c.id)).filter(Boolean);
+        const totalChargeAmount = chunk.reduce((sum, row) => sum + money(row.total_charge), 0);
+        const batchNumber = orderedGroups.length === 1 && rowChunks.length === 1
+          ? makeBatchNumber()
+          : makeBatchNumber(Number(`${i + 1}${chunkIndex + 1}`));
 
-      if (rpcError) throw new Error(rpcError.message ?? "Batch creation failed");
+        const { data: rpcData, error: rpcError } = await (supabase as any).rpc(
+          "create_837p_batch_atomic",
+          {
+            p_organization_id: organizationId,
+            p_claim_ids: ids,
+            p_batch_number: batchNumber,
+            p_payer_profile_id: group.payerProfileId,
+          },
+        );
 
-      const result = (rpcData ?? {}) as {
-        batch_id?: string;
-        batch_number?: string;
-      };
+        if (rpcError) throw new Error(rpcError.message ?? "Batch creation failed");
 
-      if (!result.batch_id) {
-        throw new Error("Batch creation returned no batch id");
+        const result = (rpcData ?? {}) as {
+          batch_id?: string;
+          batch_number?: string;
+        };
+
+        if (!result.batch_id) {
+          throw new Error("Batch creation returned no batch id");
+        }
+
+        const { error: stampError } = await supabase
+          .from("claim_837p_batches")
+          .update({
+            batch_source: "charge_auto",
+            billing_provider_tax_id: group.billingProviderTaxId,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("organization_id", organizationId)
+          .eq("id", result.batch_id);
+
+        if (stampError) throw stampError;
+
+        createdBatches.push({
+          batchId: result.batch_id,
+          batchNumber: result.batch_number ?? batchNumber,
+          payerProfileId: group.payerProfileId,
+          billingProviderTaxId: group.billingProviderTaxId,
+          claimCount: chunk.length,
+          totalChargeAmount: Math.round(totalChargeAmount * 100) / 100,
+          claimIds: ids,
+        });
       }
-
-      const { error: stampError } = await supabase
-        .from("claim_837p_batches")
-        .update({
-          batch_source: "charge_auto",
-          billing_provider_tax_id: group.billingProviderTaxId,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("organization_id", organizationId)
-        .eq("id", result.batch_id);
-
-      if (stampError) throw stampError;
-
-      createdBatches.push({
-        batchId: result.batch_id,
-        batchNumber: result.batch_number ?? batchNumber,
-        payerProfileId: group.payerProfileId,
-        billingProviderTaxId: group.billingProviderTaxId,
-        claimCount: group.rows.length,
-        totalChargeAmount: Math.round(totalChargeAmount * 100) / 100,
-        claimIds: ids,
-      });
     }
 
     const processedBatchMap = new Map<

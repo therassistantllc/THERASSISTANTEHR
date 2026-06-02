@@ -9,6 +9,7 @@ import type {
   ProfessionalClaimServiceLine,
 } from "@/lib/edi/availity837p/types";
 import { validateAvaility837PClaim } from "@/lib/edi/availity837p/validate837p";
+import { applyHardOrganizationDefaults } from "@/lib/edi/availity837p/organizationProviderOverrides";
 import { assertClaimReadyForSubmission, gateResponse } from "@/lib/validation/claimSubmissionGate";
 
 function asString(value: unknown, fallback = ""): string {
@@ -22,6 +23,20 @@ function asBoolean(value: unknown, fallback = false): boolean {
 function asNumber(value: unknown, fallback = 0): number {
   const num = Number(value);
   return Number.isFinite(num) ? num : fallback;
+}
+
+function normalizeBillingProfile(row: Record<string, unknown> | null | undefined) {
+  if (!row) return null;
+  const profile = row.setting_value && typeof row.setting_value === "object" && !Array.isArray(row.setting_value)
+    ? (row.setting_value as Record<string, unknown>)
+    : null;
+  if (!profile) return null;
+  return {
+    availity_submitter_id: asString(profile.availity_submitter_id).trim() || null,
+    billing_provider_name: asString(profile.billing_provider_name).trim() || null,
+    billing_phone: asString(profile.billing_phone).trim() || null,
+    billing_email: asString(profile.billing_email).trim() || null,
+  };
 }
 
 function normalizeClaim(row: Record<string, unknown>): ProfessionalClaim {
@@ -438,6 +453,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Payer profile not found" }, { status: 404 });
     }
 
+    const { data: billingProfileRow } = await supabase
+      .from("system_settings")
+      .select("setting_value")
+      .eq("organization_id", claim.organization_id)
+      .eq("setting_key", "organization.billing_profile")
+      .maybeSingle();
+    const billingProfile = normalizeBillingProfile(billingProfileRow as Record<string, unknown> | null | undefined);
+
     const { data: connectionRow, error: connectionError } = await supabase
       .from("clearinghouse_connections")
       .select("*")
@@ -452,18 +475,28 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Active Availity clearinghouse connection not found" }, { status: 404 });
     }
 
-    const existingPhone = String((connectionRow as Record<string, unknown>).submitter_contact_phone ?? "")
+    const existingPhone = String((connectionRow as Record<string, unknown>).submitter_contact_phone ?? billingProfile?.billing_phone ?? "")
       .replace(/\D/g, "");
-    const existingEmail = String((connectionRow as Record<string, unknown>).submitter_contact_email ?? "").trim();
+    const existingEmail = String((connectionRow as Record<string, unknown>).submitter_contact_email ?? billingProfile?.billing_email ?? "").trim();
     if (!existingPhone && !existingEmail) {
       await supabase
         .from("clearinghouse_connections")
         .update({
-          submitter_contact_email: "admin@therassistant.com",
+          submitter_contact_email: billingProfile?.billing_email ?? "admin@therassistant.com",
           updated_at: new Date().toISOString(),
         })
         .eq("id", asString((connectionRow as Record<string, unknown>).id));
-      (connectionRow as Record<string, unknown>).submitter_contact_email = "admin@therassistant.com";
+      (connectionRow as Record<string, unknown>).submitter_contact_email = billingProfile?.billing_email ?? "admin@therassistant.com";
+    }
+
+    if (billingProfile?.availity_submitter_id) {
+      (connectionRow as Record<string, unknown>).submitter_id = billingProfile.availity_submitter_id;
+    }
+    if (billingProfile?.billing_phone && !asString((connectionRow as Record<string, unknown>).submitter_contact_phone)) {
+      (connectionRow as Record<string, unknown>).submitter_contact_phone = billingProfile.billing_phone;
+    }
+    if (billingProfile?.billing_email && !asString((connectionRow as Record<string, unknown>).submitter_contact_email)) {
+      (connectionRow as Record<string, unknown>).submitter_contact_email = billingProfile.billing_email;
     }
 
     const connection = normalizeConnection(connectionRow as unknown as Record<string, unknown>);
@@ -475,6 +508,7 @@ export async function POST(request: Request) {
       .maybeSingle();
 
     const submitterName =
+      billingProfile?.billing_provider_name ||
       asString((organizationRow as Record<string, unknown> | null)?.name, "") ||
       asString(connection.submitter_id, "THERASSISTANT");
 
@@ -501,7 +535,10 @@ export async function POST(request: Request) {
       parties: generationInput.parties,
       payerProfileId: claim.payer_profile_id ?? null,
     });
-    generationInput.parties = rendered.parties;
+    generationInput.parties = applyHardOrganizationDefaults(
+      asString((organizationRow as Record<string, unknown> | null)?.name, ""),
+      rendered.parties,
+    );
 
     const validation = validateAvaility837PClaim(generationInput);
 

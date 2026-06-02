@@ -62,11 +62,17 @@ export default function EligibilityBatchCenterClient() {
   const [message, setMessage] = useState("");
   const [diagnostics, setDiagnostics] = useState<{
     totalAppointmentsInMonth: number;
+    appointmentPolicyMissing: number;
+    clientPolicyFound: number;
+    clientPolicyMissing: number;
+    clientPolicyRejectedMissingPayer: number;
+    clientPolicyRejectedMissingSubscriber: number;
+    multiplePoliciesNeedSelection: number;
     excludedNoPolicyId: number;
     excludedCanceledOrNoShow: number;
     excludedAlreadyCheckedThisMonth: number;
     includedCandidates: number;
-    usedClientPolicyFallback?: number;
+    usedClientPolicyFallback: number;
   } | null>(null);
 
   const selectedIds = useMemo(
@@ -239,19 +245,18 @@ export default function EligibilityBatchCenterClient() {
             <div className="flex flex-wrap gap-4 text-sm">
               <span><strong>{diagnostics.totalAppointmentsInMonth}</strong> total appointments in month</span>
               <span className="text-gray-400">·</span>
+              <span><strong className="text-amber-600">{diagnostics.appointmentPolicyMissing}</strong> appointment policy missing</span>
+              <span className="text-gray-400">·</span>
               <span><strong className="text-green-700">{diagnostics.includedCandidates}</strong> eligible candidates</span>
+              <span className="text-gray-400">·</span>
+              <span><strong className="text-blue-700">{diagnostics.usedClientPolicyFallback}</strong> client policy fallback used</span>
               <span className="text-gray-400">·</span>
               <span><strong className="text-amber-600">{diagnostics.excludedAlreadyCheckedThisMonth}</strong> already verified this month</span>
               <span className="text-gray-400">·</span>
-              <span><strong className="text-amber-600">{diagnostics.excludedNoPolicyId}</strong> no insurance policy on file</span>
+              <span><strong className="text-amber-600">{diagnostics.excludedNoPolicyId}</strong> no client policy found</span>
               <span className="text-gray-400">·</span>
               <span><strong className="text-amber-600">{diagnostics.excludedCanceledOrNoShow}</strong> canceled / no-show</span>
             </div>
-            {diagnostics.usedClientPolicyFallback ? (
-              <div className="mt-2 text-xs text-blue-700">
-                <strong>{diagnostics.usedClientPolicyFallback}</strong> appointment(s) had no policy on the appointment record — resolved via client&apos;s active policy.
-              </div>
-            ) : null}
           </div>
         ) : null}
       </section>

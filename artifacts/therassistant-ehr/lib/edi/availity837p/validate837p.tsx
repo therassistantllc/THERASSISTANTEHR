@@ -3,6 +3,7 @@ import type {
   Availity837PValidationError,
   Availity837PValidationResult,
 } from "./types";
+import { isAllowedPlaceOfService, normalizePlaceOfService } from "@/lib/billing/placeOfService";
 
 function pushError(
   errors: Availity837PValidationError[],
@@ -47,6 +48,15 @@ function isTwoCharModifier(value: unknown): boolean {
 
 function isPoBoxAddress(value: string): boolean {
   return /\bP\.?\s*O\.?\s*BOX\b|\bPOBOX\b|\bPOST\s*OFFICE\s*BOX\b/i.test(value);
+}
+
+function placeOfServiceError(value: unknown): string | null {
+  const normalized = normalizePlaceOfService(value);
+  if (!normalized) return null;
+  if (isAllowedPlaceOfService(normalized)) return null;
+  return normalized === "10"
+    ? "POS 10 is not allowed. Use 11 (office) or 02 (telehealth)."
+    : `POS ${normalized} is not allowed. Use 11 (office) or 02 (telehealth).`;
 }
 
 export function validateAvaility837PClaim(
@@ -236,6 +246,11 @@ export function validateAvaility837PClaim(
     );
   }
 
+  const claimPosError = placeOfServiceError(claim.place_of_service);
+  if (claimPosError) {
+    pushError(errors, "claim.place_of_service", claimPosError, "2300", "CLM");
+  }
+
   if (!Array.isArray(claim.diagnosis_codes) || claim.diagnosis_codes.filter((code) => isNonEmptyString(code)).length === 0) {
     pushError(errors, "claim.diagnosis_codes", "At least one diagnosis code is required.", "2300", "HI");
   }
@@ -266,6 +281,10 @@ export function validateAvaility837PClaim(
 
   serviceLines.forEach((line, index) => {
     const row = index + 1;
+    const linePosError = placeOfServiceError(line.place_of_service ?? claim.place_of_service);
+    if (linePosError) {
+      pushError(errors, `serviceLines[${index}].place_of_service`, linePosError, "2400", "SV1");
+    }
 
     if (!isNonEmptyString(line.service_date_from)) {
       pushError(errors, `serviceLines[${index}].service_date_from`, `service_date_from is required for service line ${row}.`, "2400", "DTP");

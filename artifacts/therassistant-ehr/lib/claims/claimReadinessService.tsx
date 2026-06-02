@@ -1,3 +1,4 @@
+import { isAllowedPlaceOfService, normalizePlaceOfService } from "@/lib/billing/placeOfService";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 
 type ClaimReadinessStatus = "ready" | "not_ready";
@@ -82,6 +83,19 @@ function money(value: number): number {
 function addRequired(errors: ClaimReadinessError[], field: string, value: unknown, message: string) {
   if (!normalizeText(value)) {
     errors.push({ field, message });
+  }
+}
+
+function addPlaceOfServiceError(errors: ClaimReadinessError[], field: string, value: unknown) {
+  const pos = normalizePlaceOfService(value);
+  if (!pos) return;
+  if (!isAllowedPlaceOfService(pos)) {
+    errors.push({
+      field,
+      message: pos === "10"
+        ? "POS 10 is not allowed. Use 11 (office) or 02 (telehealth)."
+        : `POS ${pos} is not allowed. Use 11 (office) or 02 (telehealth).`,
+    });
   }
 }
 
@@ -218,6 +232,8 @@ export async function createProfessionalClaimDraft(
   if (zipVal && !/^\d{5}(?:-\d{4})?$/.test(zipVal)) {
     errors.push({ field: "billing_provider.zip", message: "Billing provider ZIP must be 5 or 9 digits (e.g. 12345 or 12345-6789)" });
   }
+
+  addPlaceOfServiceError(errors, "place_of_service", input.placeOfService);
   if (input.billingProvider.address1 && /^p\.?\s*o\.?\s*box/i.test(normalizeText(input.billingProvider.address1))) {
     errors.push({ field: "billing_provider.address1", message: "Billing provider address must be a street address, not a PO Box" });
   }
@@ -599,12 +615,30 @@ export async function validateProfessionalClaimReadiness(
       addRequired(errors, `claim_parties_snapshot.${field}`, (snapshot as DbRecord)[field], message);
     }
 
+    addPlaceOfServiceError(errors, "claim.place_of_service", (snapshot as DbRecord).place_of_service);
+
     // Validate ZIP format (5-digit or 9-digit ZIP+4)
     const zipPattern = /^\d{5}(-?\d{4})?$/;
     for (const zipField of ["billing_provider_zip", "subscriber_zip", "patient_zip", "service_facility_zip"] as const) {
       const zipVal = normalizeText((snapshot as DbRecord)[zipField]);
       if (zipVal && !zipPattern.test(zipVal)) {
         errors.push({ field: `claim_parties_snapshot.${zipField}`, message: `${zipField} must be a valid 5 or 9-digit ZIP code` });
+      }
+    }
+
+    const linePosValues = Array.isArray(lines)
+      ? (lines as DbRecord[])
+          .map((line) => normalizePlaceOfService(line.place_of_service ?? claim.place_of_service))
+          .filter(Boolean)
+      : [];
+    for (const pos of linePosValues) {
+      if (!isAllowedPlaceOfService(pos)) {
+        errors.push({
+          field: "claim.place_of_service",
+          message: pos === "10"
+            ? "POS 10 is not allowed. Use 11 (office) or 02 (telehealth)."
+            : `POS ${pos} is not allowed. Use 11 (office) or 02 (telehealth).`,
+        });
       }
     }
 

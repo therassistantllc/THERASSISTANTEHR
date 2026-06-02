@@ -26,6 +26,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_ORG_ID } from "@/lib/config";
+import { defaultPlaceOfService, isAllowedPlaceOfService, placeOfServiceWarning } from "@/lib/billing/placeOfService";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -428,7 +429,7 @@ export default function ChargeCaptureClient() {
       const d: ChargeDetail = json.detail;
       setEditDetail(d);
       setEditDiagnoses(d.diagnoses.length > 0 ? d.diagnoses : [""]);
-      setEditPlaceOfService(d.placeOfService ?? "");
+      setEditPlaceOfService(d.placeOfService ?? defaultPlaceOfService(false));
       setEditPriorAuth(d.serviceLines[0]?.authorizationNumber ?? "");
       const MAX_DX = 12;
       const padded = [...d.diagnoses, ...Array(Math.max(0, MAX_DX - d.diagnoses.length)).fill("")].slice(0, MAX_DX);
@@ -443,7 +444,7 @@ export default function ChargeCaptureClient() {
               diagnosisPointers: sl.diagnosisPointers.join(", "),
               units: String(sl.units),
               chargeAmount: String(sl.chargeAmount),
-              placeOfService: sl.placeOfService ?? d.placeOfService ?? "",
+              placeOfService: sl.placeOfService ?? d.placeOfService ?? defaultPlaceOfService(false),
               renderingProviderNpi: sl.renderingProviderNpi ?? d.provider?.npi ?? "",
               authorizationNumber: sl.authorizationNumber ?? "",
             }))
@@ -455,7 +456,7 @@ export default function ChargeCaptureClient() {
               diagnosisPointers: "A",
               units: "1",
               chargeAmount: String(d.totalCharge),
-              placeOfService: d.placeOfService ?? "",
+              placeOfService: d.placeOfService ?? defaultPlaceOfService(false),
               renderingProviderNpi: d.provider?.npi ?? "",
               authorizationNumber: "",
             }],
@@ -474,6 +475,10 @@ export default function ChargeCaptureClient() {
     setEditSaving(true);
     setEditError(null);
     try {
+      const defaultPos = editPlaceOfService.trim();
+      if (defaultPos && !isAllowedPlaceOfService(defaultPos)) {
+        throw new Error(placeOfServiceWarning(defaultPos) ?? `POS ${defaultPos} is not allowed. Use 11 (office) or 02 (telehealth).`);
+      }
       const diagnoses = editDiagnoses.map((s) => s.trim().toUpperCase()).filter(Boolean);
       const serviceLines = editServiceLines.map((sl) => ({
         procedureCode: sl.procedureCode.trim(),
@@ -487,11 +492,17 @@ export default function ChargeCaptureClient() {
         renderingProviderNpi: sl.renderingProviderNpi.trim() || null,
         authorizationNumber: sl.authorizationNumber.trim() || null,
       }));
+      for (const line of serviceLines) {
+        const pos = String(line.placeOfService ?? defaultPos ?? "").trim();
+        if (pos && !isAllowedPlaceOfService(pos)) {
+          throw new Error(placeOfServiceWarning(pos) ?? `POS ${pos} is not allowed. Use 11 (office) or 02 (telehealth).`);
+        }
+      }
       const body: Record<string, unknown> = {
         organizationId: orgId,
         diagnoses,
         serviceLines,
-        placeOfService: editPlaceOfService.trim() || null,
+        placeOfService: defaultPos || null,
       };
       const res = await fetch(`/api/billing/charge-capture/${encodeURIComponent(editRow.id)}`, {
         method: "PATCH",
@@ -1127,14 +1138,18 @@ export default function ChargeCaptureClient() {
                   </FieldBox>
                   <FieldBox label="24B. Default Place of Service">
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <input
-                        type="text"
+                      <select
                         value={editPlaceOfService}
                         onChange={(e) => setEditPlaceOfService(e.target.value)}
-                        placeholder="11"
-                        style={{ width: 60, padding: "5px 8px", border: "1px solid #CBD5E1", borderRadius: 4, fontSize: 13 }}
-                      />
-                      <span style={{ fontSize: 11, color: "#94A3B8" }}>11=Office · 02=Telehealth · 21=Inpatient</span>
+                        style={{ width: 90, padding: "5px 8px", border: "1px solid #CBD5E1", borderRadius: 4, fontSize: 13 }}
+                      >
+                        {!isAllowedPlaceOfService(editPlaceOfService) && editPlaceOfService ? (
+                          <option value={editPlaceOfService}>{editPlaceOfService} (invalid)</option>
+                        ) : null}
+                        <option value="11">11 · Office</option>
+                        <option value="02">02 · Telehealth</option>
+                      </select>
+                      <span style={{ fontSize: 11, color: "#94A3B8" }}>Select only 11 or 02.</span>
                     </div>
                   </FieldBox>
                   <FieldBox label="33a. Billing Provider NPI">
@@ -1156,6 +1171,11 @@ export default function ChargeCaptureClient() {
 
                 {/* ── Section C: Service Lines (Box 24) ── */}
                 <SectionHeader style={{ marginTop: 16 }}>Box 24 — Service Line Items</SectionHeader>
+                {(placeOfServiceWarning(editPlaceOfService) || editServiceLines.some((sl) => placeOfServiceWarning(sl.placeOfService))) ? (
+                  <div style={{ marginBottom: 10, padding: "10px 12px", borderRadius: 6, background: "#FEF2F2", border: "1px solid #FECACA", color: "#991B1B", fontSize: 13 }}>
+                    {placeOfServiceWarning(editPlaceOfService) ?? placeOfServiceWarning(editServiceLines.find((sl) => placeOfServiceWarning(sl.placeOfService))?.placeOfService) ?? "POS is not allowed. Use 11 (office) or 02 (telehealth)."}
+                  </div>
+                ) : null}
                 <div style={{ overflowX: "auto", marginBottom: 8 }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                     <thead>
@@ -1172,7 +1192,19 @@ export default function ChargeCaptureClient() {
                           <td style={{ padding: "5px 7px", border: "1px solid #E2E8F0", fontWeight: 700, color: "#94A3B8", textAlign: "center" }}>{idx + 1}</td>
                           <td style={{ padding: 4, border: "1px solid #E2E8F0" }}><input type="date" value={sl.serviceDateFrom} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], serviceDateFrom:e.target.value}; setEditServiceLines(n); }} style={slInputStyle(120)} /></td>
                           <td style={{ padding: 4, border: "1px solid #E2E8F0" }}><input type="date" value={sl.serviceDateTo} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], serviceDateTo:e.target.value}; setEditServiceLines(n); }} style={slInputStyle(120)} /></td>
-                          <td style={{ padding: 4, border: "1px solid #E2E8F0" }}><input type="text" value={sl.placeOfService} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], placeOfService:e.target.value}; setEditServiceLines(n); }} placeholder="11" style={slInputStyle(44)} /></td>
+                          <td style={{ padding: 4, border: "1px solid #E2E8F0" }}>
+                            <select
+                              value={sl.placeOfService}
+                              onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], placeOfService:e.target.value}; setEditServiceLines(n); }}
+                              style={slInputStyle(90)}
+                            >
+                              {!isAllowedPlaceOfService(sl.placeOfService) && sl.placeOfService ? (
+                                <option value={sl.placeOfService}>{sl.placeOfService} (invalid)</option>
+                              ) : null}
+                              <option value="11">11 · Office</option>
+                              <option value="02">02 · Telehealth</option>
+                            </select>
+                          </td>
                           <td style={{ padding: 4, border: "1px solid #E2E8F0" }}><input type="text" value={sl.procedureCode} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], procedureCode:e.target.value.toUpperCase()}; setEditServiceLines(n); }} placeholder="90837" style={slInputStyle(72)} /></td>
                           <td style={{ padding: 4, border: "1px solid #E2E8F0" }}><input type="text" value={sl.modifiers} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], modifiers:e.target.value}; setEditServiceLines(n); }} placeholder="GT, 95" style={slInputStyle(80)} /></td>
                           <td style={{ padding: 4, border: "1px solid #E2E8F0" }}><input type="text" value={sl.diagnosisPointers} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], diagnosisPointers:e.target.value}; setEditServiceLines(n); }} placeholder="A, B" style={slInputStyle(60)} /></td>

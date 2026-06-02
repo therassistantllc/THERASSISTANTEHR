@@ -231,7 +231,7 @@ test("snapshot writer stamps rendering_provider_taxonomy from provider_profiles"
     organizationId: ORG,
     clientId: CLIENT,
     appointmentId: APPT,
-    placeOfService: "10",
+    placeOfService: "11",
     diagnosisCodes: ["F32.9"],
     serviceLines: [
       {
@@ -276,7 +276,7 @@ test("snapshot writer writes null when provider_profile has no taxonomy_code", a
     organizationId: ORG,
     clientId: CLIENT,
     appointmentId: APPT,
-    placeOfService: "10",
+    placeOfService: "11",
     diagnosisCodes: ["F32.9"],
     serviceLines: [
       {

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isAllowedPlaceOfService, placeOfServiceWarning } from "@/lib/billing/placeOfService";
 import { captureSignedEncounterCharge } from "@/lib/charges/signedEncounterChargeCaptureService";
 import { createClaimDraftFromChargeCapture } from "@/lib/claims/chargeCaptureClaimBridgeService";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
@@ -155,6 +156,15 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
         updated_at: now,
       }))
       .filter((line) => line.cpt_hcpcs_code && line.charge_amount > 0 && line.service_date);
+
+    const invalidPos = servicePayload.find((line) => {
+      const pos = String(line.place_of_service_code ?? "").trim();
+      return pos.length > 0 && !isAllowedPlaceOfService(pos);
+    });
+    if (invalidPos) {
+      const warning = placeOfServiceWarning(invalidPos.place_of_service_code) ?? `POS ${String(invalidPos.place_of_service_code ?? "").trim()} is not allowed. Use 11 (office) or 02 (telehealth).`;
+      return NextResponse.json({ success: false, error: warning, errors: [{ field: "serviceLines.placeOfServiceCode", message: warning }] }, { status: 422 });
+    }
 
     if (diagnosisPayload.length > 0) {
       const { error } = await supabase.from("encounter_diagnoses").insert(diagnosisPayload);

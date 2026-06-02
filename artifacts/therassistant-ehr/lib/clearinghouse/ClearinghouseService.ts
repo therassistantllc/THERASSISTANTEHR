@@ -166,6 +166,17 @@ export class ClearinghouseService {
       throw new Error("Missing subscriber/member ID.");
     }
 
+    const billingProfileResp = await supabase
+      .from("system_settings")
+      .select("setting_value")
+      .eq("organization_id", organizationId)
+      .eq("setting_key", "organization.billing_profile")
+      .maybeSingle();
+    const billingProfile =
+      billingProfileResp.data && typeof billingProfileResp.data.setting_value === "object" && !Array.isArray(billingProfileResp.data.setting_value)
+        ? (billingProfileResp.data.setting_value as Record<string, unknown>)
+        : null;
+
     const adapterInput: EligibilityRequestInput = {
       organizationId,
       patientId: client.id,
@@ -192,6 +203,14 @@ export class ClearinghouseService {
         last_name: client.last_name ?? null,
         date_of_birth: client.date_of_birth ?? null,
       },
+      organizationBillingProfile: billingProfile
+        ? {
+            availity_submitter_id: typeof billingProfile.availity_submitter_id === "string" ? billingProfile.availity_submitter_id : null,
+            billing_provider_name: typeof billingProfile.billing_provider_name === "string" ? billingProfile.billing_provider_name : null,
+            billing_phone: typeof billingProfile.billing_phone === "string" ? billingProfile.billing_phone : null,
+            billing_email: typeof billingProfile.billing_email === "string" ? billingProfile.billing_email : null,
+          }
+        : null,
       policy: {
         payer_id: policy.payer_id ?? null,
         plan_name: policy.plan_name ?? null,
