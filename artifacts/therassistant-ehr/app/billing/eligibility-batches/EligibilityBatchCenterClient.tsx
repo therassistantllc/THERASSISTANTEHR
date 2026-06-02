@@ -247,11 +247,11 @@ export default function EligibilityBatchCenterClient() {
               <span className="text-gray-400">·</span>
               <span><strong className="text-amber-600">{diagnostics.excludedCanceledOrNoShow}</strong> canceled / no-show</span>
             </div>
-          {diagnostics.usedClientPolicyFallback ? (
-            <div className="mt-2 text-xs text-blue-700">
-              <strong>{diagnostics.usedClientPolicyFallback}</strong> appointment(s) had no policy on the appointment record — resolved via client&apos;s active policy.
-            </div>
-          ) : null}
+            {diagnostics.usedClientPolicyFallback ? (
+              <div className="mt-2 text-xs text-blue-700">
+                <strong>{diagnostics.usedClientPolicyFallback}</strong> appointment(s) had no policy on the appointment record — resolved via client&apos;s active policy.
+              </div>
+            ) : null}
           </div>
         ) : null}
       </section>
