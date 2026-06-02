@@ -164,6 +164,7 @@ const BATCHES_837P_PREFIXES = [
 ];
 
 const REJECTIONS_PREFIXES = [
+  "/billing/rejections",
   "/billing/rejections-999",
   "/billing/rejections-277ca",
   "/billing/payer-rejections",
@@ -236,6 +237,14 @@ export default function AppSidebarNav() {
       <NavLink href="/inbox" icon={<TasksIcon />} label="Inbox" prefixes={["/inbox"]} pathname={pathname} />
       <NavLink href="/chat" icon={<ChatIcon />} label="Chat" prefixes={["/chat"]} pathname={pathname} />
       <NavLink href="/mailroom" icon={<InboxIcon />} label="Mailroom" prefixes={["/mailroom"]} pathname={pathname} />
+      <NavLink href="/settings" icon={<ShieldIcon />} label="Settings" prefixes={["/settings"]} pathname={pathname} />
+      <NavLink
+        href="/settings/system-readiness"
+        icon={<ChartIcon />}
+        label="Admin"
+        prefixes={["/settings/system-readiness", "/settings/audit-log", "/settings/edi"]}
+        pathname={pathname}
+      />
 
       {/* ── BILLING ──────────────────────────────────────────── */}
       <div className={styles.navSectionSpacer} />
@@ -259,7 +268,7 @@ export default function AppSidebarNav() {
           <SubNavLinkIcon href="/billing/eligibility-batches" icon={<ShieldIcon />} label="Eligibility" prefixes={["/billing/eligibility-batches", "/billing/eligibility-issues"]} pathname={pathname} />
           <SubNavLinkIcon href="/billing/claims" icon={<ClipboardIcon />} label="Claims" prefixes={CLAIMS_PREFIXES} pathname={pathname} />
           <SubNavLinkIcon href="/billing/837p-batches" icon={<ClipboardIcon />} label="837P Batches" prefixes={BATCHES_837P_PREFIXES} pathname={pathname} />
-          <SubNavLinkIcon href="/billing/rejections-999" icon={<XCircleIcon />} label="Rejections" prefixes={REJECTIONS_PREFIXES} pathname={pathname} />
+          <SubNavLinkIcon href="/billing/rejections" icon={<XCircleIcon />} label="Rejections" prefixes={REJECTIONS_PREFIXES} pathname={pathname} />
           <SubNavLinkIcon href="/billing/denials" icon={<XCircleIcon />} label="Denials" prefixes={["/billing/denials", "/billing/denials-by-carc", "/billing/denials-by-rarc", "/billing/partial-denials", "/billing/underpayments", "/billing/timely-filing", "/billing/medical-necessity", "/billing/medical-review", "/billing/aging", "/billing/claim-submission"]} pathname={pathname} />
 
           {/* ── Payments submenu ───────────────────────────────────── */}

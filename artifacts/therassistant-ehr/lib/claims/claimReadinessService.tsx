@@ -332,7 +332,7 @@ export async function createProfessionalClaimDraft(
   });
 
   const totalCharge = money(input.serviceLines.reduce((sum, line) => sum + line.chargeAmount * (line.units ?? 1), 0));
-  const placeOfService = normalizeNullable(input.placeOfService) ?? "10";
+  const placeOfService = normalizeNullable(input.placeOfService) ?? "11";
   const patientAccountNumber = normalizeNullable(input.patientAccountNumber) ?? `PC-${Date.now()}`;
   const claimNumber = normalizeNullable(input.claimNumber) ?? `CLM-${Date.now()}`;
 

@@ -128,7 +128,103 @@ export async function POST(request: Request) {
 
     if (candidatesError) throw candidatesError;
 
-    let candidates = ((candidatesRaw ?? []) as DbRow[]).filter(
+    // ── Client-policy fallback: include appointments with insurance_policy_id=null ──
+    // The RPC only returns rows WHERE insurance_policy_id IS NOT NULL.
+    // Mirror the same fallback used in GET /candidates so batch generation
+    // works for appointments that were scheduled without a policy attached.
+    let fallbackCandidates: DbRow[] = [];
+    try {
+      const monthEnd = nextMonth(month);
+      const { data: nullPolicyAppts } = await (supabase as any)
+        .from("appointments")
+        .select("id, client_id, provider_id, scheduled_start_at, appointment_status")
+        .eq("organization_id", guard.organizationId)
+        .is("archived_at", null)
+        .is("insurance_policy_id", null)
+        .gte("scheduled_start_at", `${month}T00:00:00.000Z`)
+        .lt("scheduled_start_at", `${monthEnd}T00:00:00.000Z`);
+
+      if (Array.isArray(nullPolicyAppts) && nullPolicyAppts.length > 0) {
+        const actionable = nullPolicyAppts.filter((appt: any) => {
+          const status = String(appt.appointment_status ?? "").toLowerCase();
+          return status !== "canceled" && status !== "no_show" && status !== "no-show";
+        });
+        const existingApptIds = new Set<string>((Array.isArray(candidatesRaw) ? candidatesRaw : []).map((c: any) => c.appointment_id));
+        const clientIds: string[] = [...new Set<string>(actionable.map((a: any) => a.client_id).filter(Boolean))];
+        if (clientIds.length > 0) {
+          const { data: policies } = await (supabase as any)
+            .from("insurance_policies")
+            .select("id, client_id, payer_id, policy_number, subscriber_id, priority, active_flag, effective_date, termination_date, archived_at")
+            .eq("organization_id", guard.organizationId)
+            .in("client_id", clientIds)
+            .is("archived_at", null);
+
+          const policiesByClient = new Map<string, any[]>();
+          for (const p of (policies ?? [])) {
+            if (p.active_flag === false) continue;
+            const list = policiesByClient.get(p.client_id) ?? [];
+            list.push(p);
+            policiesByClient.set(p.client_id, list);
+          }
+
+          const allPolicies = [...policiesByClient.values()].flat();
+          const payerIds = [...new Set<string>(allPolicies.map((p: any) => p.payer_id).filter(Boolean))];
+          const subscriberIds = [...new Set<string>(allPolicies.map((p: any) => p.subscriber_id).filter(Boolean))];
+          const [{ data: payers }, { data: subscribers }] = await Promise.all([
+            payerIds.length > 0
+              ? (supabase as any).from("insurance_payers").select("id, payer_name, payer_id, archived_at").in("id", payerIds)
+              : Promise.resolve({ data: [] }),
+            subscriberIds.length > 0
+              ? (supabase as any).from("insurance_subscribers").select("id, first_name, last_name, date_of_birth, member_id, relationship_to_client").in("id", subscriberIds)
+              : Promise.resolve({ data: [] }),
+          ]);
+
+          const payerMap = new Map<string, any>((payers ?? []).map((p: any) => [p.id, p]));
+          const subMap = new Map<string, any>((subscribers ?? []).map((s: any) => [s.id, s]));
+
+          for (const appt of actionable) {
+            if (existingApptIds.has(appt.id)) continue;
+            const serviceDate = appt.scheduled_start_at ? String(appt.scheduled_start_at).slice(0, 10) : null;
+            const clientPolicies = policiesByClient.get(appt.client_id) ?? [];
+            if (clientPolicies.length === 0) continue;
+
+            const datePolicies = serviceDate
+              ? clientPolicies.filter((p: any) => {
+                  if (p.effective_date && String(p.effective_date) > serviceDate) return false;
+                  if (p.termination_date && String(p.termination_date) < serviceDate) return false;
+                  return true;
+                })
+              : clientPolicies;
+            const usable = datePolicies.length > 0 ? datePolicies : clientPolicies;
+            if (usable.length !== 1) continue;
+
+            const policy = usable[0];
+            const payer = payerMap.get(policy.payer_id);
+            if (!payer || !payer.payer_id) continue;
+            const subscriber = subMap.get(policy.subscriber_id);
+            const memberid = subscriber?.member_id ?? policy.policy_number ?? null;
+            if (!subscriber || !memberid) continue;
+
+            fallbackCandidates.push({
+              appointment_id: appt.id,
+              client_id: appt.client_id,
+              insurance_policy_id: policy.id,
+              payer_id: policy.payer_id,
+              payer_name: payer.payer_name ?? null,
+              electronic_payer_id: payer.payer_id,
+              service_date: serviceDate,
+              subscriber_member_id: memberid,
+            });
+          }
+        }
+      }
+    } catch {
+      // Fallback is best-effort; do not fail batch generation
+    }
+
+    const allCandidatesRaw = [...(Array.isArray(candidatesRaw) ? candidatesRaw : []), ...fallbackCandidates];
+
+    let candidates = (allCandidatesRaw as DbRow[]).filter(
       (r) => text(r.electronic_payer_id) && text(r.subscriber_member_id),
     );
 
