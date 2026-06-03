@@ -232,7 +232,12 @@ export function validateAvaility837PClaim(
     pushError(errors, "parties.subscriber_gender", "subscriber_gender must be F, M, or U.", "2010BA", "DMG");
   }
 
-  if (claim.patient_account_number == null || String(claim.patient_account_number).trim().length === 0) {
+  const patientAccountNumber =
+    String(claim.patient_account_number ?? "").trim() ||
+    String(claim.claim_number ?? "").trim() ||
+    (claim.id ? `PT-${String(claim.id).replace(/-/g, "")}` : "");
+
+  if (!isNonEmptyString(patientAccountNumber)) {
     pushError(errors, "claim.patient_account_number", "patient_account_number is required.", "2300", "CLM");
   }
 
