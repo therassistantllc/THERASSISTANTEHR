@@ -39,6 +39,14 @@
     "node_modules",
     "src/lib",
     "src/types",
-    ".next/dev"
+    ".next/dev",
+    ".next",
+    "dist",
+    "build",
+    "**/__tests__/**/*",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx"
   ]
 }

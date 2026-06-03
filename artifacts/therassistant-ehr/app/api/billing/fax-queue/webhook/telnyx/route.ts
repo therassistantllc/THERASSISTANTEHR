@@ -50,16 +50,16 @@ type QueryBuilder = {
   maybeSingle?: () => Promise<{ data: DbRow | null; error: { message?: string } | null }>;
   then?: (...args: unknown[]) => unknown;
 };
-export type WebhookSupabase = { from(table: string): QueryBuilder };
+type WebhookSupabase = { from(table: string): QueryBuilder };
 
-export interface TelnyxWebhookDeps {
+interface TelnyxWebhookDeps {
   supabaseFactory: () => WebhookSupabase | null;
   publicKeyResolver: () => Promise<string | null>;
   /** Inject for replay-window tests. */
   now?: () => number;
 }
 
-export const defaultTelnyxWebhookDeps: TelnyxWebhookDeps = {
+const defaultTelnyxWebhookDeps: TelnyxWebhookDeps = {
   supabaseFactory: () =>
     createServerSupabaseAdminClient() as unknown as WebhookSupabase | null,
   publicKeyResolver: resolveTelnyxWebhookPublicKey,
@@ -204,7 +204,7 @@ export interface ProcessResult {
  * Process a verified Telnyx webhook body. Exposed so tests can exercise
  * the routing/idempotency logic without standing up a Next request.
  */
-export async function processTelnyxFaxWebhook(
+async function processTelnyxFaxWebhook(
   rawBody: string,
   deps: TelnyxWebhookDeps,
 ): Promise<ProcessResult> {

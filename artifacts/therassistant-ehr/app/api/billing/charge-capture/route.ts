@@ -47,7 +47,7 @@ function minutesBetween(a: string | null, b: string | null): number | null {
   return Math.max(0, Math.round((t2 - t1) / 60000));
 }
 
-export type ChargeCaptureTab =
+type ChargeCaptureTab =
   | "ready_for_review"
   | "documentation_missing"
   | "coding_mismatch"
@@ -55,7 +55,7 @@ export type ChargeCaptureTab =
   | "held_charges"
   | "released_to_claims";
 
-export const CHARGE_CAPTURE_TABS: Array<{ id: ChargeCaptureTab; label: string }> = [
+const CHARGE_CAPTURE_TABS: Array<{ id: ChargeCaptureTab; label: string }> = [
   { id: "ready_for_review", label: "Ready for Review" },
   { id: "documentation_missing", label: "Documentation Missing" },
   { id: "coding_mismatch", label: "Coding Mismatch" },

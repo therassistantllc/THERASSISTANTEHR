@@ -10,7 +10,7 @@ function extractMessage(error: unknown) {
 
 export async function PATCH(
   request: Request,
-  { params }: { params: Promise<{ appointmentId: string }> | { appointmentId: string } },
+  { params }: { params: Promise<{ appointmentId: string }> },
 ) {
   try {
     const resolvedParams = await Promise.resolve(params);

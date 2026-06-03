@@ -29,7 +29,7 @@ type ActionName = (typeof ACTIONS)[number];
 
 export async function POST(
   request: Request,
-  context: { params: { id: string } | Promise<{ id: string }> },
+  context: { params: Promise<{ id: string }> },
 ) {
   try {
     const resolved = await Promise.resolve(context.params);

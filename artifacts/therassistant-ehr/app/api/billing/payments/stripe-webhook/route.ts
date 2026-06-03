@@ -133,7 +133,7 @@ interface StripeDisputeLike {
  * no env reads) so the test suite can pin behavior for timing-window,
  * hex-parse, and multi-v1 cases without spinning up a request.
  */
-export function verifyStripeSignature(rawBody: string, header: string | null, secret: string): boolean {
+function verifyStripeSignature(rawBody: string, header: string | null, secret: string): boolean {
   if (!header) return false;
   const parts = header.split(",").map((p) => p.trim());
   let timestamp: string | null = null;
@@ -168,7 +168,7 @@ export function verifyStripeSignature(rawBody: string, header: string | null, se
 }
 
 /** Pull (chargeId, paymentIntentId, amountCents, metadata) from either event shape. */
-export function extractPaymentDetails(event: StripeEvent): {
+function extractPaymentDetails(event: StripeEvent): {
   chargeId: string | null;
   paymentIntentId: string | null;
   amountCents: number;
@@ -292,7 +292,7 @@ async function writeUnmatchedWorkqueueItem(
  * and the posting engine without monkey-patching modules. The default
  * wiring (`defaultStripeWebhookDeps`) preserves production behavior.
  */
-export interface StripeWebhookDeps {
+interface StripeWebhookDeps {
   getSupabase: () => ReturnType<typeof createServerSupabaseAdminClient>;
   commitPayment: typeof commitPatientPayment;
   /**
@@ -305,14 +305,14 @@ export interface StripeWebhookDeps {
   now?: () => number;
 }
 
-export const defaultStripeWebhookDeps: StripeWebhookDeps = {
+const defaultStripeWebhookDeps: StripeWebhookDeps = {
   getSupabase: () => createServerSupabaseAdminClient(),
   commitPayment: commitPatientPayment,
   reversePayment: reversePostedPayment,
   getSecret: () => process.env.STRIPE_WEBHOOK_SECRET?.trim(),
 };
 
-export async function processStripeWebhook(
+async function processStripeWebhook(
   rawBody: string,
   signatureHeader: string | null,
   deps: StripeWebhookDeps = defaultStripeWebhookDeps,

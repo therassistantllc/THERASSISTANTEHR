@@ -145,7 +145,7 @@ export async function GET(request: Request) {
     const appointmentProviderIds = Array.from(
       new Set(
         (claimRows ?? [])
-          .map((r) => {
+          .map((r: any) => {
             const appt = r.appointments as Record<string, unknown> | null;
             return str(appt?.provider_id);
           })
@@ -168,7 +168,7 @@ export async function GET(request: Request) {
       }
     }
 
-    const rows = (claimRows ?? []).map((r) => {
+    const rows = (claimRows ?? []).map((r: any) => {
 
       const client = r.clients as unknown as Record<string, unknown> | null;
       const payer = r.payer_profiles as unknown as Record<string, unknown> | null;

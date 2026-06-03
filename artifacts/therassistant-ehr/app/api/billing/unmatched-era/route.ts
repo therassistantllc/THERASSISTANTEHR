@@ -15,14 +15,14 @@ import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireBillingAccess } from "@/lib/billing/requireBillingAccess";
 import { findCandidatesForEraClaimPayment } from "@/lib/payments/assistedMatchingService";
 
-export type UnmatchedEraTabId =
+type UnmatchedEraTabId =
   | "client_match_needed"
   | "claim_number_mismatch"
   | "payer_mismatch"
   | "duplicate_match"
   | "manual_review";
 
-export const UNMATCHED_ERA_TABS: Array<{ id: UnmatchedEraTabId; label: string }> = [
+const UNMATCHED_ERA_TABS: Array<{ id: UnmatchedEraTabId; label: string }> = [
   { id: "client_match_needed", label: "Client Match Needed" },
   { id: "claim_number_mismatch", label: "Claim Number Mismatch" },
   { id: "payer_mismatch", label: "Payer Mismatch" },

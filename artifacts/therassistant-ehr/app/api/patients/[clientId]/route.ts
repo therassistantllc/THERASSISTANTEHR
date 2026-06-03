@@ -197,7 +197,7 @@ async function writeDemographicsAuditLogs(params: {
 
 export async function PATCH(
   request: Request,
-  context: { params: Promise<{ clientId: string }> | { clientId: string } },
+  context: { params: Promise<{ clientId: string }> },
 ) {
   try {
     const { clientId: rawClientId } = await Promise.resolve(context.params);

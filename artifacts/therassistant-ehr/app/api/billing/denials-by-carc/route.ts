@@ -26,7 +26,7 @@ const money = (v: unknown) => {
 // ── CARC description dictionary ─────────────────────────────────────────────
 // Source: X12 CARC code list. Limited to the most common denial codes we
 // surface in the UI; unknown codes fall through to a generic label.
-export const CARC_DESCRIPTIONS: Record<string, string> = {
+const CARC_DESCRIPTIONS: Record<string, string> = {
   "16": "Claim/service lacks information or has submission/billing error(s)",
   "22": "Care may be covered by another payer per coordination of benefits",
   "23": "Impact of prior payer adjudication including payments and adjustments",
@@ -45,7 +45,7 @@ export const CARC_DESCRIPTIONS: Record<string, string> = {
   "253": "Sequestration — reduction in federal payment",
 };
 
-export function describeCarc(code: string): string {
+function describeCarc(code: string): string {
   const c = text(code);
   if (!c) return "Unknown reason — no CARC reported";
   return CARC_DESCRIPTIONS[c] ?? `CARC ${c}`;
@@ -53,7 +53,7 @@ export function describeCarc(code: string): string {
 
 // ── Suggested correction templates ──────────────────────────────────────────
 // Per-CARC playbook strings used by the detail panel.
-export const CARC_CORRECTION_TEMPLATES: Record<string, string> = {
+const CARC_CORRECTION_TEMPLATES: Record<string, string> = {
   "16": "Verify member ID, DOB, and required loops (2010BA/BB). Re-bill once data is complete.",
   "22": "Confirm primary/secondary order. Update COB on the client and resubmit to the correct payer first.",
   "29": "Gather proof of timely original submission (clearinghouse 277CA) and file a timely-filing appeal.",
@@ -67,7 +67,7 @@ export const CARC_CORRECTION_TEMPLATES: Record<string, string> = {
   "204": "Confirm benefits and bill the client (or alternate payer) for the non-covered service.",
 };
 
-export function correctionTemplateFor(code: string): string {
+function correctionTemplateFor(code: string): string {
   const c = text(code);
   return (
     CARC_CORRECTION_TEMPLATES[c] ??
@@ -75,7 +75,7 @@ export function correctionTemplateFor(code: string): string {
   );
 }
 
-export const TOP_CARC_CODES = ["16", "22", "29", "96", "197"] as const;
+const TOP_CARC_CODES = ["16", "22", "29", "96", "197"] as const;
 
 function ageDays(value: string | null | undefined): number | null {
   if (!value) return null;

@@ -210,7 +210,7 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
         sourceClientId: client.external_client_ref ?? null,
         emergencyContactName: client.emergency_contact_name ?? null,
         emergencyContactPhone: client.emergency_contact_phone ?? null,
-        primaryProviderId: client.primary_provider_id ?? client.primary_clinician_user_id ?? null,
+        primaryProviderId: client.primary_provider_id ?? null,
       },
       insurance: {
         policies: policies ?? [],

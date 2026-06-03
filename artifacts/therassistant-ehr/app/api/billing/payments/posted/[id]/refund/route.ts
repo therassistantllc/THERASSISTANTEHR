@@ -38,7 +38,7 @@ interface Body {
 type SupabaseAdmin = NonNullable<ReturnType<typeof createServerSupabaseAdminClient>>;
 
 /** Injectable dependencies so the processor is unit-testable end-to-end. */
-export interface RefundRouteDeps {
+interface RefundRouteDeps {
   requireAuth: typeof requireAuthenticatedPaymentPoster;
   recordInsuranceRefund: typeof recordInsuranceRefund;
   recordPatientRefund: typeof recordPatientRefund;
@@ -46,7 +46,7 @@ export interface RefundRouteDeps {
   supabase?: SupabaseAdmin | null;
 }
 
-export const defaultRefundRouteDeps: RefundRouteDeps = {
+const defaultRefundRouteDeps: RefundRouteDeps = {
   requireAuth: requireAuthenticatedPaymentPoster,
   recordInsuranceRefund,
   recordPatientRefund,
@@ -57,7 +57,7 @@ export const defaultRefundRouteDeps: RefundRouteDeps = {
  * wrapper can keep concerns separated. Throws auth errors so the
  * wrapper can map them to 401/403 cleanly.
  */
-export async function processRefundRequest(
+async function processRefundRequest(
   rawId: string,
   body: Body,
   deps: RefundRouteDeps = defaultRefundRouteDeps,

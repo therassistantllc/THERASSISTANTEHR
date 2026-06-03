@@ -65,7 +65,7 @@ const TRACKED_ACTIONS = [
 
 export async function GET(
   request: Request,
-  context: { params: Promise<{ clientId: string }> | { clientId: string } },
+  context: { params: Promise<{ clientId: string }> },
 ) {
   try {
     const { clientId: rawClientId } = await Promise.resolve(context.params);

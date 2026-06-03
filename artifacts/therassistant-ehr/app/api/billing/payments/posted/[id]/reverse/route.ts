@@ -32,14 +32,14 @@ interface Body {
 type SupabaseAdmin = NonNullable<ReturnType<typeof createServerSupabaseAdminClient>>;
 
 /** Injectable dependencies so the processor is unit-testable end-to-end. */
-export interface ReverseRouteDeps {
+interface ReverseRouteDeps {
   requireAuth: typeof requireAuthenticatedPaymentPoster;
   reversePostedPayment: typeof reversePostedPayment;
   /** Optional injected supabase client — forwarded to the engine handler. */
   supabase?: SupabaseAdmin | null;
 }
 
-export const defaultReverseRouteDeps: ReverseRouteDeps = {
+const defaultReverseRouteDeps: ReverseRouteDeps = {
   requireAuth: requireAuthenticatedPaymentPoster,
   reversePostedPayment,
 };
@@ -49,7 +49,7 @@ export const defaultReverseRouteDeps: ReverseRouteDeps = {
  * wrapper can keep concerns separated. Throws auth errors so the
  * wrapper can map them to 401/403 cleanly.
  */
-export async function processReversalRequest(
+async function processReversalRequest(
   rawId: string,
   body: Body,
   deps: ReverseRouteDeps = defaultReverseRouteDeps,
