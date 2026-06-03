@@ -70,9 +70,6 @@ function parse999(rawContent: string) {
     ik5Statuses: ik5Segments.map((elements) => elements[1] ?? null),
     errorSegments,
     segmentCount: segments.length,
-    // Typed classification persisted at intake. The 999 Rejections
-    // workqueue prefers these fields when present; legacy rows that
-    // don't carry them are re-classified on read via the same helper.
     errorCategory: classification.errorCategory,
     errorDetails: classification.errorDetails,
     primaryReasonCode: classification.primaryReasonCode,
@@ -86,10 +83,11 @@ async function loadBatchById(organizationId: string, batchId: string) {
   if (!supabase) throw new Error("Database connection not available");
 
   const { data, error } = await supabase
-    .from("edi_batches")
-    .select("id, organization_id, status, transaction_type")
+    .from("claim_837p_batches")
+    .select("id, organization_id, batch_status, batch_number, generated_at")
     .eq("id", batchId)
     .eq("organization_id", organizationId)
+    .is("archived_at", null)
     .maybeSingle();
 
   if (error) throw new Error(error.message);
@@ -101,18 +99,34 @@ async function findBatchFromContent(organizationId: string, rawContent: string) 
   const ak2 = segments.find((elements) => elements[0] === "AK2");
   const stControlNumber = ak2?.[2] ? normalizeText(ak2[2]) : null;
 
-  if (!stControlNumber) return null;
-
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) throw new Error("Database connection not available");
 
+  // Active 837P batches do not consistently store ST control number. Prefer
+  // matching the 999 AK2 control value against the batch number, then fall back
+  // to the most recent submitted/generated 837P batch for the organization.
+  if (stControlNumber) {
+    const { data, error } = await supabase
+      .from("claim_837p_batches")
+      .select("id, organization_id, batch_status, batch_number, generated_at")
+      .eq("organization_id", organizationId)
+      .eq("batch_number", stControlNumber)
+      .is("archived_at", null)
+      .order("generated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (data) return data as DbRecord;
+  }
+
   const { data, error } = await supabase
-    .from("edi_batches")
-    .select("id, organization_id, status, transaction_type")
+    .from("claim_837p_batches")
+    .select("id, organization_id, batch_status, batch_number, generated_at")
     .eq("organization_id", organizationId)
-    .eq("transaction_type", "837P")
-    .eq("st_control_number", stControlNumber)
-    .order("generated_at", { ascending: false })
+    .is("archived_at", null)
+    .in("batch_status", ["submitted", "generated", "ready_to_submit", "ready"])
+    .order("submitted_at", { ascending: false, nullsFirst: false })
+    .order("generated_at", { ascending: false, nullsFirst: false })
     .limit(1)
     .maybeSingle();
 
@@ -120,17 +134,19 @@ async function findBatchFromContent(organizationId: string, rawContent: string) 
   return data as DbRecord | null;
 }
 
-async function loadLinkedClaimIds(batchId: string) {
+async function loadLinkedClaimIds(organizationId: string, batchId: string) {
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) throw new Error("Database connection not available");
 
   const { data, error } = await supabase
-    .from("edi_batch_claims")
-    .select("claim_id")
-    .eq("edi_batch_id", batchId);
+    .from("claim_837p_batch_claims")
+    .select("professional_claim_id")
+    .eq("organization_id", organizationId)
+    .eq("batch_id", batchId)
+    .is("archived_at", null);
 
   if (error) throw new Error(error.message);
-  return (data ?? []).map((row: { claim_id: string }) => String(row.claim_id));
+  return (data ?? []).map((row: { professional_claim_id: string }) => String(row.professional_claim_id));
 }
 
 function batchStatusForOutcome(outcome: Edi999Outcome) {
@@ -148,7 +164,7 @@ function claimStatusForOutcome(outcome: Edi999Outcome) {
 }
 
 export async function intake999Acknowledgement(
-  input: Intake999AcknowledgementInput
+  input: Intake999AcknowledgementInput,
 ): Promise<Intake999AcknowledgementResult> {
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) {
@@ -185,12 +201,12 @@ export async function intake999Acknowledgement(
       batchId: input.batchId ?? null,
       outcome: parsed.outcome,
       linkedClaimIds: [],
-      errors: [{ field: "edi_batches", message: "Could not match 999 acknowledgement to an EDI batch" }],
+      errors: [{ field: "claim_837p_batches", message: "Could not match 999 acknowledgement to an active 837P batch" }],
     };
   }
 
   const batchId = String(batch.id);
-  const linkedClaimIds = await loadLinkedClaimIds(batchId);
+  const linkedClaimIds = await loadLinkedClaimIds(input.organizationId, batchId);
 
   const { data: ack, error: ackError } = await supabase
     .from("edi_acknowledgements")
@@ -218,8 +234,8 @@ export async function intake999Acknowledgement(
 
   const acknowledgementId = String(ack.id);
   const { error: batchUpdateError } = await supabase
-    .from("edi_batches")
-    .update({ status: batchStatusForOutcome(parsed.outcome) })
+    .from("claim_837p_batches")
+    .update({ batch_status: batchStatusForOutcome(parsed.outcome), updated_at: new Date().toISOString() })
     .eq("id", batchId)
     .eq("organization_id", input.organizationId);
 
@@ -230,7 +246,7 @@ export async function intake999Acknowledgement(
       batchId,
       outcome: parsed.outcome,
       linkedClaimIds,
-      errors: [{ field: "edi_batches", message: batchUpdateError.message }],
+      errors: [{ field: "claim_837p_batches", message: batchUpdateError.message }],
     };
   }
 

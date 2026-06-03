@@ -3,7 +3,6 @@ import { generate837PBatch } from "@/lib/claims/edi837pBatchService";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import {
   assertClaimReadyForSubmission,
-  assertClaimSubmissionReady,
   gateResponse,
 } from "@/lib/validation/claimSubmissionGate";
 
@@ -16,14 +15,10 @@ export async function POST(request: Request) {
 
     const organizationId = String(body.organizationId);
 
-    // 1. System-readiness gate (always runs).
-    const systemGate = await assertClaimSubmissionReady(organizationId);
-    const systemBlocked = gateResponse(systemGate);
-    if (systemBlocked) return systemBlocked;
-
-    // 2. Per-claim content gate. If the caller didn't list claim IDs we look
-    //    up every claim that the batch service would otherwise pick up so we
-    //    can refuse to transmit any claim with blocking content findings.
+    // 837P batch generation should validate the persisted claim payload only.
+    // Do not block generation based on organization-level System Readiness settings;
+    // those settings are informational/admin configuration and may differ from the
+    // claim snapshot data actually used to build the X12.
     const supabase = createServerSupabaseAdminClient();
     if (!supabase) {
       return NextResponse.json(

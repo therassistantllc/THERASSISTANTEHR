@@ -24,6 +24,15 @@ function extractErrorMessage(error: unknown) {
   return "Payment posting failed";
 }
 
+function money(value: unknown) {
+  const amount = Number(value ?? 0);
+  return Number.isFinite(amount) ? Math.round(amount * 100) / 100 : 0;
+}
+
+function todayIsoDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 export async function POST(request: Request) {
   try {
     const supabase = createServerSupabaseServiceRoleClient();
@@ -39,28 +48,63 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = (await request.json()) as { paymentImportItemId?: unknown };
+    const body = (await request.json()) as { paymentImportItemId?: unknown; eraClaimPaymentId?: unknown };
     const paymentImportItemId = String(body.paymentImportItemId ?? "").trim();
+    const requestedEraClaimPaymentId = String(body.eraClaimPaymentId ?? "").trim();
 
-    if (!paymentImportItemId) {
-      return NextResponse.json({ success: false, error: "paymentImportItemId is required" }, { status: 400 });
+    if (!paymentImportItemId && !requestedEraClaimPaymentId) {
+      return NextResponse.json(
+        { success: false, error: "paymentImportItemId or eraClaimPaymentId is required" },
+        { status: 400 },
+      );
     }
 
-    const { data: paymentImportItem, error: itemError } = await supabase
-      .from("payment_import_items")
-      .select("id, organization_id, claim_id, net_amount, posting_ready, imported_item_ref")
-      .eq("id", paymentImportItemId)
-      .is("archived_at", null)
-      .maybeSingle();
+    let eraClaimPayment: Record<string, unknown> | null = null;
+    if (requestedEraClaimPaymentId) {
+      const { data, error } = await supabase
+        .from("era_claim_payments")
+        .select("*")
+        .eq("id", requestedEraClaimPaymentId)
+        .is("archived_at", null)
+        .maybeSingle();
+      if (error) throw error;
+      eraClaimPayment = data as Record<string, unknown> | null;
+    } else if (paymentImportItemId) {
+      const { data, error } = await supabase
+        .from("era_claim_payments")
+        .select("*")
+        .eq("payment_import_item_id", paymentImportItemId)
+        .is("archived_at", null)
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      eraClaimPayment = data as Record<string, unknown> | null;
+    }
+
+    const resolvedPaymentImportItemId =
+      paymentImportItemId || String(eraClaimPayment?.payment_import_item_id ?? "").trim();
+
+    const { data: paymentImportItem, error: itemError } = resolvedPaymentImportItemId
+      ? await supabase
+          .from("payment_import_items")
+          .select("id, organization_id, claim_id, client_id, net_amount, posting_ready, imported_item_ref")
+          .eq("id", resolvedPaymentImportItemId)
+          .is("archived_at", null)
+          .maybeSingle()
+      : { data: null, error: null };
 
     if (itemError) throw itemError;
-    if (!paymentImportItem) {
-      return NextResponse.json({ success: false, error: "Payment import item not found" }, { status: 404 });
+    if (!paymentImportItem && !eraClaimPayment) {
+      return NextResponse.json({ success: false, error: "Payment import item or ERA claim payment not found" }, { status: 404 });
     }
 
-    // Task #112 — POST_PAYMENTS gate (org resolved from the import item).
+    const organizationId = String(
+      eraClaimPayment?.organization_id ?? paymentImportItem?.organization_id ?? "",
+    );
+
+    // Task #112 — POST_PAYMENTS gate (org resolved from ERA claim/payment item).
     try {
-      await requireAuthenticatedPaymentPoster(String(paymentImportItem.organization_id ?? ""));
+      await requireAuthenticatedPaymentPoster(organizationId);
     } catch (err) {
       const status =
         err instanceof PaymentPostingUnauthenticatedError ? 401 : err instanceof PaymentPostingForbiddenError ? 403 : 403;
@@ -70,38 +114,62 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!paymentImportItem.posting_ready) {
-      return NextResponse.json({ success: false, error: "Payment import item is not ready to post" }, { status: 409 });
+    const paymentReady = Boolean(paymentImportItem?.posting_ready) || eraClaimPayment?.posted_status === "unposted";
+    if (!paymentReady) {
+      return NextResponse.json({ success: false, error: "Payment is not ready to post" }, { status: 409 });
     }
 
     const now = new Date().toISOString();
-    const amount = Number(paymentImportItem.net_amount ?? 0);
-    const safeAmount = Number.isFinite(amount) ? amount : 0;
+    const eraPaidAmount = money(eraClaimPayment?.paid_amount);
+    const importNetAmount = money(paymentImportItem?.net_amount);
+    const safeAmount = eraPaidAmount || importNetAmount;
+    const claimId = String(eraClaimPayment?.professional_claim_id ?? paymentImportItem?.claim_id ?? "").trim() || null;
+    const clientId = String(eraClaimPayment?.client_id ?? paymentImportItem?.client_id ?? "").trim() || null;
+    const paymentRef = String(
+      eraClaimPayment?.check_or_eft_number ??
+        eraClaimPayment?.payer_claim_control_number ??
+        paymentImportItem?.imported_item_ref ??
+        eraClaimPayment?.id ??
+        paymentImportItem?.id ??
+        "payment",
+    );
 
     // Find-or-create with 23505 race protection (Task #184). Partial unique
     // index idx_payment_postings_unique_active_import_item guarantees one
     // live posting per import item even if two posters race.
     const postingResult = await findOrCreateRow<Record<string, unknown>>({
       label: "payment posting",
-      findExisting: () =>
-        supabase
+      findExisting: () => {
+        if (resolvedPaymentImportItemId) {
+          return supabase
+            .from("payment_postings")
+            .select("*")
+            .eq("payment_import_item_id", resolvedPaymentImportItemId)
+            .is("archived_at", null)
+            .limit(1)
+            .maybeSingle();
+        }
+
+        return supabase
           .from("payment_postings")
           .select("*")
-          .eq("payment_import_item_id", paymentImportItemId)
+          .eq("posting_reference", `ERA-${eraClaimPayment?.id}`)
+          .eq("organization_id", organizationId)
           .is("archived_at", null)
           .limit(1)
-          .maybeSingle(),
+          .maybeSingle();
+      },
       insertNew: () =>
         supabase
           .from("payment_postings")
           .insert({
             id: generateUuid(),
-            organization_id: paymentImportItem.organization_id,
-            payment_import_item_id: paymentImportItem.id,
+            organization_id: organizationId,
+            payment_import_item_id: resolvedPaymentImportItemId || null,
             posting_status: "posted",
             posting_reference: `POST-${Date.now()}`,
             total_posted_amount: safeAmount,
-            note: `Posted from payment posting workspace for ${paymentImportItem.imported_item_ref ?? paymentImportItem.id}`,
+            note: `Posted from payment posting workspace for ${paymentRef}`,
             posted_at: now,
             created_at: now,
             updated_at: now,
@@ -118,21 +186,95 @@ export async function POST(request: Request) {
     }
     const createdPosting = postingResult.row;
 
-    const paymentImportUpdate = await supabase
-      .from("payment_import_items")
-      .update({ payment_import_status: "posted", posting_ready: false, updated_at: now })
-      .eq("id", paymentImportItem.id);
-    if (paymentImportUpdate.error) throw paymentImportUpdate.error;
+    if (resolvedPaymentImportItemId) {
+      const paymentImportUpdate = await supabase
+        .from("payment_import_items")
+        .update({ payment_import_status: "posted", posting_ready: false, updated_at: now })
+        .eq("id", resolvedPaymentImportItemId);
+      if (paymentImportUpdate.error) throw paymentImportUpdate.error;
+    }
 
-    const workqueueUpdate = await supabase
-      .from("workqueue_items")
-      .update({ status: "resolved", resolved_at: now, updated_at: now })
-      .eq("source_object_id", paymentImportItem.id)
-      .eq("work_type", "payment_posting_needed")
-      .is("archived_at", null);
-    if (workqueueUpdate.error) throw workqueueUpdate.error;
+    if (eraClaimPayment?.id) {
+      const eraPaymentUpdate = await supabase
+        .from("era_claim_payments")
+        .update({ posted_status: "posted", posted_at: now, updated_at: now })
+        .eq("id", eraClaimPayment.id);
+      if (eraPaymentUpdate.error) throw eraPaymentUpdate.error;
 
-    if (paymentImportItem.claim_id) {
+      const eraLineUpdate = await supabase
+        .from("era_service_lines")
+        .update({ posted_status: "posted", updated_at: now })
+        .eq("era_claim_payment_id", eraClaimPayment.id)
+        .is("archived_at", null);
+      if (eraLineUpdate.error) throw eraLineUpdate.error;
+    }
+
+    if (clientId) {
+      const ledgerReference = String(eraClaimPayment?.id ?? createdPosting.id);
+      const existingLedger = await supabase
+        .from("client_ledger_entries")
+        .select("id")
+        .eq("organization_id", organizationId)
+        .eq("source_type", "era_payment")
+        .eq("reference_number", ledgerReference)
+        .is("archived_at", null)
+        .limit(1)
+        .maybeSingle();
+      if (existingLedger.error) throw existingLedger.error;
+
+      if (!existingLedger.data) {
+        const ledgerInsert = await supabase
+          .from("client_ledger_entries")
+          .insert({
+            id: generateUuid(),
+            organization_id: organizationId,
+            client_id: clientId,
+            professional_claim_id: claimId,
+            era_claim_payment_id: eraClaimPayment?.id ?? null,
+            source_type: "era_payment",
+            entry_type: "insurance_payment",
+            description: `Insurance payment posted from ERA ${paymentRef}`,
+            debit_amount: 0,
+            credit_amount: safeAmount,
+            balance_effect: -safeAmount,
+            service_date: null,
+            posting_date: todayIsoDate(),
+            reference_number: ledgerReference,
+            metadata: {
+              payment_import_item_id: resolvedPaymentImportItemId || null,
+              payment_posting_id: createdPosting.id,
+              check_or_eft_number: eraClaimPayment?.check_or_eft_number ?? null,
+              payer_claim_control_number: eraClaimPayment?.payer_claim_control_number ?? null,
+              patient_account_number: eraClaimPayment?.patient_account_number ?? paymentImportItem?.imported_item_ref ?? null,
+            },
+            created_at: now,
+            updated_at: now,
+          });
+        if (ledgerInsert.error) throw ledgerInsert.error;
+      }
+    }
+
+    const workqueueByEra = eraClaimPayment?.id
+      ? await supabase
+          .from("workqueue_items")
+          .update({ status: "resolved", resolved_at: now, updated_at: now })
+          .eq("source_object_id", eraClaimPayment.id)
+          .eq("work_type", "payment_posting_needed")
+          .is("archived_at", null)
+      : { error: null };
+    if (workqueueByEra.error) throw workqueueByEra.error;
+
+    if (resolvedPaymentImportItemId) {
+      const workqueueByImport = await supabase
+        .from("workqueue_items")
+        .update({ status: "resolved", resolved_at: now, updated_at: now })
+        .eq("source_object_id", resolvedPaymentImportItemId)
+        .eq("work_type", "payment_posting_needed")
+        .is("archived_at", null);
+      if (workqueueByImport.error) throw workqueueByImport.error;
+    }
+
+    if (claimId) {
       const claimUpdate = await supabase
         .from("professional_claims")
         .update({
@@ -141,7 +283,7 @@ export async function POST(request: Request) {
           payer_responsibility_amount: safeAmount,
           updated_at: now,
         })
-        .eq("id", paymentImportItem.claim_id);
+        .eq("id", claimId);
       if (claimUpdate.error) throw claimUpdate.error;
     }
 

@@ -23,8 +23,7 @@ export interface EdiSubmissionTrackingResult {
 type BatchRow = {
   id: string;
   organization_id: string;
-  status: string;
-  transaction_type: string;
+  batch_status: string;
 };
 
 async function loadBatch(organizationId: string, batchId: string): Promise<BatchRow | null> {
@@ -32,31 +31,34 @@ async function loadBatch(organizationId: string, batchId: string): Promise<Batch
   if (!supabase) throw new Error("Database connection not available");
 
   const { data, error } = await supabase
-    .from("edi_batches")
-    .select("id, organization_id, status, transaction_type")
+    .from("claim_837p_batches")
+    .select("id, organization_id, batch_status")
     .eq("id", batchId)
     .eq("organization_id", organizationId)
+    .is("archived_at", null)
     .maybeSingle();
 
   if (error) throw new Error(error.message);
   return data as BatchRow | null;
 }
 
-async function loadLinkedClaimIds(batchId: string): Promise<string[]> {
+async function loadLinkedClaimIds(organizationId: string, batchId: string): Promise<string[]> {
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) throw new Error("Database connection not available");
 
   const { data, error } = await supabase
-    .from("edi_batch_claims")
-    .select("claim_id")
-    .eq("edi_batch_id", batchId);
+    .from("claim_837p_batch_claims")
+    .select("professional_claim_id")
+    .eq("organization_id", organizationId)
+    .eq("batch_id", batchId)
+    .is("archived_at", null);
 
   if (error) throw new Error(error.message);
-  return (data ?? []).map((row: { claim_id: string }) => String(row.claim_id));
+  return (data ?? []).map((row: { professional_claim_id: string }) => String(row.professional_claim_id));
 }
 
 export async function mark837PBatchSubmitted(
-  input: Mark837PBatchSubmittedInput
+  input: Mark837PBatchSubmittedInput,
 ): Promise<EdiSubmissionTrackingResult> {
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) {
@@ -74,45 +76,38 @@ export async function mark837PBatchSubmitted(
       ok: false,
       batchId: input.batchId,
       linkedClaimIds: [],
-      errors: [{ field: "edi_batches", message: "EDI batch not found for organization" }],
+      errors: [{ field: "claim_837p_batches", message: "837P batch not found for organization" }],
     };
   }
 
-  if (batch.transaction_type !== "837P") {
+  if (!["generated", "ready_to_submit", "ready", "failed", "ready_to_generate"].includes(batch.batch_status)) {
     return {
       ok: false,
       batchId: input.batchId,
       linkedClaimIds: [],
-      errors: [{ field: "edi_batches.transaction_type", message: "Only 837P batches can be submitted through this workflow" }],
+      errors: [{ field: "claim_837p_batches.batch_status", message: `Batch status ${batch.batch_status} cannot be marked submitted` }],
     };
   }
 
-  if (!["generated", "failed"].includes(batch.status)) {
-    return {
-      ok: false,
-      batchId: input.batchId,
-      linkedClaimIds: [],
-      errors: [{ field: "edi_batches.status", message: `Batch status ${batch.status} cannot be marked submitted` }],
-    };
-  }
-
-  const linkedClaimIds = await loadLinkedClaimIds(input.batchId);
+  const linkedClaimIds = await loadLinkedClaimIds(input.organizationId, input.batchId);
   if (linkedClaimIds.length === 0) {
     return {
       ok: false,
       batchId: input.batchId,
       linkedClaimIds: [],
-      errors: [{ field: "edi_batch_claims", message: "EDI batch has no linked claims" }],
+      errors: [{ field: "claim_837p_batch_claims", message: "837P batch has no linked claims" }],
     };
   }
 
   const submittedAt = input.submittedAt ?? new Date().toISOString();
   const { error: batchUpdateError } = await supabase
-    .from("edi_batches")
+    .from("claim_837p_batches")
     .update({
-      status: "submitted",
-      availity_file_id: input.availityFileId ?? undefined,
+      batch_status: "submitted",
+      office_ally_transaction_id: input.availityFileId ?? undefined,
       submitted_at: submittedAt,
+      last_submission_attempted_at: submittedAt,
+      updated_at: submittedAt,
     })
     .eq("id", input.batchId)
     .eq("organization_id", input.organizationId);
@@ -122,7 +117,7 @@ export async function mark837PBatchSubmitted(
       ok: false,
       batchId: input.batchId,
       linkedClaimIds,
-      errors: [{ field: "edi_batches", message: batchUpdateError.message }],
+      errors: [{ field: "claim_837p_batches", message: batchUpdateError.message }],
     };
   }
 
@@ -145,7 +140,7 @@ export async function mark837PBatchSubmitted(
 }
 
 export async function mark837PBatchSubmissionFailed(
-  input: Mark837PBatchFailedInput
+  input: Mark837PBatchFailedInput,
 ): Promise<EdiSubmissionTrackingResult> {
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) {
@@ -163,14 +158,18 @@ export async function mark837PBatchSubmissionFailed(
       ok: false,
       batchId: input.batchId,
       linkedClaimIds: [],
-      errors: [{ field: "edi_batches", message: "EDI batch not found for organization" }],
+      errors: [{ field: "claim_837p_batches", message: "837P batch not found for organization" }],
     };
   }
 
-  const linkedClaimIds = await loadLinkedClaimIds(input.batchId);
+  const linkedClaimIds = await loadLinkedClaimIds(input.organizationId, input.batchId);
   const { error: batchUpdateError } = await supabase
-    .from("edi_batches")
-    .update({ status: "failed" })
+    .from("claim_837p_batches")
+    .update({
+      batch_status: "failed",
+      submission_error: input.reason,
+      updated_at: new Date().toISOString(),
+    })
     .eq("id", input.batchId)
     .eq("organization_id", input.organizationId);
 
@@ -179,7 +178,7 @@ export async function mark837PBatchSubmissionFailed(
       ok: false,
       batchId: input.batchId,
       linkedClaimIds,
-      errors: [{ field: "edi_batches", message: batchUpdateError.message }],
+      errors: [{ field: "claim_837p_batches", message: batchUpdateError.message }],
     };
   }
 
