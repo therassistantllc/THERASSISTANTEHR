@@ -250,27 +250,36 @@ function emitClaimSegments(ctx: BuildClaimContext): string[] {
     );
   }
 
-  // 2300 CLM
-  const totalCharge = formatMoney(Number(claim.total_charge ?? 0));
-  const claimPos = sanitizeX12(claim.place_of_service || serviceLines[0]?.place_of_service || "");
-  // CLM05-3 Claim Frequency Code: '1' original, '7' replacement, '8' void.
-  // Defaults to '1' when missing. Corrected children produced by the
-  // /api/billing/corrected-claims action persist '7' or '8' here.
-  const claimFrequency = sanitizeX12(claim.claim_frequency_code || "1") || "1";
-  segments.push(
-    rawSeg(
-      "CLM",
-      sanitizeX12(claim.patient_account_number),
-      totalCharge,
-      "",
-      "",
-      `${claimPos}${X12.componentSeparator}B${X12.componentSeparator}${claimFrequency}`,
-      claim.accept_assignment === false ? "N" : "Y",
-      "A",
-      claim.release_of_information === false ? "N" : "Y",
-      claim.signature_on_file === false ? "N" : "Y",
-    ),
-  );
+ // 2300 CLM
+const totalCharge = formatMoney(Number(claim.total_charge ?? 0));
+const claimPos = sanitizeX12(claim.place_of_service || serviceLines[0]?.place_of_service || "");
+
+// CLM01 — Patient Control Number.
+// Availity requires this. Fall back to claim_number, then a deterministic value from claim.id.
+const patientAccountNumber =
+  sanitizeX12(claim.patient_account_number) ||
+  sanitizeX12(claim.claim_number) ||
+  `PT-${sanitizeX12(claim.id).replace(/-/g, "")}`;
+
+// CLM05-3 Claim Frequency Code: '1' original, '7' replacement, '8' void.
+// Defaults to '1' when missing. Corrected children produced by the
+// /api/billing/corrected-claims action persist '7' or '8' here.
+const claimFrequency = sanitizeX12(claim.claim_frequency_code || "1") || "1";
+
+segments.push(
+  rawSeg(
+    "CLM",
+    patientAccountNumber,
+    totalCharge,
+    "",
+    "",
+    `${claimPos}${X12.componentSeparator}B${X12.componentSeparator}${claimFrequency}`,
+    claim.accept_assignment === false ? "N" : "Y",
+    "A",
+    claim.release_of_information === false ? "N" : "Y",
+    claim.signature_on_file === false ? "N" : "Y",
+  ),
+);
 
   // 2300 REF*F8 — Payer Claim Control Number (original claim ICN). Required
   // on corrected/void resubmissions (frequency 7/8) so the payer can tie the
