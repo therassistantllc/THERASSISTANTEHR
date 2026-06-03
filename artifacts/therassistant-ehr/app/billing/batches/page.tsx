@@ -1,5 +1,7 @@
-import { redirect } from "next/navigation";
+import Batches837PClient from "../837p-batches/Batches837PClient";
 
-export default function BillingBatchesRedirect() {
-  redirect("/billing/837p-batches");
+export const dynamic = "force-dynamic";
+
+export default function BillingBatchesPage() {
+  return <Batches837PClient />;
 }
