@@ -9,6 +9,10 @@ type DiagnosisInput = {
   diagnosisDescription?: string | null;
   isPrimary?: boolean;
   presentOnClaim?: boolean;
+  diagnosis_code?: string;
+  diagnosis_description?: string | null;
+  is_primary?: boolean;
+  present_on_claim?: boolean;
 };
 
 type ServiceLineInput = {
@@ -21,6 +25,14 @@ type ServiceLineInput = {
   units?: number;
   chargeAmount?: number;
   placeOfServiceCode?: string | null;
+  service_date?: string;
+  cpt_hcpcs_code?: string;
+  modifier_1?: string | null;
+  modifier_2?: string | null;
+  modifier_3?: string | null;
+  modifier_4?: string | null;
+  charge_amount?: number;
+  place_of_service_code?: string | null;
 };
 
 function text(value: unknown) {
@@ -107,30 +119,16 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
 
     const now = new Date().toISOString();
 
-    await supabase
-      .from("encounter_diagnoses")
-      .update({ archived_at: now, updated_at: now })
-      .eq("organization_id", organizationId)
-      .eq("encounter_id", encounterId)
-      .is("archived_at", null);
-
-    await supabase
-      .from("encounter_service_lines")
-      .update({ archived_at: now, updated_at: now })
-      .eq("organization_id", organizationId)
-      .eq("encounter_id", encounterId)
-      .is("archived_at", null);
-
     const diagnosisPayload = diagnoses
       .map((diagnosis, index) => ({
         organization_id: organizationId,
         encounter_id: encounterId,
         client_id: encounter.client_id,
-        diagnosis_code: text(diagnosis.diagnosisCode).toUpperCase(),
-        diagnosis_description: text(diagnosis.diagnosisDescription) || null,
-        is_primary: diagnosis.isPrimary ?? index === 0,
+        diagnosis_code: text(diagnosis.diagnosisCode ?? diagnosis.diagnosis_code).toUpperCase(),
+        diagnosis_description: text(diagnosis.diagnosisDescription ?? diagnosis.diagnosis_description) || null,
+        is_primary: diagnosis.isPrimary ?? diagnosis.is_primary ?? index === 0,
         sequence_number: index + 1,
-        present_on_claim: diagnosis.presentOnClaim ?? true,
+        present_on_claim: diagnosis.presentOnClaim ?? diagnosis.present_on_claim ?? true,
         created_at: now,
         updated_at: now,
       }))
@@ -141,21 +139,52 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
         organization_id: organizationId,
         encounter_id: encounterId,
         client_id: encounter.client_id,
-        service_date: text(line.serviceDate) || encounter.service_date,
+        service_date: text(line.serviceDate ?? line.service_date) || encounter.service_date,
         sequence_number: index + 1,
-        cpt_hcpcs_code: text(line.procedureCode).toUpperCase(),
-        modifier_1: text(line.modifier1) || null,
-        modifier_2: text(line.modifier2) || null,
-        modifier_3: text(line.modifier3) || null,
-        modifier_4: text(line.modifier4) || null,
+        cpt_hcpcs_code: text(line.procedureCode ?? line.cpt_hcpcs_code).toUpperCase(),
+        modifier_1: text(line.modifier1 ?? line.modifier_1) || null,
+        modifier_2: text(line.modifier2 ?? line.modifier_2) || null,
+        modifier_3: text(line.modifier3 ?? line.modifier_3) || null,
+        modifier_4: text(line.modifier4 ?? line.modifier_4) || null,
         units: Number(line.units ?? 1) || 1,
-        charge_amount: money(line.chargeAmount),
-        place_of_service_code: text(line.placeOfServiceCode) || null,
+        charge_amount: money(line.chargeAmount ?? line.charge_amount),
+        place_of_service_code: text(line.placeOfServiceCode ?? line.place_of_service_code) || null,
         rendering_provider_id: encounter.provider_id,
         created_at: now,
         updated_at: now,
       }))
       .filter((line) => line.cpt_hcpcs_code && line.charge_amount > 0 && line.service_date);
+
+    const existingDiagnosisCount = await supabase
+      .from("encounter_diagnoses")
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", organizationId)
+      .eq("encounter_id", encounterId)
+      .is("archived_at", null);
+
+    const existingServiceLineCount = await supabase
+      .from("encounter_service_lines")
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", organizationId)
+      .eq("encounter_id", encounterId)
+      .is("archived_at", null);
+
+    const incomingDiagnosesProvided = diagnoses.length > 0;
+    const incomingServiceLinesProvided = serviceLines.length > 0;
+
+    if (incomingDiagnosesProvided && diagnosisPayload.length === 0 && (existingDiagnosisCount.count ?? 0) > 0) {
+      return NextResponse.json(
+        { success: false, error: "Refusing to replace existing diagnoses with an empty or invalid diagnosis payload." },
+        { status: 422 },
+      );
+    }
+
+    if (incomingServiceLinesProvided && servicePayload.length === 0 && (existingServiceLineCount.count ?? 0) > 0) {
+      return NextResponse.json(
+        { success: false, error: "Refusing to replace existing service lines with an empty or invalid service line payload." },
+        { status: 422 },
+      );
+    }
 
     const invalidPos = servicePayload.find((line) => {
       const pos = String(line.place_of_service_code ?? "").trim();
@@ -166,14 +195,32 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
       return NextResponse.json({ success: false, error: warning, errors: [{ field: "serviceLines.placeOfServiceCode", message: warning }] }, { status: 422 });
     }
 
-    if (diagnosisPayload.length > 0) {
-      const { error } = await supabase.from("encounter_diagnoses").insert(diagnosisPayload);
-      if (error) throw error;
+    if (incomingDiagnosesProvided) {
+      await supabase
+        .from("encounter_diagnoses")
+        .update({ archived_at: now, updated_at: now })
+        .eq("organization_id", organizationId)
+        .eq("encounter_id", encounterId)
+        .is("archived_at", null);
+
+      if (diagnosisPayload.length > 0) {
+        const { error } = await supabase.from("encounter_diagnoses").insert(diagnosisPayload);
+        if (error) throw error;
+      }
     }
 
-    if (servicePayload.length > 0) {
-      const { error } = await supabase.from("encounter_service_lines").insert(servicePayload);
-      if (error) throw error;
+    if (incomingServiceLinesProvided) {
+      await supabase
+        .from("encounter_service_lines")
+        .update({ archived_at: now, updated_at: now })
+        .eq("organization_id", organizationId)
+        .eq("encounter_id", encounterId)
+        .is("archived_at", null);
+
+      if (servicePayload.length > 0) {
+        const { error } = await supabase.from("encounter_service_lines").insert(servicePayload);
+        if (error) throw error;
+      }
     }
 
     let chargeCapture = null;
