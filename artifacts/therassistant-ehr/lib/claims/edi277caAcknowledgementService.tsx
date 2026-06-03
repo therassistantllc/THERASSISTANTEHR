@@ -51,10 +51,6 @@ type ParsedStc = {
 function parseStcSegment(elements: string[]): ParsedStc {
   const composite = normalizeText(elements[1]);
   const [category, status, entity] = composite.split(":");
-  // STC11 carries the free-form Health Care Claim Status text the payer
-  // uses to describe why a claim was rejected. We surface it as `message`
-  // so per-claim classification can keyword-match the same way the
-  // batch-level message classifier does.
   return {
     raw: elements.join("*"),
     category: category || null,
@@ -81,9 +77,6 @@ function isAcceptStc(entry: ParsedStc): boolean {
 }
 
 export type Parsed277CaClaimRef = {
-  /** TRN02 from the 2200D loop — echoes the original 837P CLM01 (client
-   *  account number) so we can match each per-claim status back to the
-   *  professional_claims row we submitted. */
   trn: string;
   stcStatuses: ParsedStc[];
   message: string | null;
@@ -92,15 +85,6 @@ export type Parsed277CaClaimRef = {
 function parse277CA(rawContent: string) {
   const parsedSegments = splitSegments(rawContent).map(splitElements);
   const bht = parsedSegments.find((elements) => elements[0] === "BHT");
-
-  // Walk the segments in order so we can group each STC under the closest
-  // preceding TRN inside a 2200D (claim-level) loop. The 2200D loop only
-  // appears nested under HL*…*…*23 (claim/patient detail), so we track the
-  // current HL level and only attribute STCs to a claim when we're inside
-  // a 23-level HL. STCs that appear outside any claim loop (eg. at the
-  // transaction set or 2000A info-source level) are still kept on the
-  // top-level `stcStatuses` list for back-compat consumers like the
-  // documentation-request detector.
   const stcStatuses: ParsedStc[] = [];
   const claimRefs: Parsed277CaClaimRef[] = [];
   let currentHlLevel: string | null = null;
@@ -109,8 +93,6 @@ function parse277CA(rawContent: string) {
   for (const elements of parsedSegments) {
     const tag = elements[0];
     if (tag === "HL") {
-      // HL01 = id, HL02 = parent id, HL03 = level code. A new HL closes
-      // out any in-progress claim loop.
       currentHlLevel = normalizeText(elements[3]) || null;
       currentClaim = null;
       continue;
@@ -130,16 +112,13 @@ function parse277CA(rawContent: string) {
       stcStatuses.push(entry);
       if (currentClaim) {
         currentClaim.stcStatuses.push(entry);
-        if (!currentClaim.message && entry.message) {
-          currentClaim.message = entry.message;
-        }
+        if (!currentClaim.message && entry.message) currentClaim.message = entry.message;
       }
     }
   }
 
   const hasReject = stcStatuses.some(isRejectStc);
   const hasAccept = stcStatuses.some(isAcceptStc);
-
   let outcome: Edi277CAOutcome = "unknown";
   if (hasReject && hasAccept) outcome = "partial";
   else if (hasReject) outcome = "rejected";
@@ -159,27 +138,30 @@ async function loadBatchById(organizationId: string, batchId: string) {
   if (!supabase) throw new Error("Database connection not available");
 
   const { data, error } = await supabase
-    .from("edi_batches")
-    .select("id, organization_id, status, transaction_type")
+    .from("claim_837p_batches")
+    .select("id, organization_id, batch_status, batch_number")
     .eq("id", batchId)
     .eq("organization_id", organizationId)
+    .is("archived_at", null)
     .maybeSingle();
 
   if (error) throw new Error(error.message);
   return data as DbRecord | null;
 }
 
-async function loadLinkedClaimIds(batchId: string) {
+async function loadLinkedClaimIds(organizationId: string, batchId: string) {
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) throw new Error("Database connection not available");
 
   const { data, error } = await supabase
-    .from("edi_batch_claims")
-    .select("claim_id")
-    .eq("edi_batch_id", batchId);
+    .from("claim_837p_batch_claims")
+    .select("professional_claim_id")
+    .eq("organization_id", organizationId)
+    .eq("batch_id", batchId)
+    .is("archived_at", null);
 
   if (error) throw new Error(error.message);
-  return (data ?? []).map((row: { claim_id: string }) => String(row.claim_id));
+  return (data ?? []).map((row: { professional_claim_id: string }) => String(row.professional_claim_id));
 }
 
 type ClaimContextRow = {
@@ -219,14 +201,6 @@ async function loadClaimContexts(
   return out;
 }
 
-/**
- * Resolve each parsed 277CA claim ref (keyed by TRN02 echoing the
- * original 837P CLM01) back to one or more linked professional_claims
- * rows. Matching is case/whitespace-insensitive against
- * patient_account_number, claim_number, then the claim id itself —
- * mirrors the workqueue routing service's lookup so both paths agree
- * on which claim a TRN names.
- */
 function matchClaimsForTrn(
   trn: string,
   linkedClaimIds: string[],
@@ -237,11 +211,7 @@ function matchClaimsForTrn(
   const matches: string[] = [];
   for (const claimId of linkedClaimIds) {
     const ctx = contexts.get(claimId);
-    const candidates = [
-      ctx?.patient_account_number,
-      ctx?.claim_number,
-      claimId,
-    ];
+    const candidates = [ctx?.patient_account_number, ctx?.claim_number, claimId];
     for (const candidate of candidates) {
       if (!candidate) continue;
       if (String(candidate).trim().toUpperCase() === key) {
@@ -267,12 +237,6 @@ function claimStatusForOutcome(outcome: Edi277CAOutcome) {
   return "submitted";
 }
 
-// Derive a single outcome from one 2200D claim ref's STC entries. Mirrors
-// the batch-level aggregator in parse277CA but scoped to one claim so a
-// mixed-rejection batch (one claim accepted, one rejected) can tag each
-// claim with its own status instead of collapsing both to the batch
-// outcome. Returns "unknown" when the ref carries no acc/rej STC so the
-// caller can fall back to the batch outcome.
 function outcomeForClaimRef(ref: Parsed277CaClaimRef): Edi277CAOutcome {
   const hasReject = ref.stcStatuses.some(isRejectStc);
   const hasAccept = ref.stcStatuses.some(isAcceptStc);
@@ -283,7 +247,7 @@ function outcomeForClaimRef(ref: Parsed277CaClaimRef): Edi277CAOutcome {
 }
 
 export async function intake277CAAcknowledgement(
-  input: Intake277CAAcknowledgementInput
+  input: Intake277CAAcknowledgementInput,
 ): Promise<Intake277CAAcknowledgementResult> {
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) {
@@ -318,12 +282,12 @@ export async function intake277CAAcknowledgement(
       batchId: input.batchId ?? null,
       outcome: parsed.outcome,
       linkedClaimIds: [],
-      errors: [{ field: "edi_batches", message: "Could not match 277CA acknowledgement to an EDI batch" }],
+      errors: [{ field: "claim_837p_batches", message: "Could not match 277CA acknowledgement to an active 837P batch" }],
     };
   }
 
   const batchId = String(batch.id);
-  const linkedClaimIds = await loadLinkedClaimIds(batchId);
+  const linkedClaimIds = await loadLinkedClaimIds(input.organizationId, batchId);
 
   const { data: ack, error: ackError } = await supabase
     .from("edi_acknowledgements")
@@ -351,8 +315,8 @@ export async function intake277CAAcknowledgement(
 
   const acknowledgementId = String(ack.id);
   const { error: batchUpdateError } = await supabase
-    .from("edi_batches")
-    .update({ status: batchStatusForOutcome(parsed.outcome) })
+    .from("claim_837p_batches")
+    .update({ batch_status: batchStatusForOutcome(parsed.outcome), updated_at: new Date().toISOString() })
     .eq("id", batchId)
     .eq("organization_id", input.organizationId);
 
@@ -363,16 +327,10 @@ export async function intake277CAAcknowledgement(
       batchId,
       outcome: parsed.outcome,
       linkedClaimIds,
-      errors: [{ field: "edi_batches", message: batchUpdateError.message }],
+      errors: [{ field: "claim_837p_batches", message: batchUpdateError.message }],
     };
   }
 
-  // Per-claim status: each linked claim is tagged from its OWN matching
-  // 2200D STC entries (TRN ↔ patient_account_number / claim_number / id).
-  // Claims with no matching ref fall back to the batch-level outcome so
-  // older acks that don't slice per claim still flip everything as one.
-  // We load contexts once here and reuse them below for the medical-review
-  // seed pass — both need the same patient_account_number lookup.
   const claimContexts =
     linkedClaimIds.length > 0
       ? await loadClaimContexts(input.organizationId, linkedClaimIds)
@@ -381,9 +339,8 @@ export async function intake277CAAcknowledgement(
   if (linkedClaimIds.length > 0) {
     const batchStatus = claimStatusForOutcome(parsed.outcome);
     const perClaimStatus = new Map<string, string>();
-    for (const claimId of linkedClaimIds) {
-      perClaimStatus.set(claimId, batchStatus);
-    }
+    for (const claimId of linkedClaimIds) perClaimStatus.set(claimId, batchStatus);
+
     for (const ref of parsed.claimRefs) {
       const refOutcome = outcomeForClaimRef(ref);
       if (refOutcome === "unknown") continue;
@@ -444,16 +401,6 @@ export async function intake277CAAcknowledgement(
     }
   }
 
-  // ── Auto-seed Medical Review queue from 277CA documentation requests. ──
-  // When the ack carries STC entries indicating the payer is asking for
-  // additional documentation (e.g. category A6 with status 287/324/354),
-  // write a `medical_review_requested` audit row for the specific claim
-  // named by the matching 2200D TRN — NOT every claim in the batch. The
-  // 277CA's HL/CLM hierarchy ties each STC to one claim control number,
-  // so a documentation request for one of many claims must not seed the
-  // queue for the other unrelated claims sharing the same batch. The
-  // write is idempotent on (claim, origin, acknowledgement id) so
-  // re-ingesting the same 277CA does not flood the queue.
   if (linkedClaimIds.length > 0 && parsed.claimRefs.length > 0) {
     const contexts = claimContexts;
     const seededClaimIds = new Set<string>();
@@ -466,9 +413,6 @@ export async function intake277CAAcknowledgement(
 
       const matchedClaimIds = matchClaimsForTrn(claimRef.trn, linkedClaimIds, contexts);
       if (matchedClaimIds.length === 0) {
-        // Per-claim STC says "send docs" but we couldn't match the TRN
-        // back to a known claim in this batch — log and skip rather
-        // than fanning out to unrelated claims.
         console.warn(
           `[277CA medical-review seed] no claim matched TRN ${claimRef.trn} in batch ${batchId}`,
         );
@@ -490,9 +434,6 @@ export async function intake277CAAcknowledgement(
           claimRefTrn: claimRef.trn || null,
         });
         if (writeResult.status === "error") {
-          // Non-fatal: log but don't fail the whole ingest — the rejected
-          // workqueue routing already succeeded and the queue can be
-          // re-seeded by re-ingesting the same ack.
           console.warn(
             `[277CA medical-review seed] failed for claim ${claimId}: ${writeResult.error}`,
           );
