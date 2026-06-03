@@ -21,6 +21,20 @@ function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
 
+function numberOrZero(value: unknown) {
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function stringOrNull(value: unknown) {
+  const text = String(value ?? "").trim();
+  return text || null;
+}
+
+function arrayOrEmpty(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
 function extractErrorMessage(error: unknown) {
   if (error instanceof Error && error.message) return error.message;
   if (error && typeof error === "object" && "message" in error) {
@@ -117,12 +131,12 @@ export async function POST(request: Request) {
     for (const [claimIndex, claim] of parsed.claims.entries()) {
       const patientControlNumber = claim.patientControlNumber;
 
-      let matchedClaim: { id: string; client_id: string | null } | null = null;
+      let matchedClaim: { id: string; client_id: string | null; insurance_policy_id?: string | null; payer_profile_id?: string | null } | null = null;
 
       if (patientControlNumber) {
         const { data: claimNumberMatch } = await supabase
           .from("professional_claims")
-          .select("id, client_id")
+          .select("id, client_id, insurance_policy_id, payer_profile_id")
           .eq("organization_id", organizationId)
           .eq("claim_number", patientControlNumber)
           .limit(1)
@@ -134,7 +148,7 @@ export async function POST(request: Request) {
       if (!matchedClaim && patientControlNumber && isUuid(patientControlNumber)) {
         const { data: idMatch } = await supabase
           .from("professional_claims")
-          .select("id, client_id")
+          .select("id, client_id, insurance_policy_id, payer_profile_id")
           .eq("organization_id", organizationId)
           .eq("id", patientControlNumber)
           .limit(1)
@@ -213,7 +227,92 @@ export async function POST(request: Request) {
         throw itemError;
       }
 
-      importedItems.push(itemRecord);
+      const eraClaimPaymentId = generateUuid();
+      const { error: eraClaimError } = await supabase
+        .from("era_claim_payments")
+        .insert({
+          id: eraClaimPaymentId,
+          organization_id: organizationId,
+          payment_import_batch_id: batchId,
+          payment_import_item_id: itemId,
+          professional_claim_id: matchedClaim?.id ?? null,
+          payer_profile_id: matchedClaim?.payer_profile_id ?? null,
+          client_id: matchedClaim?.client_id ?? null,
+          insurance_policy_id: matchedClaim?.insurance_policy_id ?? null,
+          clp01_claim_control_number: stringOrNull(patientControlNumber),
+          payer_claim_control_number: stringOrNull(claim.payerClaimControlNumber),
+          patient_account_number: stringOrNull(patientControlNumber),
+          payer_name: stringOrNull(claim.payerName),
+          payer_id: null,
+          claim_status_code: stringOrNull(claim.claimStatusCode),
+          total_charge_amount: numberOrZero(claim.totalChargeAmount),
+          paid_amount: numberOrZero(claim.paidAmount),
+          patient_responsibility_amount: numberOrZero(claim.patientResponsibilityAmount),
+          claim_filing_indicator_code: stringOrNull(claim.claimFilingIndicatorCode),
+          payment_date: claim.paymentDate || null,
+          check_or_eft_number: stringOrNull(claim.checkOrEftNumber),
+          raw_clp: (claim.raw ?? {}) as Json,
+          raw_segments: payload,
+          match_status: matchedClaim ? "matched" : "unmatched",
+          posted_status: "unposted",
+          created_at: now,
+          updated_at: now,
+        });
+      if (eraClaimError) throw eraClaimError;
+
+      const serviceLines = arrayOrEmpty(claim.serviceLines);
+      if (serviceLines.length > 0) {
+        const eraServiceRows = serviceLines.map((line, index) => {
+          const row = line as Record<string, unknown>;
+          const adjustments = arrayOrEmpty(row.adjustments);
+          const carcCodes = adjustments
+            .map((adj) => (adj && typeof adj === "object" ? (adj as Record<string, unknown>).reasonCode : null))
+            .map(stringOrNull)
+            .filter((code): code is string => Boolean(code));
+          const groupCodes = adjustments
+            .map((adj) => (adj && typeof adj === "object" ? (adj as Record<string, unknown>).groupCode : null))
+            .map(stringOrNull)
+            .filter((code): code is string => Boolean(code));
+          const rarcCodes = arrayOrEmpty(row.remarkCodes).map(stringOrNull).filter((code): code is string => Boolean(code));
+
+          return {
+            id: generateUuid(),
+            organization_id: organizationId,
+            era_claim_payment_id: eraClaimPaymentId,
+            professional_claim_id: matchedClaim?.id ?? null,
+            service_line_number: index + 1,
+            service_date_from: row.serviceDate || row.serviceDateFrom || null,
+            service_date_to: row.serviceDateTo || null,
+            procedure_code: stringOrNull(row.procedureCode || row.procedure_code),
+            modifiers: arrayOrEmpty(row.modifiers).map(String),
+            units: row.units == null ? null : numberOrZero(row.units),
+            charge_amount: numberOrZero(row.chargeAmount ?? row.charge_amount),
+            allowed_amount: row.allowedAmount == null ? null : numberOrZero(row.allowedAmount),
+            paid_amount: numberOrZero(row.paidAmount ?? row.paid_amount),
+            deductible_amount: numberOrZero(row.deductibleAmount),
+            coinsurance_amount: numberOrZero(row.coinsuranceAmount),
+            copay_amount: numberOrZero(row.copayAmount),
+            contractual_adjustment_amount: numberOrZero(row.contractualAdjustmentAmount),
+            other_adjustment_amount: numberOrZero(row.otherAdjustmentAmount),
+            group_codes: [...new Set(groupCodes)],
+            carc_codes: [...new Set(carcCodes)],
+            rarc_codes: [...new Set(rarcCodes)],
+            raw_svc: (row.raw ?? row) as Json,
+            raw_segments: row as Json,
+            match_status: matchedClaim ? "matched" : "unmatched",
+            posted_status: "unposted",
+            created_at: now,
+            updated_at: now,
+          };
+        });
+
+        const { error: eraLineError } = await supabase
+          .from("era_service_lines")
+          .insert(eraServiceRows);
+        if (eraLineError) throw eraLineError;
+      }
+
+      importedItems.push({ ...itemRecord, era_claim_payment_id: eraClaimPaymentId });
 
       // Create workqueue item if payment is ready to post (matched)
       if (itemRecord.posting_ready) {
@@ -222,8 +321,10 @@ export async function POST(request: Request) {
           .insert({
             id: generateUuid(),
             organization_id: organizationId,
-            source_object_type: "payment_import_item",
-            source_object_id: itemId,
+            source_object_type: "era_claim_payment",
+            source_object_id: eraClaimPaymentId,
+            professional_claim_id: matchedClaim?.id ?? null,
+            era_claim_payment_id: eraClaimPaymentId,
             work_type: "payment_posting_needed",
             status: "open",
             priority: "medium",
@@ -242,6 +343,7 @@ export async function POST(request: Request) {
           imported_item_ref: patientControlNumber,
           payer_name: claim.payerName,
           paid_amount: claim.paidAmount,
+          era_claim_payment_id: eraClaimPaymentId,
         });
       }
     }
