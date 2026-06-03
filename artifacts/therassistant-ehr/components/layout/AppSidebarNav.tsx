@@ -121,7 +121,13 @@ function ChevronIcon({ open }: { open: boolean }) {
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
-      style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 0.15s ease", marginLeft: "auto", flexShrink: 0, opacity: 0.5 }}
+      style={{
+        transform: open ? "rotate(90deg)" : "rotate(0deg)",
+        transition: "transform 0.15s ease",
+        marginLeft: "auto",
+        flexShrink: 0,
+        opacity: 0.5,
+      }}
     >
       <polyline points="9 18 15 12 9 6" />
     </svg>
@@ -133,12 +139,16 @@ function active(pathname: string, prefixes: string[], exact = false): boolean {
   return prefixes.some((p) => pathname.startsWith(p));
 }
 
+const DASHBOARD_PREFIXES = ["/billing/my-inbox", "/billing/executive-priority"];
+const CHARGE_CAPTURE_PREFIXES = ["/billing/charge-capture", "/billing/charges"];
+const BATCHES_837P_PREFIXES = ["/billing/batches", "/billing/837p-batches", "/billing/orphaned-batches"];
+const READY_TO_GENERATE_PREFIXES = ["/billing/ready-to-generate"];
+
 const CLAIMS_PREFIXES = [
   "/billing/claims",
   "/billing/documentation-pending",
   "/billing/no-response",
   "/billing/claim-readiness",
-  "/billing/batches",
   "/billing/claim-edit-dashboard",
   "/billing/resubmissions",
   "/billing/corrected-claims",
@@ -150,17 +160,11 @@ const CLAIMS_PREFIXES = [
   "/billing/transmission-failures",
   "/billing/claim-build-errors",
   "/billing/claim-hold",
-  "/billing/ready-to-generate",
   "/billing/adjustments-review",
   "/billing/audit-queue",
   "/billing/compliance-audit",
   "/billing/compliance-holds",
   "/billing/blocked-claims",
-];
-
-const BATCHES_837P_PREFIXES = [
-  "/billing/837p-batches",
-  "/billing/orphaned-batches",
 ];
 
 const REJECTIONS_PREFIXES = [
@@ -170,6 +174,19 @@ const REJECTIONS_PREFIXES = [
   "/billing/payer-rejections",
   "/billing/authorization-required",
   "/billing/provider-enrollment-issues",
+];
+
+const DENIALS_PREFIXES = [
+  "/billing/denials",
+  "/billing/denials-by-carc",
+  "/billing/denials-by-rarc",
+  "/billing/partial-denials",
+  "/billing/underpayments",
+  "/billing/timely-filing",
+  "/billing/medical-necessity",
+  "/billing/medical-review",
+  "/billing/aging",
+  "/billing/claim-submission",
 ];
 
 const ERA_INSURANCE_PREFIXES = [
@@ -182,10 +199,7 @@ const ERA_INSURANCE_PREFIXES = [
   "/billing/vcc",
 ];
 
-const PAPER_CHECKS_PREFIXES = [
-  "/billing/paper-checks",
-  "/billing/fax-queue",
-];
+const PAPER_CHECKS_PREFIXES = ["/billing/paper-checks", "/billing/fax-queue"];
 
 const PATIENT_BALANCES_PREFIXES = [
   "/billing/patient-balances",
@@ -195,15 +209,9 @@ const PATIENT_BALANCES_PREFIXES = [
   "/billing/write-offs",
 ];
 
-const REFUNDS_CREDITS_PREFIXES = [
-  "/billing/refunds",
-  "/billing/credit-balances",
-  "/billing/recoupments",
-];
+const REFUNDS_CREDITS_PREFIXES = ["/billing/refunds", "/billing/credit-balances", "/billing/recoupments"];
 
-const RECONCILIATION_PREFIXES = [
-  "/billing/reconciliation-exceptions",
-];
+const RECONCILIATION_PREFIXES = ["/billing/reconciliation-exceptions"];
 
 const PAYMENTS_PREFIXES = [
   ...ERA_INSURANCE_PREFIXES,
@@ -220,16 +228,14 @@ export default function AppSidebarNav() {
   const billingRouteActive = pathname.startsWith("/billing");
   const paymentsActive = PAYMENTS_PREFIXES.some((p) => pathname.startsWith(p));
 
-  const [billingOpen, setBillingOpen] = useState(billingRouteActive || false);
-  const [paymentsOpen, setPaymentsOpen] = useState(paymentsActive || false);
+  const [billingOpen, setBillingOpen] = useState(billingRouteActive);
+  const [paymentsOpen, setPaymentsOpen] = useState(paymentsActive);
 
   const billingExpanded = billingOpen || billingRouteActive;
   const paymentsExpanded = billingExpanded || paymentsOpen || paymentsActive;
 
   return (
     <nav className={styles.nav} aria-label="Primary navigation">
-
-      {/* ── HOME ─────────────────────────────────────────────── */}
       <div className={styles.navSection}>Home</div>
 
       <NavLink href="/calendar" icon={<CalendarIcon />} label="Schedule" prefixes={["/calendar", "/clinician/agenda"]} pathname={pathname} />
@@ -246,7 +252,6 @@ export default function AppSidebarNav() {
         pathname={pathname}
       />
 
-      {/* ── BILLING ──────────────────────────────────────────── */}
       <div className={styles.navSectionSpacer} />
       <div className={styles.navSection}>Billing</div>
 
@@ -256,31 +261,54 @@ export default function AppSidebarNav() {
         onClick={() => setBillingOpen((o) => !o)}
         aria-expanded={billingExpanded}
       >
-        <span className={styles.navIcon}><DollarIcon /></span>
+        <span className={styles.navIcon}>
+          <DollarIcon />
+        </span>
         Billing
         <ChevronIcon open={billingExpanded} />
       </button>
 
       {billingExpanded ? (
         <div className={styles.subnav}>
-          <SubNavLinkIcon href="/billing/my-inbox" icon={<TasksIcon />} label="Dashboard" prefixes={["/billing/my-inbox", "/billing/executive-priority"]} pathname={pathname} badge={<MyInboxBadge />} />
-          <SubNavLinkIcon href="/billing/charge-capture" icon={<ClipboardIcon />} label="Charges" prefixes={["/billing/charge-capture", "/billing/charges"]} pathname={pathname} />
+          <SubNavLinkIcon href="/billing/my-inbox" icon={<TasksIcon />} label="Dashboard" prefixes={DASHBOARD_PREFIXES} pathname={pathname} badge={<MyInboxBadge />} />
+          <SubNavLinkIcon href="/billing/charge-capture" icon={<ClipboardIcon />} label="Charges" prefixes={CHARGE_CAPTURE_PREFIXES} pathname={pathname} />
+          <SubNavLinkIcon href="/billing/batches" icon={<ClipboardIcon />} label="837P Batches" prefixes={BATCHES_837P_PREFIXES} pathname={pathname} />
+          <SubNavLinkIcon href="/billing/ready-to-generate" icon={<ClipboardIcon />} label="Ready to Generate" prefixes={READY_TO_GENERATE_PREFIXES} pathname={pathname} />
           <SubNavLinkIcon href="/billing/eligibility-batches" icon={<ShieldIcon />} label="Eligibility" prefixes={["/billing/eligibility-batches", "/billing/eligibility-issues"]} pathname={pathname} />
           <SubNavLinkIcon href="/billing/claims" icon={<ClipboardIcon />} label="Claims" prefixes={CLAIMS_PREFIXES} pathname={pathname} />
-          <SubNavLinkIcon href="/billing/837p-batches" icon={<ClipboardIcon />} label="837P Batches" prefixes={BATCHES_837P_PREFIXES} pathname={pathname} />
-          <SubNavLinkIcon href="/billing/rejections" icon={<XCircleIcon />} label="Rejections" prefixes={REJECTIONS_PREFIXES} pathname={pathname} />
-          <SubNavLinkIcon href="/billing/denials" icon={<XCircleIcon />} label="Denials" prefixes={["/billing/denials", "/billing/denials-by-carc", "/billing/denials-by-rarc", "/billing/partial-denials", "/billing/underpayments", "/billing/timely-filing", "/billing/medical-necessity", "/billing/medical-review", "/billing/aging", "/billing/claim-submission"]} pathname={pathname} />
+          <SubNavLinkIcon href="/billing/rejections-999" icon={<XCircleIcon />} label="Rejections" prefixes={REJECTIONS_PREFIXES} pathname={pathname} />
+          <SubNavLinkIcon href="/billing/denials-by-carc" icon={<XCircleIcon />} label="Denials" prefixes={DENIALS_PREFIXES} pathname={pathname} />
 
-          {/* ── Payments submenu ───────────────────────────────────── */}
           <button
             type="button"
             className={`${styles.subnavItem} ${styles.subnavItemCollapsible ?? ""} ${paymentsActive ? styles.subnavItemActive : ""}`}
             onClick={() => setPaymentsOpen((o) => !o)}
             aria-expanded={paymentsExpanded}
-            style={{ width: "100%", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", padding: 0 }}
+            style={{
+              width: "100%",
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              padding: 0,
+            }}
           >
-            <span className={styles.subnavIcon}><CreditCardIcon /></span>
-            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left" }}>Payments</span>
+            <span className={styles.subnavIcon}>
+              <CreditCardIcon />
+            </span>
+            <span
+              style={{
+                flex: 1,
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                textAlign: "left",
+              }}
+            >
+              Payments
+            </span>
             <ChevronIcon open={paymentsExpanded} />
           </button>
 
@@ -297,22 +325,31 @@ export default function AppSidebarNav() {
           <SubNavLinkIcon href="/billing/reports" icon={<ChartIcon />} label="Reports" prefixes={["/billing/reports"]} pathname={pathname} />
         </div>
       ) : null}
-
     </nav>
   );
 }
 
 function NavLink({
-  href, icon, label, prefixes, pathname, exact = false, activeOverride, disabled = false,
+  href,
+  icon,
+  label,
+  prefixes,
+  pathname,
+  exact = false,
+  activeOverride,
+  disabled = false,
 }: {
-  href: string; icon: React.ReactNode; label: string; prefixes: string[]; pathname: string;
-  exact?: boolean; activeOverride?: boolean; disabled?: boolean;
+  href: string;
+  icon: React.ReactNode;
+  label: string;
+  prefixes: string[];
+  pathname: string;
+  exact?: boolean;
+  activeOverride?: boolean;
+  disabled?: boolean;
 }) {
-  const isActive = activeOverride !== undefined
-    ? activeOverride
-    : exact
-    ? pathname === href || prefixes.includes(pathname)
-    : prefixes.some((p) => pathname.startsWith(p));
+  const isActive =
+    activeOverride !== undefined ? activeOverride : active(pathname, prefixes, exact);
 
   if (disabled) {
     return (
@@ -336,12 +373,22 @@ function NavLink({
 }
 
 function SubNavLinkIcon({
-  href, icon, label, prefixes, pathname, badge,
+  href,
+  icon,
+  label,
+  prefixes,
+  pathname,
+  badge,
 }: {
-  href: string; icon: React.ReactNode; label: string; prefixes: string[]; pathname: string;
+  href: string;
+  icon: React.ReactNode;
+  label: string;
+  prefixes: string[];
+  pathname: string;
   badge?: React.ReactNode;
 }) {
-  const isActive = prefixes.some((p) => pathname.startsWith(p));
+  const isActive = active(pathname, prefixes);
+
   return (
     <Link
       href={href}
@@ -349,7 +396,17 @@ function SubNavLinkIcon({
       aria-current={isActive ? "page" : undefined}
     >
       <span className={styles.subnavIcon}>{icon}</span>
-      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+      <span
+        style={{
+          flex: 1,
+          minWidth: 0,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {label}
+      </span>
       {badge ?? null}
     </Link>
   );
@@ -357,26 +414,37 @@ function SubNavLinkIcon({
 
 function MyInboxBadge() {
   const [count, setCount] = useState<number | null>(null);
+
   useEffect(() => {
     let cancelled = false;
+
     async function load() {
       try {
         const res = await fetch("/api/billing/my-inbox?countOnly=1", { cache: "no-store" });
         if (!res.ok) return;
+
         const json = (await res.json()) as { count?: number };
-        if (!cancelled) setCount(typeof json.count === "number" ? json.count : 0);
+
+        if (!cancelled) {
+          setCount(typeof json.count === "number" ? json.count : 0);
+        }
       } catch {
-        /* badge is best-effort; ignore failures */
+        // Badge is best-effort.
       }
     }
+
     void load();
+
     const t = setInterval(load, 60_000);
+
     return () => {
       cancelled = true;
       clearInterval(t);
     };
   }, []);
+
   if (!count) return null;
+
   return (
     <span
       aria-label={`${count} routed eligibility items`}
@@ -396,4 +464,3 @@ function MyInboxBadge() {
     </span>
   );
 }
-
