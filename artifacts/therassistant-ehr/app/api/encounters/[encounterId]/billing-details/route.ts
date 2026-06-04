@@ -98,13 +98,11 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
 
     const { encounterId } = await context.params;
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
-    if (!body || typeof body !== "object") {
-      return NextResponse.json({ success: false, error: "Request body must be valid JSON" }, { status: 400 });
-    }
+    if (!body || typeof body !== "object") return NextResponse.json({ success: false, error: "Request body must be valid JSON" }, { status: 400 });
+
     const organizationId = text(body.organizationId);
     const diagnoses = Array.isArray(body.diagnoses) ? (body.diagnoses as DiagnosisInput[]) : [];
     const serviceLines = Array.isArray(body.serviceLines) ? (body.serviceLines as ServiceLineInput[]) : [];
-
     if (!organizationId) return NextResponse.json({ success: false, error: "organizationId is required" }, { status: 400 });
 
     const { data: encounter, error: encounterError } = await supabase
@@ -123,7 +121,6 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
       .map((diagnosis, index) => ({
         organization_id: organizationId,
         encounter_id: encounterId,
-        client_id: encounter.client_id,
         diagnosis_code: text(diagnosis.diagnosisCode ?? diagnosis.diagnosis_code).toUpperCase(),
         diagnosis_description: text(diagnosis.diagnosisDescription ?? diagnosis.diagnosis_description) || null,
         is_primary: diagnosis.isPrimary ?? diagnosis.is_primary ?? index === 0,
@@ -138,7 +135,6 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
       .map((line, index) => ({
         organization_id: organizationId,
         encounter_id: encounterId,
-        client_id: encounter.client_id,
         service_date: text(line.serviceDate ?? line.service_date) || encounter.service_date,
         sequence_number: index + 1,
         cpt_hcpcs_code: text(line.procedureCode ?? line.cpt_hcpcs_code).toUpperCase(),
@@ -173,17 +169,11 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
     const incomingServiceLinesProvided = serviceLines.length > 0;
 
     if (incomingDiagnosesProvided && diagnosisPayload.length === 0 && (existingDiagnosisCount.count ?? 0) > 0) {
-      return NextResponse.json(
-        { success: false, error: "Refusing to replace existing diagnoses with an empty or invalid diagnosis payload." },
-        { status: 422 },
-      );
+      return NextResponse.json({ success: false, error: "Refusing to replace existing diagnoses with an empty or invalid diagnosis payload." }, { status: 422 });
     }
 
     if (incomingServiceLinesProvided && servicePayload.length === 0 && (existingServiceLineCount.count ?? 0) > 0) {
-      return NextResponse.json(
-        { success: false, error: "Refusing to replace existing service lines with an empty or invalid service line payload." },
-        { status: 422 },
-      );
+      return NextResponse.json({ success: false, error: "Refusing to replace existing service lines with an empty or invalid service line payload." }, { status: 422 });
     }
 
     const invalidPos = servicePayload.find((line) => {
@@ -232,19 +222,9 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
       }
     }
 
-    return NextResponse.json({
-      success: true,
-      encounterId,
-      diagnosisCount: diagnosisPayload.length,
-      serviceLineCount: servicePayload.length,
-      chargeCapture,
-      claimDraft,
-    });
+    return NextResponse.json({ success: true, encounterId, diagnosisCount: diagnosisPayload.length, serviceLineCount: servicePayload.length, chargeCapture, claimDraft });
   } catch (error) {
     console.error("Encounter billing details POST error:", error);
-    return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : "Encounter billing details save failed" },
-      { status: 500 },
-    );
+    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "Encounter billing details save failed" }, { status: 500 });
   }
 }
