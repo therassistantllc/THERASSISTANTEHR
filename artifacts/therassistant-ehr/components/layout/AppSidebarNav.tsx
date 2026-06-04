@@ -228,3 +228,4 @@ function MyInboxBadge() {
   if (!count) return null;
   return <span aria-label={`${count} routed eligibility items`} style={{ background: "#DC2626", color: "#FFFFFF", borderRadius: 999, fontSize: 10.5, fontWeight: 700, padding: "1px 7px", minWidth: 18, textAlign: "center", lineHeight: 1.4 }}>{count > 99 ? "99+" : count}</span>;
 }
+
