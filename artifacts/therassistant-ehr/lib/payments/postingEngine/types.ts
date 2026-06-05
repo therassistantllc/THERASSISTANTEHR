@@ -58,6 +58,8 @@ export type PostingSource =
       mailroomItemId?: string | null;
       payerProfileId?: string | null;
       note?: string | null;
+      adjustmentGroupCode?: string | null;
+      adjustmentReasonCode?: string | null;
       /**
        * Per-service-line allocation (mirrors ERA 835 SVC line posting).
        * When present, the engine validates each line's paid+adj+pr against
@@ -70,6 +72,8 @@ export type PostingSource =
         paidAmount: number;
         adjustmentAmount: number;
         patientResponsibilityAmount: number;
+        adjustmentGroupCode?: string | null;
+        adjustmentReasonCode?: string | null;
       }> | null;
     }
   | {
@@ -163,10 +167,16 @@ export interface ValidationResult {
 }
 
 export interface PostingLedgerEffect {
-  entryType: "insurance_payment" | "contractual_adjustment" | "patient_responsibility";
+  entryType:
+    | "charge"
+    | "insurance_payment"
+    | "contractual_adjustment"
+    | "patient_responsibility"
+    | "other_adjustment";
   amount: number;
   groupCode?: string | null;
   reasonCode?: string | null;
+  sourceSegment?: string | null;
   description: string;
 }
 
@@ -249,6 +259,28 @@ export interface EraClaimPaymentRow {
     group_code?: string;
     reason_code?: string;
   }>;
+  service_lines?: Array<{
+    procedureCode?: string | null;
+    procedure_code?: string | null;
+    serviceDate?: string | null;
+    service_date?: string | null;
+    serviceDateFrom?: string | null;
+    service_date_from?: string | null;
+    adjustments?: Array<{
+      groupCode?: string;
+      reasonCode?: string;
+      amount?: number;
+      group_code?: string;
+      reason_code?: string;
+    }> | null;
+    cas_adjustments?: Array<{
+      groupCode?: string;
+      reasonCode?: string;
+      amount?: number;
+      group_code?: string;
+      reason_code?: string;
+    }> | null;
+  }> | null;
   claim_match_status: string;
   posting_status: string;
 }
