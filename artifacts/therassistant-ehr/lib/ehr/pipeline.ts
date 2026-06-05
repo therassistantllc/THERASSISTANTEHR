@@ -192,7 +192,15 @@ export async function signClinicalNote(
 
   await supabase.from("encounters").update(encounterUpdate).eq("id", encounterId);
 
-  const queueType = readiness.missing.length === 0 ? "ready_to_bill" : "documentation_hold";
+  let claimResult: PipelineResult | null = null;
+  if (readiness.missing.length === 0) {
+    // In this product, signing a complete clinical note is the charge-capture event.
+    // Create the professional claim immediately so it appears in billing instead of
+    // stopping at a generic ready_to_bill workqueue item.
+    claimResult = await createClaimFromEncounter(supabase, encounterId);
+  }
+
+  const queueType = readiness.missing.length === 0 ? "charge_capture" : "documentation_hold";
   const priority = readiness.missing.length === 0 ? "medium" : "high";
 
   const { data: queueItem } = await supabase
@@ -203,14 +211,15 @@ export async function signClinicalNote(
         client_id: encounter.client_id,
         appointment_id: encounter.appointment_id,
         encounter_id: encounterId,
+        claim_id: claimResult?.claimId,
         queue_type: queueType,
         ticket_type: queueType,
         priority,
         status: "open",
-        title: readiness.missing.length === 0 ? "Encounter ready for billing scrub" : "Documentation hold",
+        title: readiness.missing.length === 0 ? "Charge generated from signed note" : "Documentation hold",
         description:
           readiness.missing.length === 0
-            ? "Signed documentation, diagnosis, service line, eligibility, and payer data passed readiness checks."
+            ? "Signed documentation passed readiness checks and generated a professional claim for billing review."
             : `Missing: ${readiness.missing.join(", ")}`,
         source: "system",
         updated_at: nowIso(),
@@ -226,22 +235,39 @@ export async function signClinicalNote(
     appointment_id: encounter.appointment_id,
     encounter_id: encounterId,
     clinical_note_id: noteId,
+    claim_id: claimResult?.claimId,
     workqueue_item_id: queueItem?.id,
     event_type: "clinical_note_signed",
-    event_summary: readiness.missing.length === 0 ? "Note signed and routed to billing workqueue." : "Note signed but readiness failed.",
-    event_metadata: { missing: readiness.missing },
+    event_summary:
+      readiness.missing.length === 0
+        ? claimResult?.ok
+          ? "Note signed and charge generated."
+          : `Note signed, but charge generation failed: ${claimResult?.message ?? "unknown error"}`
+        : "Note signed but readiness failed.",
+    event_metadata: { missing: readiness.missing, chargeGeneration: claimResult },
     created_at: nowIso(),
   });
+
+  if (readiness.missing.length === 0 && claimResult && !claimResult.ok) {
+    return {
+      ...claimResult,
+      encounterId,
+      noteId,
+      workqueueItemId: queueItem?.id,
+      message: `Note signed, but charge generation failed: ${claimResult.message}`,
+    };
+  }
 
   return {
     ok: readiness.missing.length === 0,
     encounterId,
     noteId,
+    claimId: claimResult?.claimId,
     workqueueItemId: queueItem?.id,
     missing: readiness.missing,
     message:
       readiness.missing.length === 0
-        ? "Note signed and encounter routed to billing workqueue."
+        ? "Note signed and charge generated."
         : "Note signed, but encounter is on documentation hold.",
   };
 }
