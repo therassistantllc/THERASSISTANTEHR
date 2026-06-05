@@ -88,6 +88,7 @@ begin
     batch_status,
     claim_count,
     total_charge_amount,
+    payer_profile_id,
     created_at,
     updated_at
   ) values (
@@ -96,6 +97,7 @@ begin
     'ready_to_generate',
     v_count,
     v_total,
+    p_payer_profile_id,
     v_now,
     v_now
   )
@@ -120,7 +122,8 @@ begin
     'batch_id', v_batch_id,
     'batch_number', p_batch_number,
     'claim_count', v_count,
-    'total_charge_amount', v_total
+    'total_charge_amount', v_total,
+    'payer_profile_id', p_payer_profile_id
   );
 end;
 $$;
