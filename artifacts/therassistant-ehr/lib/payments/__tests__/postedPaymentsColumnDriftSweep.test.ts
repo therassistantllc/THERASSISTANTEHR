@@ -144,8 +144,10 @@ describe("posted-payments column drift sweep (Task #508)", () => {
   it("flags the Task #508 regression set (sanity check)", () => {
     // If someone re-introduces any of the historically-drifted column
     // names against the wrong table, validateSelect must still flag it.
+    // `insurance_manual_payments.professional_claim_id` is intentionally
+    // excluded: the claimless ERA/payment-ledger work made it a valid
+    // claim-linking column, so it is no longer part of the bad-column set.
     for (const [table, badCol] of [
-      ["insurance_manual_payments", "professional_claim_id"],
       ["insurance_manual_payments", "payer_payment_amount"],
       ["insurance_manual_payments", "contractual_adjustment_amount"],
       ["era_claim_payments", "claim_id"],
