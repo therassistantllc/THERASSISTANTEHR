@@ -33,11 +33,17 @@ const TYPES_PATH = path.resolve(
   "../database.types.ts",
 );
 
+const SCHEMA_SQL_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../../schema.sql",
+);
+
 /** Runtime enum -> allowed string values, sourced from the generated types file. */
 const ENUM_VALUES: Record<string, Set<string>> = Object.fromEntries(
-  Object.entries(Constants.public.Enums).map(
-    ([name, vals]) => [name, new Set(vals as readonly string[])],
-  ),
+  Object.entries(Constants.public.Enums).map(([name, vals]) => [
+    name,
+    new Set(vals as readonly string[]),
+  ]),
 );
 
 /**
@@ -89,7 +95,138 @@ const EXTRA_COLUMNS: Record<string, string[]> = {
   // Added by supabase/migrations/20260615000000_payer_documentation_transmissions.sql
   // (Task #550: send medical-review docs to the payer's records contact).
   payer_profiles: ["records_email", "records_fax"],
+  // Added by supabase/migrations/20260603000000_professional_claims_responsibility_amounts.sql
+  // and supabase/migrations/20260605000000_billing_workflow_redesign.sql.
+  professional_claims: [
+    "payer_responsibility_amount",
+    "patient_responsibility_amount",
+    "write_off_amount",
+  ],
+  // Added by supabase/migrations/20260523010000_payment_posting_manual_patient.sql.
+  era_posting_ledger_entries: ["source_type", "source_id", "posted_at"],
+  // Added by supabase/migrations/20260523000000_payment_posting_foundation.sql.
+  era_import_batches: [
+    "payer_identifier",
+    "payer_name",
+    "eft_or_check_number",
+    "payment_date",
+    "payment_method_code",
+  ],
+  // Added by supabase/migrations/20260524000000_payment_posting_reversal_refunds.sql
+  // and supabase/migrations/20260615000000_era_claim_payments_remark_codes.sql.
+  era_claim_payments: [
+    "reversed_at",
+    "reversal_reason",
+    "reversed_by_actor_id",
+    "voided_at",
+    "void_reason",
+    "voided_by_actor_id",
+    "remark_codes",
+  ],
+  // Created by supabase/migrations/20260507010000_manual_payments_workflow.sql
+  // and extended by 20260523010000_payment_posting_manual_patient.sql,
+  // 20260524000000_payment_posting_reversal_refunds.sql,
+  // 20260524010000_payment_bulk_action_columns.sql, and
+  // 20260528000000_stripe_connect_express.sql. This table is absent from
+  // schema.sql in the mounted repo, so select guards need the real column
+  // set here to reject drifted names like payment_date.
+  client_payments: [
+    "id",
+    "organization_id",
+    "client_id",
+    "claim_id",
+    "payment_method",
+    "amount",
+    "reference_number",
+    "note",
+    "posted_at",
+    "created_at",
+    "updated_at",
+    "archived_at",
+    "patient_invoice_id",
+    "external_payment_id",
+    "stripe_charge_id",
+    "source_label",
+    "posted_actor_id",
+    "posting_status",
+    "reversed_at",
+    "reversal_reason",
+    "reversed_by_actor_id",
+    "voided_at",
+    "void_reason",
+    "voided_by_actor_id",
+    "assigned_to_staff_id",
+    "defer_until",
+    "defer_reason",
+    "stripe_connected_account_id",
+  ],
+  // Created by supabase/migrations/20260507010000_manual_payments_workflow.sql
+  // and extended by 20260523010000_payment_posting_manual_patient.sql and
+  // 20260524000000_payment_posting_reversal_refunds.sql. This table is absent
+  // from schema.sql in the mounted repo, so select guards need the real column
+  // set here to reject drifted names like payer_payment_amount.
+  insurance_manual_payments: [
+    "id",
+    "organization_id",
+    "claim_id",
+    "client_id",
+    "eob_reference",
+    "allowed_amount",
+    "paid_amount",
+    "adjustment_amount",
+    "patient_responsibility_amount",
+    "note",
+    "posted_at",
+    "created_at",
+    "updated_at",
+    "archived_at",
+    "payer_profile_id",
+    "check_number",
+    "payment_date",
+    "mailroom_item_id",
+    "posted_actor_id",
+    "posting_status",
+    "reversed_at",
+    "reversal_reason",
+    "reversed_by_actor_id",
+    "voided_at",
+    "void_reason",
+    "voided_by_actor_id",
+  ],
 };
+
+/**
+ * Some mounted repos intentionally carry a temporary permissive
+ * `database.types.ts` (`Tables: Record<string, ...>`) instead of generated
+ * Supabase table definitions. In that shape the indentation parser above sees
+ * no concrete tables, which makes `validateSelect()` pass through every table
+ * and defeats the posted-payments drift sweep. Fall back to the checked-in
+ * schema dump so tests still validate real table columns until generated types
+ * are restored.
+ */
+function loadSchemaSqlColumns(): Record<string, Set<string>> {
+  let src = "";
+  try {
+    src = readFileSync(SCHEMA_SQL_PATH, "utf-8");
+  } catch {
+    return {};
+  }
+
+  const out: Record<string, Set<string>> = {};
+  const tableRe =
+    /CREATE TABLE IF NOT EXISTS "public"\."([a-z_][a-z0-9_]*)" \(\n([\s\S]*?)\n\);/g;
+  let match: RegExpExecArray | null;
+  while ((match = tableRe.exec(src)) !== null) {
+    const [, table, body] = match;
+    const cols = new Set<string>();
+    for (const line of body.split("\n")) {
+      const col = line.match(/^\s+"([a-z_][a-z0-9_]*)"\s+/);
+      if (col) cols.add(col[1]);
+    }
+    if (cols.size > 0) out[table] = cols;
+  }
+  return out;
+}
 
 const ENUM_COLUMNS: Record<string, Record<string, string>> = {
   workqueue_items: {
@@ -147,6 +284,11 @@ function loadTableColumns(): Record<string, Set<string>> {
     const colMatch = line.match(/^ {10}([a-z_][a-z0-9_]*)\??:/);
     if (colMatch && cols) cols.add(colMatch[1]);
   }
+  // Merge schema.sql fallback columns when generated types are permissive or stale.
+  for (const [table, sqlCols] of Object.entries(loadSchemaSqlColumns())) {
+    if (!out[table]) out[table] = new Set<string>();
+    for (const c of sqlCols) out[table].add(c);
+  }
   // Merge the manual overlay for stale/missing tables.
   for (const [table, extras] of Object.entries(EXTRA_COLUMNS)) {
     if (!out[table]) out[table] = new Set<string>();
@@ -203,6 +345,10 @@ function loadTableRowColumns(): Record<string, Set<string>> {
     const colMatch = line.match(/^ {10}([a-z_][a-z0-9_]*):/);
     if (colMatch && cols) cols.add(colMatch[1]);
   }
+  for (const [table, sqlCols] of Object.entries(loadSchemaSqlColumns())) {
+    if (!out[table]) out[table] = new Set<string>();
+    for (const c of sqlCols) out[table].add(c);
+  }
   for (const [table, extras] of Object.entries(EXTRA_COLUMNS)) {
     if (!out[table]) out[table] = new Set<string>();
     for (const c of extras) out[table].add(c);
@@ -246,7 +392,9 @@ export function validateSelect(table: string, selectClause: string): void {
     const piece = raw.trim();
     if (!piece || piece === "*") continue;
     // Embedded resource: `foreign[!hint](col1, col2)` or `alias:foreign(...)`
-    const embed = piece.match(/^(?:[a-z_][a-z0-9_]*\s*:\s*)?([a-z_][a-z0-9_]*)(?:![a-z_][a-z0-9_]*)?\s*\((.*)\)$/);
+    const embed = piece.match(
+      /^(?:[a-z_][a-z0-9_]*\s*:\s*)?([a-z_][a-z0-9_]*)(?:![a-z_][a-z0-9_]*)?\s*\((.*)\)$/,
+    );
     if (embed) {
       validateSelect(embed[1], embed[2]);
       continue;

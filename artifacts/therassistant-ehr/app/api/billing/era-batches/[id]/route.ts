@@ -34,7 +34,11 @@ type ProfessionalClaimRow = {
   payer_profile_id: string | null;
 };
 
-type ClientRow = { id: string; first_name: string | null; last_name: string | null };
+type ClientRow = {
+  id: string;
+  first_name: string | null;
+  last_name: string | null;
+};
 
 type ClaimPaymentRow = {
   id: string;
@@ -80,6 +84,71 @@ function asArray<T>(v: unknown): T[] {
   return Array.isArray(v) ? (v as T[]) : [];
 }
 
+function normalizeEraDate(value: unknown): string {
+  const trimmed = String(value ?? "").trim();
+  if (/^\d{8}$/.test(trimmed)) {
+    return `${trimmed.slice(0, 4)}-${trimmed.slice(4, 6)}-${trimmed.slice(6, 8)}`;
+  }
+  return trimmed;
+}
+
+function payloadText(
+  payload: Record<string, unknown>,
+  ...keys: string[]
+): string {
+  for (const key of keys) {
+    const raw = payload[key];
+    const value = raw == null ? "" : String(raw).trim();
+    if (value) return value;
+  }
+  return "";
+}
+
+function prefillFromPayload(
+  payload: Record<string, unknown>,
+  rawSegments: string[],
+) {
+  let firstName = payloadText(
+    payload,
+    "patient_first_name",
+    "patientFirstName",
+    "first_name",
+    "firstName",
+  );
+  let lastName = payloadText(
+    payload,
+    "patient_last_name",
+    "patientLastName",
+    "last_name",
+    "lastName",
+  );
+  let dateOfBirth = normalizeEraDate(
+    payloadText(
+      payload,
+      "patient_date_of_birth",
+      "patientDateOfBirth",
+      "date_of_birth",
+      "dateOfBirth",
+      "dob",
+    ),
+  );
+
+  for (const segment of rawSegments) {
+    const parts = String(segment ?? "").split("*");
+    if (parts[0] === "NM1" && parts[1] === "QC") {
+      lastName = lastName || String(parts[3] ?? "").trim();
+      firstName = firstName || String(parts[4] ?? "").trim();
+    }
+    if (parts[0] === "DMG") {
+      dateOfBirth = dateOfBirth || normalizeEraDate(parts[2]);
+    }
+  }
+
+  return firstName || lastName || dateOfBirth
+    ? { firstName, lastName, dateOfBirth }
+    : null;
+}
+
 function itemStatusToPostingStatus(status: string): string {
   if (status === "posted") return "posted";
   if (status === "ready_to_post") return "ready";
@@ -93,21 +162,33 @@ function itemMatchToClaimMatch(status: string): string {
   return "unmatched";
 }
 
-export async function GET(request: Request, ctx: { params: Promise<{ id: string }> }) {
+export async function GET(
+  request: Request,
+  ctx: { params: Promise<{ id: string }> },
+) {
   try {
     const { id } = await ctx.params;
     const supabase = createServerSupabaseAdminClient();
     if (!supabase) {
-      return NextResponse.json({ success: false, error: "Database connection not available" }, { status: 500 });
+      return NextResponse.json(
+        { success: false, error: "Database connection not available" },
+        { status: 500 },
+      );
     }
 
     const { searchParams } = new URL(request.url);
     const organizationId = searchParams.get("organizationId");
     if (!organizationId) {
-      return NextResponse.json({ success: false, error: "organizationId is required" }, { status: 400 });
+      return NextResponse.json(
+        { success: false, error: "organizationId is required" },
+        { status: 400 },
+      );
     }
     if (!id) {
-      return NextResponse.json({ success: false, error: "Batch id is required" }, { status: 400 });
+      return NextResponse.json(
+        { success: false, error: "Batch id is required" },
+        { status: 400 },
+      );
     }
     await requireAuthenticatedPaymentPoster(organizationId);
 
@@ -120,10 +201,16 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
       .eq("id", id)
       .maybeSingle();
     if (batchErr) {
-      return NextResponse.json({ success: false, error: batchErr.message }, { status: 500 });
+      return NextResponse.json(
+        { success: false, error: batchErr.message },
+        { status: 500 },
+      );
     }
     if (!batch) {
-      return NextResponse.json({ success: false, error: "Batch not found" }, { status: 404 });
+      return NextResponse.json(
+        { success: false, error: "Batch not found" },
+        { status: 404 },
+      );
     }
 
     const { data: rawClaimPayments, error: claimErr } = await supabase
@@ -136,15 +223,26 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
       .is("archived_at", null)
       .order("created_at", { ascending: true });
     if (claimErr) {
-      return NextResponse.json({ success: false, error: claimErr.message }, { status: 500 });
+      return NextResponse.json(
+        { success: false, error: claimErr.message },
+        { status: 500 },
+      );
     }
     const claimPayments = (rawClaimPayments ?? []) as ClaimPaymentRow[];
 
     const claimIds = Array.from(
-      new Set(claimPayments.map((c) => c.claim_id).filter((x): x is string => Boolean(x))),
+      new Set(
+        claimPayments
+          .map((c) => c.claim_id)
+          .filter((x): x is string => Boolean(x)),
+      ),
     );
     const clientIds = Array.from(
-      new Set(claimPayments.map((c) => c.client_id).filter((x): x is string => Boolean(x))),
+      new Set(
+        claimPayments
+          .map((c) => c.client_id)
+          .filter((x): x is string => Boolean(x)),
+      ),
     );
 
     const [claimsRes, clientsRes, adjustmentsRes] = await Promise.all([
@@ -184,40 +282,62 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
 
     const hydrated = await Promise.all(
       claimPayments.map(async (row) => {
-        const claim = row.claim_id ? claimsById.get(row.claim_id) ?? null : null;
-        const client = row.client_id ? clientsById.get(row.client_id) ?? null : null;
+        const claim = row.claim_id
+          ? (claimsById.get(row.claim_id) ?? null)
+          : null;
+        const client = row.client_id
+          ? (clientsById.get(row.client_id) ?? null)
+          : null;
         const payload =
           row.raw_item_payload && typeof row.raw_item_payload === "object"
             ? (row.raw_item_payload as Record<string, unknown>)
             : {};
         const payloadPatientFirstName =
-          payload.patient_first_name === null || payload.patient_first_name === undefined
+          payload.patient_first_name === null ||
+          payload.patient_first_name === undefined
             ? payload.patientFirstName
             : payload.patient_first_name;
         const payloadPatientLastName =
-          payload.patient_last_name === null || payload.patient_last_name === undefined
+          payload.patient_last_name === null ||
+          payload.patient_last_name === undefined
             ? payload.patientLastName
             : payload.patient_last_name;
-        const payloadPatientDisplayName = [payloadPatientFirstName, payloadPatientLastName]
+        const payloadPatientDisplayName = [
+          payloadPatientFirstName,
+          payloadPatientLastName,
+        ]
           .map((value) => (value == null ? "" : String(value).trim()))
           .filter(Boolean)
           .join(" ");
-        const cas = asArray<{ groupCode?: string; reasonCode?: string; amount?: number }>(
-          payload.adjustments,
+        const cas = asArray<{
+          groupCode?: string;
+          reasonCode?: string;
+          amount?: number;
+        }>(payload.adjustments);
+        const rawSegments = asArray<string>(
+          payload.raw_segments ?? payload.rawSegments,
         );
-        const clp01 = String(payload.claim_ref ?? row.imported_item_ref ?? "").trim();
+        const patientPrefill = prefillFromPayload(payload, rawSegments);
+        const clp01 = String(
+          payload.claim_ref ?? row.imported_item_ref ?? "",
+        ).trim();
         const clp02 =
-          payload.claim_status_code === null || payload.claim_status_code === undefined
+          payload.claim_status_code === null ||
+          payload.claim_status_code === undefined
             ? null
             : String(payload.claim_status_code);
         const payerClaimControlNumber =
-          payload.payer_claim_control_number === null || payload.payer_claim_control_number === undefined
+          payload.payer_claim_control_number === null ||
+          payload.payer_claim_control_number === undefined
             ? null
             : String(payload.payer_claim_control_number);
-        const postingStatus = itemStatusToPostingStatus(row.payment_import_status);
+        const postingStatus = itemStatusToPostingStatus(
+          row.payment_import_status,
+        );
         const claimMatchStatus = itemMatchToClaimMatch(row.match_status);
         const patientResponsibility =
-          payload.patient_responsibility === null || payload.patient_responsibility === undefined
+          payload.patient_responsibility === null ||
+          payload.patient_responsibility === undefined
             ? 0
             : n(payload.patient_responsibility);
 
@@ -269,7 +389,8 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
             amount: n(a.amount),
           })),
           serviceLines: asArray(payload.service_lines),
-          rawSegments: asArray<string>(payload.raw_segments),
+          rawSegments,
+          patientPrefill,
           professionalClaim: claim
             ? {
                 id: claim.id,
@@ -284,8 +405,10 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
             ? {
                 id: client.id,
                 displayName:
-                  [client.first_name, client.last_name].filter(Boolean).join(" ").trim() ||
-                  "Unknown client",
+                  [client.first_name, client.last_name]
+                    .filter(Boolean)
+                    .join(" ")
+                    .trim() || "Unknown client",
               }
             : payloadPatientDisplayName
               ? {
@@ -301,23 +424,25 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
       }),
     );
 
-    const adjustments = ((adjustmentsRes.data ?? []) as AdjustmentRow[]).map((a) => ({
-      id: a.id,
-      scope: a.scope,
-      adjustmentType: a.adjustment_type,
-      groupCode: a.group_code,
-      reasonCode: a.reason_code,
-      referenceId: a.reference_id,
-      amount: n(a.amount),
-      description: a.description,
-      source: a.source,
-      postedAt: a.posted_at,
-      eraClaimPaymentId: a.era_claim_payment_id,
-      professionalClaimId: a.professional_claim_id,
-      metadata: a.metadata ?? {},
-      createdAt: a.created_at,
-      updatedAt: a.updated_at,
-    }));
+    const adjustments = ((adjustmentsRes.data ?? []) as AdjustmentRow[]).map(
+      (a) => ({
+        id: a.id,
+        scope: a.scope,
+        adjustmentType: a.adjustment_type,
+        groupCode: a.group_code,
+        reasonCode: a.reason_code,
+        referenceId: a.reference_id,
+        amount: n(a.amount),
+        description: a.description,
+        source: a.source,
+        postedAt: a.posted_at,
+        eraClaimPaymentId: a.era_claim_payment_id,
+        professionalClaimId: a.professional_claim_id,
+        metadata: a.metadata ?? {},
+        createdAt: a.created_at,
+        updatedAt: a.updated_at,
+      }),
+    );
 
     const totalApplied = hydrated
       .filter((h) => h.postingStatus === "posted")
@@ -334,7 +459,8 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
       unallocated: +(n(batch.total_payment_amount) - totalApplied).toFixed(2),
       totalClaims: hydrated.length,
       matched: hydrated.filter((h) => h.claimMatchStatus === "matched").length,
-      unmatched: hydrated.filter((h) => h.claimMatchStatus !== "matched").length,
+      unmatched: hydrated.filter((h) => h.claimMatchStatus !== "matched")
+        .length,
       posted: hydrated.filter((h) => h.postingStatus === "posted").length,
       blocked: hydrated.filter((h) => h.postingStatus === "blocked").length,
     };
@@ -351,7 +477,8 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
           name:
             batch.payer_name ??
             (batch.parsed_summary && typeof batch.parsed_summary === "object"
-              ? ((batch.parsed_summary as Record<string, unknown>).payer as string) ?? null
+              ? (((batch.parsed_summary as Record<string, unknown>)
+                  .payer as string) ?? null)
               : null) ??
             "Unknown payer",
         },
@@ -371,14 +498,24 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     });
   } catch (error) {
     if (error instanceof PaymentPostingUnauthenticatedError) {
-      return NextResponse.json({ success: false, error: error.message }, { status: 401 });
+      return NextResponse.json(
+        { success: false, error: error.message },
+        { status: 401 },
+      );
     }
     if (error instanceof PaymentPostingForbiddenError) {
-      return NextResponse.json({ success: false, error: error.message }, { status: 403 });
+      return NextResponse.json(
+        { success: false, error: error.message },
+        { status: 403 },
+      );
     }
     console.error("ERA batch detail API error:", error);
     return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : "ERA batch detail failed" },
+      {
+        success: false,
+        error:
+          error instanceof Error ? error.message : "ERA batch detail failed",
+      },
       { status: 500 },
     );
   }

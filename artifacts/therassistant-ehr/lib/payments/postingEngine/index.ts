@@ -62,14 +62,100 @@ const SYSTEM_ACTOR: PostingActor = {
   source: "service:internal",
 };
 
-function casGroupCode(adj: EraClaimPaymentRow["cas_adjustments"][number]) {
+type CasAdjustmentLike = EraClaimPaymentRow["cas_adjustments"][number];
+
+interface NormalizedCasAdjustment {
+  index: number;
+  groupCode: string | null;
+  reasonCode: string | null;
+  amount: number;
+  sourceSegment: string;
+  descriptionPrefix: string;
+  lineNumber?: number | null;
+  procedureCode?: string | null;
+  serviceDate?: string | null;
+}
+
+function casGroupCode(adj: CasAdjustmentLike) {
   return (adj.groupCode ?? adj.group_code ?? "").toString().toUpperCase();
 }
 
-function sumContractualAdjustments(adjustments: EraClaimPaymentRow["cas_adjustments"]) {
+function casReasonCode(adj: CasAdjustmentLike) {
+  return (adj.reasonCode ?? adj.reason_code ?? "").toString().trim();
+}
+
+function round2(n: number) {
+  return Math.round(n * 100) / 100;
+}
+
+function normalizedCasAdjustments(
+  adjustments: CasAdjustmentLike[],
+  sourcePrefix = "CAS",
+  descriptionPrefix = "ERA 835 CAS",
+  extra: Pick<
+    NormalizedCasAdjustment,
+    "lineNumber" | "procedureCode" | "serviceDate"
+  > = {},
+): NormalizedCasAdjustment[] {
   return (adjustments ?? [])
-    .filter((adj) => casGroupCode(adj) === "CO")
-    .reduce((sum, adj) => sum + Number(adj.amount ?? 0), 0);
+    .map((adj, index) => ({
+      index,
+      groupCode: casGroupCode(adj) || null,
+      reasonCode: casReasonCode(adj) || null,
+      amount: round2(Number(adj.amount ?? 0)),
+      sourceSegment: `${sourcePrefix}:${index}`,
+      descriptionPrefix,
+      ...extra,
+    }))
+    .filter((adj) => adj.amount !== 0);
+}
+
+function normalizedEraCasAdjustments(
+  row: EraClaimPaymentRow,
+): NormalizedCasAdjustment[] {
+  const claimLevel = normalizedCasAdjustments(row.cas_adjustments ?? []);
+  const serviceLineLevel = (row.service_lines ?? []).flatMap(
+    (line, lineIndex) => {
+      const adjustments = Array.isArray(line.adjustments)
+        ? line.adjustments
+        : Array.isArray(line.cas_adjustments)
+          ? line.cas_adjustments
+          : [];
+      const procedureCode =
+        String(line.procedureCode ?? line.procedure_code ?? "").trim() || null;
+      const serviceDate =
+        String(
+          line.serviceDate ??
+            line.service_date ??
+            line.serviceDateFrom ??
+            line.service_date_from ??
+            "",
+        ).trim() || null;
+      return normalizedCasAdjustments(
+        adjustments,
+        `SVC:${lineIndex}:CAS`,
+        `ERA 835 service line ${lineIndex + 1} CAS`,
+        { lineNumber: lineIndex + 1, procedureCode, serviceDate },
+      );
+    },
+  );
+  return [...claimLevel, ...serviceLineLevel];
+}
+
+function postingEntryTypeForCas(
+  adj: NormalizedCasAdjustment,
+): PostingLedgerEffect["entryType"] {
+  if (adj.groupCode === "CO") return "contractual_adjustment";
+  if (adj.groupCode === "PR") return "patient_responsibility";
+  return "other_adjustment";
+}
+
+function nonPatientAdjustmentTotal(adjustments: NormalizedCasAdjustment[]) {
+  return round2(
+    adjustments
+      .filter((adj) => adj.groupCode !== "PR")
+      .reduce((sum, adj) => sum + Number(adj.amount ?? 0), 0),
+  );
 }
 
 function invoiceNumber(paymentId: string) {
@@ -93,7 +179,9 @@ function emptyResult(): CommitPostingResult {
 
 export async function commitPosting(
   input: CommitPostingInput,
-  injectedSupabase?: NonNullable<ReturnType<typeof createServerSupabaseAdminClient>>,
+  injectedSupabase?: NonNullable<
+    ReturnType<typeof createServerSupabaseAdminClient>
+  >,
 ): Promise<CommitPostingResult> {
   const actor = input.actor ?? SYSTEM_ACTOR;
   if (input.source.type === "era_835") {
@@ -101,7 +189,12 @@ export async function commitPosting(
   }
   if (input.source.type === "manual_insurance") {
     const { commitManualInsurancePosting } = await import("./manualInsurance");
-    return commitManualInsurancePosting(input.organizationId, input.source, actor, input.dryRun);
+    return commitManualInsurancePosting(
+      input.organizationId,
+      input.source,
+      actor,
+      input.dryRun,
+    );
   }
   if (input.source.type === "patient_payment") {
     const { commitPatientPayment } = await import("./patientPayment");
@@ -124,11 +217,13 @@ export async function commitPosting(
     // PP-4: dispatch to the proper insurance/patient refund recorder so
     // we get atomic ledger compensation, optional Stripe issuance, and
     // workqueue follow-up — never a flat negative entry.
-    const { recordInsuranceRefund, recordPatientRefund } = await import("./reversal");
+    const { recordInsuranceRefund, recordPatientRefund } =
+      await import("./reversal");
     const refundType =
       input.source.refundType ??
       (input.source.target.kind === "client_payment" ? "client" : "insurance");
-    const fn = refundType === "client" ? recordPatientRefund : recordInsuranceRefund;
+    const fn =
+      refundType === "client" ? recordPatientRefund : recordInsuranceRefund;
     const r = await fn(
       {
         organizationId: input.organizationId,
@@ -310,7 +405,10 @@ async function commitEra835Posting(
 
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) {
-    result.errors.push({ field: "system", message: "Database connection not available" });
+    result.errors.push({
+      field: "system",
+      message: "Database connection not available",
+    });
     return result;
   }
 
@@ -318,7 +416,7 @@ async function commitEra835Posting(
   const { data: paymentRow, error: paymentError } = await supabase
     .from("era_claim_payments")
     .select(
-      "id, professional_claim_id, client_id, clp01_claim_control_number, clp03_total_charge, clp04_payment_amount, clp05_patient_responsibility, cas_adjustments, claim_match_status, posting_status",
+      "id, professional_claim_id, client_id, clp01_claim_control_number, clp03_total_charge, clp04_payment_amount, clp05_patient_responsibility, cas_adjustments, service_lines, claim_match_status, posting_status",
     )
     .eq("organization_id", input.organizationId)
     .eq("id", eraClaimPaymentId)
@@ -326,11 +424,17 @@ async function commitEra835Posting(
     .maybeSingle();
 
   if (paymentError) {
-    result.errors.push({ field: "era_claim_payments", message: paymentError.message });
+    result.errors.push({
+      field: "era_claim_payments",
+      message: paymentError.message,
+    });
     return result;
   }
   if (!paymentRow) {
-    result.errors.push({ field: "era_claim_payments", message: "ERA claim payment not found" });
+    result.errors.push({
+      field: "era_claim_payments",
+      message: "ERA claim payment not found",
+    });
     return result;
   }
 
@@ -364,16 +468,39 @@ async function commitEra835Posting(
 
   // ── 5. Commit ledger effects + parent updates ────────────────────────────
   const now = new Date().toISOString();
-  const insurancePayment = Number(row.clp04_payment_amount ?? 0);
-  const contractualAdjustment = sumContractualAdjustments(row.cas_adjustments);
-  const patientResponsibility = Number(row.clp05_patient_responsibility ?? 0);
+  const totalCharge = round2(Number(row.clp03_total_charge ?? 0));
+  const insurancePayment = round2(Number(row.clp04_payment_amount ?? 0));
+  const casAdjustments = normalizedEraCasAdjustments(row);
+  const contractualAdjustment = round2(
+    casAdjustments
+      .filter((adj) => adj.groupCode === "CO")
+      .reduce((sum, adj) => sum + Number(adj.amount ?? 0), 0),
+  );
+  const patientResponsibility = round2(
+    Number(row.clp05_patient_responsibility ?? 0),
+  );
 
   try {
+    if (totalCharge > 0) {
+      await createLedgerEntry(supabase, input.organizationId, row, {
+        entryType: "charge",
+        amount: totalCharge,
+        description: "Total charge logged from ERA 835 CLP03",
+        sourceSegment: "CLP03",
+      });
+      result.effects.push({
+        entryType: "charge",
+        amount: totalCharge,
+        description: "Total charge logged from ERA 835 CLP03",
+      });
+    }
+
     if (insurancePayment > 0) {
       await createLedgerEntry(supabase, input.organizationId, row, {
         entryType: "insurance_payment",
         amount: insurancePayment,
         description: "Insurance payment posted from ERA 835 CLP04",
+        sourceSegment: "CLP04",
       });
       result.effects.push({
         entryType: "insurance_payment",
@@ -382,18 +509,28 @@ async function commitEra835Posting(
       });
     }
 
-    if (contractualAdjustment > 0) {
+    for (const adj of casAdjustments) {
+      const entryType = postingEntryTypeForCas(adj);
+      const code = [adj.groupCode, adj.reasonCode].filter(Boolean).join("-");
       await createLedgerEntry(supabase, input.organizationId, row, {
-        entryType: "contractual_adjustment",
-        amount: contractualAdjustment,
-        groupCode: "CO",
-        description: "Contractual adjustment posted from ERA 835 CAS CO segments",
+        entryType,
+        amount: adj.amount,
+        groupCode: adj.groupCode,
+        reasonCode: adj.reasonCode,
+        description: code
+          ? `${adj.descriptionPrefix} ${code} adjustment`
+          : `${adj.descriptionPrefix} adjustment ${adj.index + 1}`,
+        sourceSegment: adj.sourceSegment,
       });
       result.effects.push({
-        entryType: "contractual_adjustment",
-        amount: contractualAdjustment,
-        groupCode: "CO",
-        description: "Contractual adjustment posted from ERA 835 CAS CO segments",
+        entryType,
+        amount: adj.amount,
+        groupCode: adj.groupCode,
+        reasonCode: adj.reasonCode,
+        description: code
+          ? `${adj.descriptionPrefix} ${code} adjustment`
+          : `${adj.descriptionPrefix} adjustment ${adj.index + 1}`,
+        sourceSegment: adj.sourceSegment,
       });
     }
 
@@ -404,6 +541,7 @@ async function commitEra835Posting(
         amount: patientResponsibility,
         groupCode: "PR",
         description: "Client responsibility transferred from ERA 835 CLP05",
+        sourceSegment: "CLP05",
       });
       result.effects.push({
         entryType: "patient_responsibility",
@@ -422,6 +560,35 @@ async function commitEra835Posting(
       result.patientInvoiceCreated = patientInvoiceCreated;
     }
 
+    if (row.client_id && !row.professional_claim_id) {
+      await createClaimlessClientLedgerEntries(
+        supabase,
+        input.organizationId,
+        row,
+        {
+          totalCharge,
+          insurancePayment,
+          patientResponsibility,
+          casAdjustments,
+          now,
+        },
+      );
+      try {
+        const { recalculatePatientBalance } =
+          await import("@/lib/billing/recalculatePatientBalance");
+        await recalculatePatientBalance({
+          supabase,
+          organizationId: input.organizationId,
+          clientId: row.client_id,
+        });
+      } catch (balanceError) {
+        console.warn(
+          "[postingEngine] claimless balance recalculation failed (non-fatal)",
+          balanceError instanceof Error ? balanceError.message : balanceError,
+        );
+      }
+    }
+
     const { error: updateError } = await supabase
       .from("era_claim_payments")
       .update({ posting_status: "posted", updated_at: now })
@@ -431,13 +598,14 @@ async function commitEra835Posting(
 
     const newClaimStatus =
       insurancePayment > 0 || patientResponsibility > 0 ? "paid" : "denied";
-
-    const { error: claimUpdateError } = await supabase
-      .from("professional_claims")
-      .update({ claim_status: newClaimStatus, updated_at: now })
-      .eq("id", row.professional_claim_id!)
-      .eq("organization_id", input.organizationId);
-    if (claimUpdateError) throw new Error(claimUpdateError.message);
+    if (row.professional_claim_id) {
+      const { error: claimUpdateError } = await supabase
+        .from("professional_claims")
+        .update({ claim_status: newClaimStatus, updated_at: now })
+        .eq("id", row.professional_claim_id)
+        .eq("organization_id", input.organizationId);
+      if (claimUpdateError) throw new Error(claimUpdateError.message);
+    }
 
     try {
       result.workqueueItemsClosed = await closeRelatedEraWorkqueueItems(
@@ -449,7 +617,9 @@ async function commitEra835Posting(
     } catch (workqueueError) {
       console.warn(
         "[postingEngine] failed to close related workqueue items",
-        workqueueError instanceof Error ? workqueueError.message : workqueueError,
+        workqueueError instanceof Error
+          ? workqueueError.message
+          : workqueueError,
       );
     }
 
@@ -457,7 +627,7 @@ async function commitEra835Posting(
     try {
       const { applyWorkqueueRules } = await import("./workqueueRules");
       const allowed =
-        Number(row.clp03_total_charge ?? 0) - sumContractualAdjustments(row.cas_adjustments);
+        Number(row.clp03_total_charge ?? 0) - contractualAdjustment;
       // Resolve the payer we posted under so cob_issue + eligibility_issue
       // rules can fire on ERA posts (those rules require postedPayerProfileId).
       // The claim's billing payer is the canonical "posted under" payer.
@@ -471,7 +641,8 @@ async function commitEra835Posting(
             .eq("organization_id", input.organizationId)
             .maybeSingle();
           postedPayerProfileId =
-            (claim as { payer_profile_id: string | null } | null)?.payer_profile_id ?? null;
+            (claim as { payer_profile_id: string | null } | null)
+              ?.payer_profile_id ?? null;
         } catch {
           // best-effort; rule engine still runs without payer-scoped rules.
         }
@@ -539,10 +710,20 @@ async function commitEra835Posting(
       beforeValue: { posting_status: row.posting_status, claim_status: null },
       afterValue: {
         posting_status: "posted",
-        claim_status: newClaimStatus,
+        claim_status: row.professional_claim_id ? newClaimStatus : null,
+        total_charge: totalCharge,
         insurance_payment: insurancePayment,
         contractual_adjustment: contractualAdjustment,
         patient_responsibility: patientResponsibility,
+        cas_adjustments: casAdjustments.map((adj) => ({
+          group_code: adj.groupCode,
+          reason_code: adj.reasonCode,
+          amount: adj.amount,
+          source_segment: adj.sourceSegment,
+          line_number: adj.lineNumber ?? null,
+          procedure_code: adj.procedureCode ?? null,
+          service_date: adj.serviceDate ?? null,
+        })),
       },
       summary: `Posted ERA 835 claim ${row.clp01_claim_control_number}: ${result.effects.length} ledger entr${result.effects.length === 1 ? "y" : "ies"}.`,
       metadata: {
@@ -559,7 +740,10 @@ async function commitEra835Posting(
   } catch (error) {
     result.errors.push({
       field: row.clp01_claim_control_number,
-      message: error instanceof Error ? error.message : "Failed to post ERA claim payment",
+      message:
+        error instanceof Error
+          ? error.message
+          : "Failed to post ERA claim payment",
     });
     return result;
   }
@@ -573,15 +757,21 @@ async function createLedgerEntry(
   payment: EraClaimPaymentRow,
   effect: PostingLedgerEffect,
 ) {
-  const { data: existing, error: existingError } = await supabase
+  let existingQuery = supabase
     .from("era_posting_ledger_entries")
     .select("id")
     .eq("organization_id", organizationId)
     .eq("era_claim_payment_id", payment.id)
     .eq("entry_type", effect.entryType)
     .is("archived_at", null)
-    .limit(1)
-    .maybeSingle();
+    .limit(1);
+  if (effect.sourceSegment) {
+    existingQuery = existingQuery.eq("source_segment", effect.sourceSegment);
+  } else {
+    existingQuery = existingQuery.is("source_segment", null);
+  }
+  const { data: existing, error: existingError } =
+    await existingQuery.maybeSingle();
   if (existingError) throw new Error(existingError.message);
   if (existing?.id) return;
 
@@ -597,14 +787,191 @@ async function createLedgerEntry(
     group_code: effect.groupCode ?? null,
     reason_code: effect.reasonCode ?? null,
     description: effect.description,
+    source_segment: effect.sourceSegment ?? null,
   });
   if (error) {
     // Race (Task #184): partial unique index
     // idx_era_posting_ledger_entries_unique_active on
-    // (organization_id, era_claim_payment_id, entry_type) raised 23505.
+    // (organization_id, era_claim_payment_id, entry_type, source_segment) raised 23505.
     // Another concurrent posting attempt wrote the same ledger row between
     // our SELECT and INSERT. Treat as already-posted and return — the
     // winner's row is the canonical one.
+    if ((error as { code?: string }).code === UNIQUE_VIOLATION) return;
+    throw new Error(error.message);
+  }
+}
+
+interface ClaimlessClientLedgerArgs {
+  totalCharge: number;
+  insurancePayment: number;
+  patientResponsibility: number;
+  casAdjustments: NormalizedCasAdjustment[];
+  now: string;
+}
+
+interface ClientLedgerEntryEffect {
+  referenceSuffix: string;
+  entryType: string;
+  description: string;
+  debitAmount: number;
+  creditAmount: number;
+  balanceEffect: number;
+  groupCode?: string | null;
+  reasonCode?: string | null;
+  sourceSegment?: string | null;
+  serviceDate?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+async function createClaimlessClientLedgerEntries(
+  supabase: NonNullable<ReturnType<typeof createServerSupabaseAdminClient>>,
+  organizationId: string,
+  payment: EraClaimPaymentRow,
+  args: ClaimlessClientLedgerArgs,
+) {
+  if (!payment.client_id) return;
+  const payerAdjustmentTotal = nonPatientAdjustmentTotal(args.casAdjustments);
+  const computedResidual = round2(
+    args.totalCharge - args.insurancePayment - payerAdjustmentTotal,
+  );
+  const commonMetadata = {
+    clp01_claim_control_number: payment.clp01_claim_control_number,
+    claimless_post: true,
+    clp03_total_charge: args.totalCharge,
+    clp04_payment_amount: args.insurancePayment,
+    clp05_patient_responsibility: args.patientResponsibility,
+  };
+
+  const entries: ClientLedgerEntryEffect[] = [];
+  if (args.totalCharge > 0) {
+    entries.push({
+      referenceSuffix: "charge",
+      entryType: "charge",
+      description: "Total charge logged from claimless ERA",
+      debitAmount: args.totalCharge,
+      creditAmount: 0,
+      balanceEffect: args.totalCharge,
+      sourceSegment: "CLP03",
+      metadata: commonMetadata,
+    });
+  }
+  for (const adj of args.casAdjustments) {
+    const entryType = postingEntryTypeForCas(adj);
+    const code = [adj.groupCode, adj.reasonCode].filter(Boolean).join("-");
+    const amount = Math.abs(adj.amount);
+    const isPatientResponsibility = adj.groupCode === "PR";
+    entries.push({
+      referenceSuffix: adj.sourceSegment
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-"),
+      entryType,
+      description: code
+        ? `${adj.descriptionPrefix} ${code} adjustment`
+        : `${adj.descriptionPrefix} adjustment ${adj.index + 1}`,
+      debitAmount: !isPatientResponsibility && adj.amount < 0 ? amount : 0,
+      creditAmount: !isPatientResponsibility && adj.amount > 0 ? amount : 0,
+      balanceEffect: isPatientResponsibility
+        ? 0
+        : adj.amount < 0
+          ? amount
+          : -amount,
+      groupCode: adj.groupCode,
+      reasonCode: adj.reasonCode,
+      sourceSegment: adj.sourceSegment,
+      serviceDate: adj.serviceDate,
+      metadata: {
+        ...commonMetadata,
+        line_number: adj.lineNumber ?? null,
+        procedure_code: adj.procedureCode ?? null,
+        service_date: adj.serviceDate ?? null,
+      },
+    });
+  }
+  if (args.insurancePayment > 0) {
+    entries.push({
+      referenceSuffix: "payment",
+      entryType: "insurance_payment",
+      description: "Insurance payment logged from claimless ERA",
+      debitAmount: 0,
+      creditAmount: args.insurancePayment,
+      balanceEffect: -args.insurancePayment,
+      sourceSegment: "CLP04",
+      metadata: commonMetadata,
+    });
+  }
+  if (args.patientResponsibility > 0) {
+    entries.push({
+      referenceSuffix: "patient-responsibility",
+      entryType: "patient_responsibility",
+      description:
+        "Patient responsibility retained as the remaining account balance",
+      debitAmount: 0,
+      creditAmount: 0,
+      balanceEffect: 0,
+      groupCode: "PR",
+      sourceSegment: "CLP05",
+      metadata: {
+        ...commonMetadata,
+        computed_residual_balance: computedResidual,
+      },
+    });
+  }
+
+  for (const entry of entries) {
+    await createClientLedgerEntry(
+      supabase,
+      organizationId,
+      payment,
+      entry,
+      args.now,
+    );
+  }
+}
+
+async function createClientLedgerEntry(
+  supabase: NonNullable<ReturnType<typeof createServerSupabaseAdminClient>>,
+  organizationId: string,
+  payment: EraClaimPaymentRow,
+  entry: ClientLedgerEntryEffect,
+  now: string,
+) {
+  if (!payment.client_id) return;
+  const referenceNumber = `${payment.id}:${entry.referenceSuffix}`;
+  const { data: existing, error: existingError } = await supabase
+    .from("client_ledger_entries")
+    .select("id")
+    .eq("organization_id", organizationId)
+    .eq("source_type", "era_payment")
+    .eq("reference_number", referenceNumber)
+    .is("archived_at", null)
+    .limit(1)
+    .maybeSingle();
+  if (existingError) throw new Error(existingError.message);
+  if (existing?.id) return;
+
+  const { error } = await supabase.from("client_ledger_entries").insert({
+    organization_id: organizationId,
+    client_id: payment.client_id,
+    professional_claim_id: null,
+    era_claim_payment_id: payment.id,
+    source_type: "era_payment",
+    source_id: payment.id,
+    entry_type: entry.entryType,
+    description: entry.description,
+    debit_amount: entry.debitAmount,
+    credit_amount: entry.creditAmount,
+    balance_effect: entry.balanceEffect,
+    group_code: entry.groupCode ?? null,
+    reason_code: entry.reasonCode ?? null,
+    source_segment: entry.sourceSegment ?? null,
+    service_date: entry.serviceDate ?? null,
+    posting_date: now.slice(0, 10),
+    reference_number: referenceNumber,
+    metadata: entry.metadata ?? {},
+    created_at: now,
+    updated_at: now,
+  });
+  if (error) {
     if ((error as { code?: string }).code === UNIQUE_VIOLATION) return;
     throw new Error(error.message);
   }
@@ -618,7 +985,12 @@ async function createPatientInvoiceIfNeeded(
   auditSink: string[],
 ): Promise<boolean> {
   const responsibility = Number(payment.clp05_patient_responsibility ?? 0);
-  if (responsibility <= 0 || !payment.client_id) return false;
+  if (
+    responsibility <= 0 ||
+    !payment.client_id ||
+    !payment.professional_claim_id
+  )
+    return false;
 
   const { data: existing } = await supabase
     .from("patient_invoices")
@@ -678,7 +1050,8 @@ async function createPatientInvoiceIfNeeded(
   // Best-effort autopay: if the client has autopay on with a saved
   // card, charge the freshly-created invoice's PR balance immediately.
   try {
-    const { attemptAutopayForInvoice } = await import("@/lib/payments/autopayService");
+    const { attemptAutopayForInvoice } =
+      await import("@/lib/payments/autopayService");
     await attemptAutopayForInvoice({
       organizationId,
       patientInvoiceId: String((inserted as { id: string }).id),
@@ -713,7 +1086,9 @@ async function closeRelatedEraWorkqueueItems(
     .eq("organization_id", organizationId)
     .eq("source_object_type", "payment_posting")
     .eq("source_object_id", eraClaimPaymentId)
-    .contains("context_payload", { logical_source_object_type: "era_claim_payment" })
+    .contains("context_payload", {
+      logical_source_object_type: "era_claim_payment",
+    })
     .in("work_type", ["era_mismatch", "era_835_exception"])
     .in("status", ["open", "in_progress", "blocked"])
     .is("archived_at", null);

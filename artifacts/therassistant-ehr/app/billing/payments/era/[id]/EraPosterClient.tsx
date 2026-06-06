@@ -78,6 +78,11 @@ interface ClaimPayment {
   casAdjustments: CasAdjustment[];
   serviceLines: ServiceLine[];
   rawSegments: string[];
+  patientPrefill: {
+    firstName: string;
+    lastName: string;
+    dateOfBirth: string;
+  } | null;
   professionalClaim: ProfessionalClaim | null;
   client: Client | null;
   validation: { blocking: ValidationIssue[]; warning: ValidationIssue[] };
@@ -156,7 +161,11 @@ function formatDate(iso: string | null | undefined): string {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 function normalizeEraDate(value: string): string {
@@ -167,20 +176,24 @@ function normalizeEraDate(value: string): string {
   return trimmed;
 }
 
-function extractPatientPrefillFromRawSegments(rawSegments: string[] | undefined): {
+function extractPatientPrefill(row: ClaimPayment): {
   firstName: string;
   lastName: string;
   dateOfBirth: string;
 } | null {
-  if (!Array.isArray(rawSegments)) return null;
-  let firstName = "";
-  let lastName = "";
-  let dateOfBirth = "";
+  let firstName = row.patientPrefill?.firstName ?? "";
+  let lastName = row.patientPrefill?.lastName ?? "";
+  let dateOfBirth = row.patientPrefill?.dateOfBirth ?? "";
+  const rawSegments = row.rawSegments;
+  if (!Array.isArray(rawSegments))
+    return firstName || lastName || dateOfBirth
+      ? { firstName, lastName, dateOfBirth }
+      : null;
   for (const segment of rawSegments) {
     const parts = String(segment ?? "").split("*");
     if (parts[0] === "NM1" && parts[1] === "QC") {
-      lastName = String(parts[3] ?? "").trim();
-      firstName = String(parts[4] ?? "").trim();
+      lastName = lastName || String(parts[3] ?? "").trim();
+      firstName = firstName || String(parts[4] ?? "").trim();
     }
     if (parts[0] === "DMG") {
       const rawDob = String(parts[2] ?? "").replace(/[^0-9-]/g, "");
@@ -225,7 +238,7 @@ function AddPatientModal({
   onClose: () => void;
   onCreated: (message: string) => Promise<void> | void;
 }) {
-  const prefill = extractPatientPrefillFromRawSegments(row.rawSegments);
+  const prefill = extractPatientPrefill(row);
   const [firstName, setFirstName] = useState(prefill?.firstName ?? "");
   const [lastName, setLastName] = useState(prefill?.lastName ?? "");
   const [dateOfBirth, setDateOfBirth] = useState(prefill?.dateOfBirth ?? "");
@@ -260,25 +273,34 @@ function AddPatientModal({
       if (!clientId) throw new Error("Client created without an id");
 
       if (row.professionalClaim?.id) {
-        const bindRes = await fetch(`/api/billing/era-payments/${row.id}/match`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            organizationId,
-            professionalClaimId: row.professionalClaim.id,
-            clientId,
-          }),
-        });
+        const bindRes = await fetch(
+          `/api/billing/era-payments/${row.id}/match`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              organizationId,
+              professionalClaimId: row.professionalClaim.id,
+              clientId,
+            }),
+          },
+        );
         const bindJson = await bindRes.json();
         if (!bindRes.ok || !bindJson.success) {
-          throw new Error(bindJson.error ?? "Failed to attach client to ERA row");
+          throw new Error(
+            bindJson.error ?? "Failed to attach client to ERA row",
+          );
         }
         await onCreated("Client created and attached. Payment can post now.");
       } else {
         await onCreated("Client created. Match the claim to finish posting.");
       }
     } catch (submissionError) {
-      setError(submissionError instanceof Error ? submissionError.message : "Failed to create client");
+      setError(
+        submissionError instanceof Error
+          ? submissionError.message
+          : "Failed to create client",
+      );
     } finally {
       setSaving(false);
     }
@@ -314,23 +336,70 @@ function AddPatientModal({
           overflow: "hidden",
         }}
       >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 18px", borderBottom: "1px solid #E2E8F0" }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            padding: "16px 18px",
+            borderBottom: "1px solid #E2E8F0",
+          }}
+        >
           <div>
-            <strong style={{ display: "block", fontSize: 16, color: "#0F172A" }}>Add Patient</strong>
-            <span style={{ display: "block", marginTop: 4, fontSize: 12, color: "#64748B" }}>{payerName}</span>
+            <strong
+              style={{ display: "block", fontSize: 16, color: "#0F172A" }}
+            >
+              Add Patient
+            </strong>
+            <span
+              style={{
+                display: "block",
+                marginTop: 4,
+                fontSize: 12,
+                color: "#64748B",
+              }}
+            >
+              {payerName}
+            </span>
           </div>
-          <button type="button" onClick={onClose} disabled={saving} style={{ border: "none", background: "transparent", fontSize: 22, lineHeight: 1, color: "#64748B", cursor: saving ? "not-allowed" : "pointer" }}>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            style={{
+              border: "none",
+              background: "transparent",
+              fontSize: 22,
+              lineHeight: 1,
+              color: "#64748B",
+              cursor: saving ? "not-allowed" : "pointer",
+            }}
+          >
             ×
           </button>
         </div>
 
         <div style={{ padding: 18, display: "grid", gap: 14 }}>
           <p style={{ margin: 0, fontSize: 13, color: "#475569" }}>
-            Create the missing patient record from this ERA. Only name and date of birth are required here.
+            Create the missing patient record from this ERA. Only name and date
+            of birth are required here.
           </p>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
-            <label style={{ display: "grid", gap: 6, fontSize: 12, color: "#475569" }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+              gap: 12,
+            }}
+          >
+            <label
+              style={{
+                display: "grid",
+                gap: 6,
+                fontSize: 12,
+                color: "#475569",
+              }}
+            >
               <span>First name *</span>
               <input
                 type="text"
@@ -338,22 +407,41 @@ function AddPatientModal({
                 onChange={(event) => setFirstName(event.target.value)}
                 required
                 autoFocus
-                style={{ border: "1px solid #CBD5E1", borderRadius: 10, padding: "10px 12px", fontSize: 14 }}
+                style={{
+                  border: "1px solid #CBD5E1",
+                  borderRadius: 10,
+                  padding: "10px 12px",
+                  fontSize: 14,
+                }}
               />
             </label>
-            <label style={{ display: "grid", gap: 6, fontSize: 12, color: "#475569" }}>
+            <label
+              style={{
+                display: "grid",
+                gap: 6,
+                fontSize: 12,
+                color: "#475569",
+              }}
+            >
               <span>Last name *</span>
               <input
                 type="text"
                 value={lastName}
                 onChange={(event) => setLastName(event.target.value)}
                 required
-                style={{ border: "1px solid #CBD5E1", borderRadius: 10, padding: "10px 12px", fontSize: 14 }}
+                style={{
+                  border: "1px solid #CBD5E1",
+                  borderRadius: 10,
+                  padding: "10px 12px",
+                  fontSize: 14,
+                }}
               />
             </label>
           </div>
 
-          <label style={{ display: "grid", gap: 6, fontSize: 12, color: "#475569" }}>
+          <label
+            style={{ display: "grid", gap: 6, fontSize: 12, color: "#475569" }}
+          >
             <span>Date of birth *</span>
             <input
               type="date"
@@ -361,26 +449,61 @@ function AddPatientModal({
               onChange={(event) => setDateOfBirth(event.target.value)}
               required
               max={new Date().toISOString().slice(0, 10)}
-              style={{ border: "1px solid #CBD5E1", borderRadius: 10, padding: "10px 12px", fontSize: 14 }}
+              style={{
+                border: "1px solid #CBD5E1",
+                borderRadius: 10,
+                padding: "10px 12px",
+                fontSize: 14,
+              }}
             />
           </label>
 
           {row.clp01ClaimControlNumber || row.payerClaimControlNumber ? (
-            <div style={{ borderRadius: 12, background: "#F8FAFC", padding: 12, fontSize: 12, color: "#475569" }}>
-              {row.clp01ClaimControlNumber ? <div><strong>Claim ref:</strong> {row.clp01ClaimControlNumber}</div> : null}
-              {row.payerClaimControlNumber ? <div><strong>Payer control:</strong> {row.payerClaimControlNumber}</div> : null}
+            <div
+              style={{
+                borderRadius: 12,
+                background: "#F8FAFC",
+                padding: 12,
+                fontSize: 12,
+                color: "#475569",
+              }}
+            >
+              {row.clp01ClaimControlNumber ? (
+                <div>
+                  <strong>Claim ref:</strong> {row.clp01ClaimControlNumber}
+                </div>
+              ) : null}
+              {row.payerClaimControlNumber ? (
+                <div>
+                  <strong>Payer control:</strong> {row.payerClaimControlNumber}
+                </div>
+              ) : null}
             </div>
           ) : null}
 
-          {error ? <div style={{ color: "#B91C1C", fontSize: 12, fontWeight: 600 }}>{error}</div> : null}
+          {error ? (
+            <div style={{ color: "#B91C1C", fontSize: 12, fontWeight: 600 }}>
+              {error}
+            </div>
+          ) : null}
 
           <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-            <button type="button" onClick={onClose} disabled={saving} className={styles.btn}>
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className={styles.btn}
+            >
               Cancel
             </button>
             <button
               type="submit"
-              disabled={saving || !firstName.trim() || !lastName.trim() || !dateOfBirth.trim()}
+              disabled={
+                saving ||
+                !firstName.trim() ||
+                !lastName.trim() ||
+                !dateOfBirth.trim()
+              }
               className={`${styles.btn} ${styles.btnPrimary}`}
             >
               {saving ? "Saving..." : "Save Patient"}
@@ -427,7 +550,10 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
     setLoading(true);
     setError(null);
     try {
-      const url = new URL(`/api/billing/era-batches/${batchId}`, window.location.origin);
+      const url = new URL(
+        `/api/billing/era-batches/${batchId}`,
+        window.location.origin,
+      );
       url.searchParams.set("organizationId", organizationId);
       const res = await fetch(url.toString());
       const json: BatchResponse = await res.json();
@@ -454,12 +580,16 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
     return {
       ...row,
       paymentAmount: e.paymentAmount ?? row.paymentAmount,
-      patientResponsibility: e.patientResponsibility ?? row.patientResponsibility,
+      patientResponsibility:
+        e.patientResponsibility ?? row.patientResponsibility,
     };
   };
 
   const updateEdit = (id: string, field: keyof EditedFields, value: number) => {
-    setEdits((prev) => ({ ...prev, [id]: { ...(prev[id] ?? {}), [field]: value } }));
+    setEdits((prev) => ({
+      ...prev,
+      [id]: { ...(prev[id] ?? {}), [field]: value },
+    }));
   };
 
   const resetEdit = (id: string) => {
@@ -472,8 +602,13 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
 
   const applySuggestion = (row: ClaimPayment, s: Suggestion) => {
     if (typeof s.suggestedValue !== "number") return;
-    if (s.field === "deductible" || s.field === "coinsurance" || s.field === "copay") {
-      const next = (edits[row.id]?.patientResponsibility ?? row.patientResponsibility) + 0;
+    if (
+      s.field === "deductible" ||
+      s.field === "coinsurance" ||
+      s.field === "copay"
+    ) {
+      const next =
+        (edits[row.id]?.patientResponsibility ?? row.patientResponsibility) + 0;
       void next;
     }
     if (s.field === "clp05_patient_responsibility") {
@@ -486,14 +621,19 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
     setAutoMatching(true);
     setError(null);
     try {
-      const res = await fetch(`/api/billing/era-batches/${batchId}/auto-match`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ organizationId }),
-      });
+      const res = await fetch(
+        `/api/billing/era-batches/${batchId}/auto-match`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ organizationId }),
+        },
+      );
       const json = await res.json();
       if (!json.success) throw new Error(json.error ?? "Auto-match failed");
-      setFlash(`Auto-matched ${json.bound}/${json.processed} unmatched ERA claim payments.`);
+      setFlash(
+        `Auto-matched ${json.bound}/${json.processed} unmatched ERA claim payments.`,
+      );
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Auto-match failed");
@@ -525,17 +665,23 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
     }
   };
 
-  const bindMatch = async (eraClaimPaymentId: string, candidate: MatchCandidate) => {
+  const bindMatch = async (
+    eraClaimPaymentId: string,
+    candidate: MatchCandidate,
+  ) => {
     try {
-      const res = await fetch(`/api/billing/era-payments/${eraClaimPaymentId}/match`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          organizationId,
-          professionalClaimId: candidate.professionalClaimId,
-          clientId: candidate.clientId,
-        }),
-      });
+      const res = await fetch(
+        `/api/billing/era-payments/${eraClaimPaymentId}/match`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            organizationId,
+            professionalClaimId: candidate.professionalClaimId,
+            clientId: candidate.clientId,
+          }),
+        },
+      );
       const json = await res.json();
       if (!json.success) throw new Error(json.error ?? "Bind failed");
       setFlash("Match bound.");
@@ -598,7 +744,10 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
       try {
         const e = edits[row.id];
         const overrides = e
-          ? { paymentAmount: e.paymentAmount, patientResponsibility: e.patientResponsibility }
+          ? {
+              paymentAmount: e.paymentAmount,
+              patientResponsibility: e.patientResponsibility,
+            }
           : undefined;
         const res = await fetch(`/api/billing/era-payments/${row.id}/post`, {
           method: "POST",
@@ -638,7 +787,8 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
         }),
       });
       const json = await res.json();
-      if (!json.success) throw new Error(json.error ?? "Create adjustment failed");
+      if (!json.success)
+        throw new Error(json.error ?? "Create adjustment failed");
       setAdjustmentDraft({
         scope: "claim_level",
         adjustmentType: "interest",
@@ -655,7 +805,10 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
 
   const deleteAdjustment = async (id: string) => {
     if (!window.confirm("Delete adjustment?")) return;
-    const url = new URL(`/api/billing/payment-adjustments/${id}`, window.location.origin);
+    const url = new URL(
+      `/api/billing/payment-adjustments/${id}`,
+      window.location.origin,
+    );
     url.searchParams.set("organizationId", organizationId);
     await fetch(url.toString(), { method: "DELETE" });
     await load();
@@ -685,7 +838,9 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
         >
           <div className={styles.tinyLabel}>
             CLP {row.clp01ClaimControlNumber}
-            {row.payerClaimControlNumber ? ` · ICN ${row.payerClaimControlNumber}` : ""}
+            {row.payerClaimControlNumber
+              ? ` · ICN ${row.payerClaimControlNumber}`
+              : ""}
           </div>
           {segments.length > 0 ? (
             segments.map((seg, i) => (
@@ -694,25 +849,35 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
               </div>
             ))
           ) : (
-            <div className={styles.muted} style={{ fontSize: 10 }}>(no raw segments captured)</div>
+            <div className={styles.muted} style={{ fontSize: 10 }}>
+              (no raw segments captured)
+            </div>
           )}
         </div>
       );
     });
     return (
       <>
-        <div className={styles.tinyLabel} style={{ marginBottom: 6 }}>835 envelope</div>
+        <div className={styles.tinyLabel} style={{ marginBottom: 6 }}>
+          835 envelope
+        </div>
         <div className={styles.mono} style={{ fontSize: 10, marginBottom: 12 }}>
           {(batch.rawContent ?? "").split("~").slice(0, 6).join("~\n")}…
         </div>
-        <div className={styles.tinyLabel} style={{ marginBottom: 6 }}>Per-claim segments</div>
+        <div className={styles.tinyLabel} style={{ marginBottom: 6 }}>
+          Per-claim segments
+        </div>
         {blocks}
       </>
     );
   };
 
   if (loading && !batch) {
-    return <div className={styles.page}><div className={styles.emptyState}>Loading ERA…</div></div>;
+    return (
+      <div className={styles.page}>
+        <div className={styles.emptyState}>Loading ERA…</div>
+      </div>
+    );
   }
   if (!batch) {
     return (
@@ -720,7 +885,9 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
         <div className={styles.emptyState}>
           {error ?? "Batch not found."}
           <div style={{ marginTop: 12 }}>
-            <Link href="/billing/payments/era" className={styles.btn}>← Back to ERA Queue</Link>
+            <Link href="/billing/payments/era" className={styles.btn}>
+              ← Back to ERA Queue
+            </Link>
           </div>
         </div>
       </div>
@@ -738,17 +905,30 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
         </Link>
         <div className={styles.title}>{batch.payer.name}</div>
         <span className={styles.crumb}>
-          EFT <span className={styles.mono}>{batch.eftOrCheckNumber ?? "—"}</span> ·{" "}
-          {formatDate(batch.paymentDate)} · {currency(batch.summary.totalPaymentAmount)}
+          EFT{" "}
+          <span className={styles.mono}>{batch.eftOrCheckNumber ?? "—"}</span> ·{" "}
+          {formatDate(batch.paymentDate)} ·{" "}
+          {currency(batch.summary.totalPaymentAmount)}
         </span>
         <div className={styles.spacer} />
-        <button className={styles.btn} onClick={() => void load()} disabled={loading}>
+        <button
+          className={styles.btn}
+          onClick={() => void load()}
+          disabled={loading}
+        >
           <RefreshCw size={12} /> Refresh
         </button>
-        <button className={styles.btn} onClick={() => void autoMatch()} disabled={autoMatching}>
+        <button
+          className={styles.btn}
+          onClick={() => void autoMatch()}
+          disabled={autoMatching}
+        >
           <Sparkles size={12} /> Auto-match
         </button>
-        <button className={`${styles.btn} ${styles.btnPrimary}`} onClick={() => void postAllReady()}>
+        <button
+          className={`${styles.btn} ${styles.btnPrimary}`}
+          onClick={() => void postAllReady()}
+        >
           <PlayCircle size={12} /> Post all ready
         </button>
       </header>
@@ -759,11 +939,15 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
       <div className={styles.summaryBar}>
         <div className={styles.summaryCell}>
           <span className={styles.summaryLabel}>Total payment</span>
-          <span className={styles.summaryValue}>{currency(batch.summary.totalPaymentAmount)}</span>
+          <span className={styles.summaryValue}>
+            {currency(batch.summary.totalPaymentAmount)}
+          </span>
         </div>
         <div className={styles.summaryCell}>
           <span className={styles.summaryLabel}>Allocated</span>
-          <span className={`${styles.summaryValue} ${styles.summaryValuePositive}`}>
+          <span
+            className={`${styles.summaryValue} ${styles.summaryValuePositive}`}
+          >
             {currency(batch.summary.totalAllocated)}
           </span>
         </div>
@@ -774,8 +958,8 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
               batch.summary.unallocated > 0.01
                 ? styles.summaryValueWarn
                 : batch.summary.unallocated < -0.01
-                ? styles.summaryValueNegative
-                : ""
+                  ? styles.summaryValueNegative
+                  : ""
             }`}
           >
             {currency(batch.summary.unallocated)}
@@ -783,7 +967,9 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
         </div>
         <div className={styles.summaryCell}>
           <span className={styles.summaryLabel}>Adjustments</span>
-          <span className={styles.summaryValue}>{currency(batch.summary.totalAdjustments)}</span>
+          <span className={styles.summaryValue}>
+            {currency(batch.summary.totalAdjustments)}
+          </span>
         </div>
         <div className={styles.summaryCell}>
           <span className={styles.summaryLabel}>Claims</span>
@@ -808,7 +994,12 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
         <div className={styles.summaryCell}>
           <span className={styles.summaryLabel}>Pt responsibility</span>
           <span className={styles.summaryValue}>
-            {currency(claimPayments.reduce((s, r) => s + (r.patientResponsibility || 0), 0))}
+            {currency(
+              claimPayments.reduce(
+                (s, r) => s + (r.patientResponsibility || 0),
+                0,
+              ),
+            )}
           </span>
         </div>
       </div>
@@ -842,12 +1033,12 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                 const rowClass = isPosted
                   ? styles.posted
                   : isBlocked
-                  ? styles.blocked
-                  : isModified
-                  ? styles.modified
-                  : selectedId === row.id
-                  ? styles.selected
-                  : "";
+                    ? styles.blocked
+                    : isModified
+                      ? styles.modified
+                      : selectedId === row.id
+                        ? styles.selected
+                        : "";
                 return (
                   <tr
                     key={row.id}
@@ -860,25 +1051,49 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                     }}
                   >
                     <td>
-                      {row.client?.displayName ?? <span className={styles.muted}>Unmatched</span>}
-                      <div className={`${styles.muted} ${styles.mono}`} style={{ fontSize: 10 }}>
-                        {row.professionalClaim?.claimNumber ?? row.clp01ClaimControlNumber}
+                      {row.client?.displayName ?? (
+                        <span className={styles.muted}>Unmatched</span>
+                      )}
+                      <div
+                        className={`${styles.muted} ${styles.mono}`}
+                        style={{ fontSize: 10 }}
+                      >
+                        {row.professionalClaim?.claimNumber ??
+                          row.clp01ClaimControlNumber}
                       </div>
                     </td>
-                    <td>{formatDate(row.professionalClaim?.dateOfServiceFrom)}</td>
+                    <td>
+                      {formatDate(row.professionalClaim?.dateOfServiceFrom)}
+                    </td>
                     <td className={styles.mono} style={{ fontSize: 12 }}>
                       {row.serviceLines.length > 0
-                        ? (row.serviceLines[0].procedureCode ?? row.serviceLines[0].procedure_code ?? "—")
+                        ? (row.serviceLines[0].procedureCode ??
+                          row.serviceLines[0].procedure_code ??
+                          "—")
                         : "—"}
                     </td>
-                    <td className={styles.numCell}>{currency(row.totalCharge)}</td>
                     <td className={styles.numCell}>
-                      {currency(row.serviceLines.length > 0 && row.serviceLines[0].allowed != null
-                        ? row.serviceLines[0].allowed
-                        : Math.max(0, row.paymentAmount + row.casAdjustments.reduce((s, a) => s + a.amount, 0)))}
+                      {currency(row.totalCharge)}
                     </td>
                     <td className={styles.numCell}>
-                      {currency(row.casAdjustments.reduce((s, a) => s + a.amount, 0))}
+                      {currency(
+                        row.serviceLines.length > 0 &&
+                          row.serviceLines[0].allowed != null
+                          ? row.serviceLines[0].allowed
+                          : Math.max(
+                              0,
+                              row.paymentAmount +
+                                row.casAdjustments.reduce(
+                                  (s, a) => s + a.amount,
+                                  0,
+                                ),
+                            ),
+                      )}
+                    </td>
+                    <td className={styles.numCell}>
+                      {currency(
+                        row.casAdjustments.reduce((s, a) => s + a.amount, 0),
+                      )}
                     </td>
                     <td className={styles.numCell}>
                       <input
@@ -890,13 +1105,19 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                         disabled={isPosted}
                         value={row.paymentAmount}
                         onChange={(ev: ChangeEvent<HTMLInputElement>) =>
-                          updateEdit(row.id, "paymentAmount", Number(ev.target.value))
+                          updateEdit(
+                            row.id,
+                            "paymentAmount",
+                            Number(ev.target.value),
+                          )
                         }
                         onKeyDown={(ev: KeyboardEvent<HTMLInputElement>) => {
                           if (ev.key === "Enter") {
                             ev.preventDefault();
                             (ev.target as HTMLInputElement).blur();
-                            setFlash(`Committed paymentAmount for ${rawRow.clp01ClaimControlNumber}.`);
+                            setFlash(
+                              `Committed paymentAmount for ${rawRow.clp01ClaimControlNumber}.`,
+                            );
                           } else if (ev.key === "Escape") {
                             ev.preventDefault();
                             resetEdit(rawRow.id);
@@ -908,20 +1129,28 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                     <td className={styles.numCell}>
                       <input
                         className={`${styles.inlineInput} ${
-                          e?.patientResponsibility !== undefined ? styles.modified : ""
+                          e?.patientResponsibility !== undefined
+                            ? styles.modified
+                            : ""
                         } ${isPosted ? styles.disabled : ""}`}
                         type="number"
                         step="0.01"
                         disabled={isPosted}
                         value={row.patientResponsibility}
                         onChange={(ev: ChangeEvent<HTMLInputElement>) =>
-                          updateEdit(row.id, "patientResponsibility", Number(ev.target.value))
+                          updateEdit(
+                            row.id,
+                            "patientResponsibility",
+                            Number(ev.target.value),
+                          )
                         }
                         onKeyDown={(ev: KeyboardEvent<HTMLInputElement>) => {
                           if (ev.key === "Enter") {
                             ev.preventDefault();
                             (ev.target as HTMLInputElement).blur();
-                            setFlash(`Committed patientResponsibility for ${rawRow.clp01ClaimControlNumber}.`);
+                            setFlash(
+                              `Committed patientResponsibility for ${rawRow.clp01ClaimControlNumber}.`,
+                            );
                           } else if (ev.key === "Escape") {
                             ev.preventDefault();
                             resetEdit(rawRow.id);
@@ -943,22 +1172,44 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                     </td>
                     <td>
                       {row.validation.blocking.length > 0 ? (
-                        <span title={row.validation.blocking.map((b) => b.message).join("\n")}>
-                          <span className={`${styles.validationDot} ${styles.block}`} />
-                          <span className={styles.tagBlock}>{row.validation.blocking.length} blocking</span>
+                        <span
+                          title={row.validation.blocking
+                            .map((b) => b.message)
+                            .join("\n")}
+                        >
+                          <span
+                            className={`${styles.validationDot} ${styles.block}`}
+                          />
+                          <span className={styles.tagBlock}>
+                            {row.validation.blocking.length} blocking
+                          </span>
                         </span>
                       ) : row.validation.warning.length > 0 ? (
-                        <span title={row.validation.warning.map((w) => w.message).join("\n")}>
-                          <span className={`${styles.validationDot} ${styles.warn}`} />
-                          <span className={styles.tagWarn}>{row.validation.warning.length} warning</span>
+                        <span
+                          title={row.validation.warning
+                            .map((w) => w.message)
+                            .join("\n")}
+                        >
+                          <span
+                            className={`${styles.validationDot} ${styles.warn}`}
+                          />
+                          <span className={styles.tagWarn}>
+                            {row.validation.warning.length} warning
+                          </span>
                         </span>
                       ) : (
                         <span>
-                          <span className={`${styles.validationDot} ${styles.ok}`} />
-                          <span className={styles.tagInfo}>{row.postingStatus}</span>
+                          <span
+                            className={`${styles.validationDot} ${styles.ok}`}
+                          />
+                          <span className={styles.tagInfo}>
+                            {row.postingStatus}
+                          </span>
                         </span>
                       )}
-                      <div className={styles.tinyLabel}>{row.claimMatchStatus}</div>
+                      <div className={styles.tinyLabel}>
+                        {row.claimMatchStatus}
+                      </div>
                     </td>
                     <td>
                       <div className={styles.row}>
@@ -1002,7 +1253,9 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                         {!isPosted ? (
                           <button
                             className={`${styles.btn} ${styles.btnPrimary}`}
-                            disabled={isBlocked || posting === row.id || !hasPatient}
+                            disabled={
+                              isBlocked || posting === row.id || !hasPatient
+                            }
                             onClick={(ev) => {
                               ev.stopPropagation();
                               if (!hasPatient) return;
@@ -1022,22 +1275,84 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
             </tbody>
             <tfoot>
               <tr style={{ background: "#F1F5F9", fontWeight: 600 }}>
-                <td colSpan={3} style={{ padding: "6px 8px", fontSize: 12 }}>Running Totals ({claimPayments.length} lines)</td>
-                <td className={styles.numCell} style={{ padding: "6px 4px", fontSize: 12 }}>{currency(claimPayments.reduce((s, r) => s + r.totalCharge, 0))}</td>
-                <td className={styles.numCell} style={{ padding: "6px 4px", fontSize: 12 }}>
-                  {currency(claimPayments.reduce((s, r) => s + (r.serviceLines[0]?.allowed ?? Math.max(0, r.paymentAmount + r.casAdjustments.reduce((a, c) => a + c.amount, 0))), 0))}
+                <td colSpan={3} style={{ padding: "6px 8px", fontSize: 12 }}>
+                  Running Totals ({claimPayments.length} lines)
                 </td>
-                <td className={styles.numCell} style={{ padding: "6px 4px", fontSize: 12 }}>{currency(claimPayments.reduce((s, r) => s + r.casAdjustments.reduce((a, c) => a + c.amount, 0), 0))}</td>
+                <td
+                  className={styles.numCell}
+                  style={{ padding: "6px 4px", fontSize: 12 }}
+                >
+                  {currency(
+                    claimPayments.reduce((s, r) => s + r.totalCharge, 0),
+                  )}
+                </td>
+                <td
+                  className={styles.numCell}
+                  style={{ padding: "6px 4px", fontSize: 12 }}
+                >
+                  {currency(
+                    claimPayments.reduce(
+                      (s, r) =>
+                        s +
+                        (r.serviceLines[0]?.allowed ??
+                          Math.max(
+                            0,
+                            r.paymentAmount +
+                              r.casAdjustments.reduce(
+                                (a, c) => a + c.amount,
+                                0,
+                              ),
+                          )),
+                      0,
+                    ),
+                  )}
+                </td>
+                <td
+                  className={styles.numCell}
+                  style={{ padding: "6px 4px", fontSize: 12 }}
+                >
+                  {currency(
+                    claimPayments.reduce(
+                      (s, r) =>
+                        s + r.casAdjustments.reduce((a, c) => a + c.amount, 0),
+                      0,
+                    ),
+                  )}
+                </td>
                 <td />
-                <td className={styles.numCell} style={{ padding: "6px 4px", fontSize: 12 }}>{currency(claimPayments.reduce((s, r) => s + r.patientResponsibility, 0))}</td>
-                <td className={styles.numCell} style={{ padding: "6px 4px", fontSize: 12 }}>
+                <td
+                  className={styles.numCell}
+                  style={{ padding: "6px 4px", fontSize: 12 }}
+                >
+                  {currency(
+                    claimPayments.reduce(
+                      (s, r) => s + r.patientResponsibility,
+                      0,
+                    ),
+                  )}
+                </td>
+                <td
+                  className={styles.numCell}
+                  style={{ padding: "6px 4px", fontSize: 12 }}
+                >
                   {(() => {
-                    const totalPaid = claimPayments.reduce((s, r) => s + r.paymentAmount, 0);
+                    const totalPaid = claimPayments.reduce(
+                      (s, r) => s + r.paymentAmount,
+                      0,
+                    );
                     const expectedTotal = batch.summary.totalPaymentAmount;
                     const diff = Math.abs(totalPaid - expectedTotal);
                     return (
-                      <span style={{ color: diff > 0.01 ? "#DC2626" : "#166534" }} title={diff > 0.01 ? `Balance warning: lines total ${currency(totalPaid)} vs ERA total ${currency(expectedTotal)}` : "Balanced"}>
-                        {currency(totalPaid)}{diff > 0.01 ? " ⚠" : ""}
+                      <span
+                        style={{ color: diff > 0.01 ? "#DC2626" : "#166534" }}
+                        title={
+                          diff > 0.01
+                            ? `Balance warning: lines total ${currency(totalPaid)} vs ERA total ${currency(expectedTotal)}`
+                            : "Balanced"
+                        }
+                      >
+                        {currency(totalPaid)}
+                        {diff > 0.01 ? " ⚠" : ""}
                       </span>
                     );
                   })()}
@@ -1061,7 +1376,8 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
             <div className={styles.adjustmentsHeader}>
               <strong>Claim / provider-level adjustments</strong>
               <span className={styles.tinyLabel}>
-                interest · sequestration · recoupment · capitation · refunds · etc.
+                interest · sequestration · recoupment · capitation · refunds ·
+                etc.
               </span>
             </div>
 
@@ -1081,7 +1397,11 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
               <tbody>
                 {adjustments.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className={styles.muted} style={{ padding: 12 }}>
+                    <td
+                      colSpan={8}
+                      className={styles.muted}
+                      style={{ padding: 12 }}
+                    >
                       No claim or provider-level adjustments recorded.
                     </td>
                   </tr>
@@ -1091,14 +1411,19 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                       <td>{a.scope}</td>
                       <td>{a.adjustmentType}</td>
                       <td className={styles.mono}>
-                        {[a.groupCode, a.reasonCode].filter(Boolean).join("-") || "—"}
+                        {[a.groupCode, a.reasonCode]
+                          .filter(Boolean)
+                          .join("-") || "—"}
                       </td>
                       <td>{a.description ?? "—"}</td>
                       <td className={styles.numCell}>{currency(a.amount)}</td>
                       <td className={styles.mono}>{a.referenceId ?? "—"}</td>
                       <td>{formatDate(a.postedAt)}</td>
                       <td>
-                        <button className={styles.btnGhost} onClick={() => void deleteAdjustment(a.id)}>
+                        <button
+                          className={styles.btnGhost}
+                          onClick={() => void deleteAdjustment(a.id)}
+                        >
                           <Trash2 size={12} />
                         </button>
                       </td>
@@ -1127,7 +1452,10 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                       className={styles.smallSelect}
                       value={adjustmentDraft.adjustmentType}
                       onChange={(e) =>
-                        setAdjustmentDraft({ ...adjustmentDraft, adjustmentType: e.target.value })
+                        setAdjustmentDraft({
+                          ...adjustmentDraft,
+                          adjustmentType: e.target.value,
+                        })
                       }
                     >
                       {ADJUSTMENT_TYPES.map((t) => (
@@ -1145,7 +1473,10 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                       placeholder="Description"
                       value={adjustmentDraft.description}
                       onChange={(e) =>
-                        setAdjustmentDraft({ ...adjustmentDraft, description: e.target.value })
+                        setAdjustmentDraft({
+                          ...adjustmentDraft,
+                          description: e.target.value,
+                        })
                       }
                     />
                   </td>
@@ -1157,14 +1488,20 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                       placeholder="0.00"
                       value={adjustmentDraft.amount}
                       onChange={(e) =>
-                        setAdjustmentDraft({ ...adjustmentDraft, amount: e.target.value })
+                        setAdjustmentDraft({
+                          ...adjustmentDraft,
+                          amount: e.target.value,
+                        })
                       }
                     />
                   </td>
                   <td className={styles.muted}>—</td>
                   <td className={styles.muted}>—</td>
                   <td>
-                    <button className={`${styles.btn} ${styles.btnPrimary}`} onClick={() => void addAdjustment()}>
+                    <button
+                      className={`${styles.btn} ${styles.btnPrimary}`}
+                      onClick={() => void addAdjustment()}
+                    >
                       <Plus size={12} /> Add
                     </button>
                   </td>
@@ -1178,22 +1515,27 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
           <div className={styles.posterPanelHeader}>
             Raw 835
             <span className={styles.spacer} />
-            <span className={styles.tinyLabel}>{batch.fileName ?? "inline"}</span>
+            <span className={styles.tinyLabel}>
+              {batch.fileName ?? "inline"}
+            </span>
           </div>
           <div className={styles.posterPanelBody}>{renderRawPanel()}</div>
         </aside>
       </div>
 
       {matchModalFor ? (
-        <div className={styles.modalScrim} onClick={() => setMatchModalFor(null)}>
+        <div
+          className={styles.modalScrim}
+          onClick={() => setMatchModalFor(null)}
+        >
           <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
             <div className={styles.modalTitle}>Match candidate claims</div>
             {matchLoading ? (
               <div className={styles.muted}>Searching…</div>
             ) : matchCandidates.length === 0 ? (
               <div className={styles.muted}>
-                <AlertTriangle size={12} /> No probable matches. Try opening the claim manually from the 837P
-                queue and posting from there.
+                <AlertTriangle size={12} /> No probable matches. Try opening the
+                claim manually from the 837P queue and posting from there.
               </div>
             ) : (
               <table className={styles.adjustmentsTable}>
@@ -1214,8 +1556,12 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
                       <td>{c.patientDisplayName ?? "—"}</td>
                       <td className={styles.mono}>{c.claimNumber ?? "—"}</td>
                       <td>{formatDate(c.dateOfServiceFrom)}</td>
-                      <td className={styles.numCell}>{currency(c.totalCharge)}</td>
-                      <td className={styles.numCell}>{Math.round(c.confidence * 100)}%</td>
+                      <td className={styles.numCell}>
+                        {currency(c.totalCharge)}
+                      </td>
+                      <td className={styles.numCell}>
+                        {Math.round(c.confidence * 100)}%
+                      </td>
                       <td className={styles.muted}>{c.reasons.join(" · ")}</td>
                       <td>
                         <button
@@ -1231,7 +1577,10 @@ export default function EraPosterClient({ batchId }: { batchId: string }) {
               </table>
             )}
             <div className={styles.modalActions}>
-              <button className={styles.btn} onClick={() => setMatchModalFor(null)}>
+              <button
+                className={styles.btn}
+                onClick={() => setMatchModalFor(null)}
+              >
                 Close
               </button>
             </div>

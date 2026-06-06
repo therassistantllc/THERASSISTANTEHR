@@ -72,6 +72,10 @@ export async function recalculatePatientBalance(args: {
     .filter((row) => text(row.entry_type) === "insurance_payment")
     .reduce((sum, row) => sum + money(row.credit_amount), 0);
 
+  const ledgerCharges = ledgers
+    .filter((row) => text(row.entry_type) === "charge")
+    .reduce((sum, row) => sum + money(row.debit_amount) - money(row.credit_amount), 0);
+
   const patientPayments = ledgers
     .filter((row) => ["patient_payment", "card_payment", "cash_payment", "check_payment"].includes(text(row.entry_type)))
     .reduce((sum, row) => sum + money(row.credit_amount), 0);
@@ -82,6 +86,7 @@ export async function recalculatePatientBalance(args: {
 
   const ledgerBalanceEffect = ledgers.reduce((sum, row) => sum + money(row.balance_effect), 0);
   const currentBalance = invoiceBalance || Math.max(0, totalPatientResponsibleFromInvoices + ledgerBalanceEffect);
+  const totalBilled = totalPatientResponsibleFromInvoices || Math.max(0, ledgerCharges);
 
   const lastPaymentRows = ledgers
     .filter((row) => money(row.credit_amount) > 0 && ["insurance_payment", "patient_payment", "card_payment", "cash_payment", "check_payment"].includes(text(row.entry_type)))
@@ -110,10 +115,10 @@ export async function recalculatePatientBalance(args: {
   const row = {
     organization_id: organizationId,
     client_id: clientId,
-    total_billed: totalPatientResponsibleFromInvoices,
+    total_billed: totalBilled,
     total_insurance_paid: insurancePayments,
     total_contractual_adj: Math.max(0, adjustments),
-    total_patient_responsible: totalPatientResponsibleFromInvoices,
+    total_patient_responsible: totalPatientResponsibleFromInvoices || currentBalance,
     total_patient_paid: totalPatientPaidFromInvoices || patientPayments,
     current_balance: currentBalance,
     balance_0_30: money(b0_30),

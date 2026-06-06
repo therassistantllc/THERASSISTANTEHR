@@ -13,7 +13,7 @@ export interface CaptureSignedEncounterChargeInput {
 export interface CaptureSignedEncounterChargeResult {
   ok: boolean;
   chargeId: string | null;
-  status: "ready_for_claim" | "blocked" | "patient_responsibility";
+  status: "ready_for_claim" | "claim_created" | "blocked" | "patient_responsibility";
   blockers: Array<{ field: string; message: string }>;
   caseId?: string | null;
   routing?: "insurance_claim" | "patient_responsibility";
@@ -191,7 +191,7 @@ export async function captureSignedEncounterCharge(
 
   const { data: existing } = await supabase
     .from("charge_capture_items")
-    .select("id")
+    .select("id, claim_id, charge_status")
     .eq("organization_id", input.organizationId)
     .eq("encounter_id", input.encounterId)
     .is("archived_at", null)
@@ -202,12 +202,14 @@ export async function captureSignedEncounterCharge(
   const okForFlow = status === "ready_for_claim" || status === "patient_responsibility";
 
   if (existing?.id) {
+    const existingClaimId = normalizeText((existing as DbRow).claim_id);
+    const nextStatus = existingClaimId && status === "ready_for_claim" ? "claim_created" : status;
     const { data: updated, error: updateError } = await supabase
       .from("charge_capture_items")
       .update({
         insurance_policy_id: policyId,
         case_id: resolvedCaseId,
-        charge_status: status,
+        charge_status: nextStatus,
         diagnosis_codes: diagnosisCodes,
         service_lines: serviceLines,
         total_charge: totalCharge,
@@ -220,7 +222,7 @@ export async function captureSignedEncounterCharge(
       .single();
 
     if (updateError || !updated) throw new Error(updateError?.message ?? "Failed to update charge capture item");
-    return { ok: okForFlow, chargeId: String(updated.id), status, blockers, caseId: resolvedCaseId, routing };
+    return { ok: okForFlow, chargeId: String(updated.id), status: nextStatus, blockers, caseId: resolvedCaseId, routing };
   }
 
   const { data: inserted, error: insertError } = await supabase

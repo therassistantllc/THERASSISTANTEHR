@@ -8,7 +8,8 @@ import {
 
 function errMsg(e: unknown) {
   if (e instanceof Error) return e.message;
-  if (e && typeof e === "object" && "message" in e) return String((e as { message?: unknown }).message ?? "Unknown error");
+  if (e && typeof e === "object" && "message" in e)
+    return String((e as { message?: unknown }).message ?? "Unknown error");
   return "Unknown error";
 }
 
@@ -19,24 +20,45 @@ function errMsg(e: unknown) {
  *
  * Requires an authenticated payment poster (role guard).
  */
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+export async function POST(
+  req: NextRequest,
+  ctx: { params: Promise<{ id: string }> },
+) {
   const { id } = await ctx.params;
   const supabase = createServerSupabaseServiceRoleClient();
-  if (!supabase) return NextResponse.json({ success: false, error: "Service role key not configured" }, { status: 503 });
+  if (!supabase)
+    return NextResponse.json(
+      { success: false, error: "Service role key not configured" },
+      { status: 503 },
+    );
 
   let body: Record<string, unknown> = {};
-  try { body = (await req.json()) as Record<string, unknown>; } catch { /* allow empty */ }
-  const organizationId = typeof body.organizationId === "string" ? body.organizationId.trim() : "";
-  const claimNumber = typeof body.claimNumber === "string" ? body.claimNumber.trim() : "";
+  try {
+    body = (await req.json()) as Record<string, unknown>;
+  } catch {
+    /* allow empty */
+  }
+  const organizationId =
+    typeof body.organizationId === "string" ? body.organizationId.trim() : "";
+  const claimNumber =
+    typeof body.claimNumber === "string" ? body.claimNumber.trim() : "";
   const claimIdInput =
-    (typeof body.professionalClaimId === "string" && body.professionalClaimId.trim()) ||
+    (typeof body.professionalClaimId === "string" &&
+      body.professionalClaimId.trim()) ||
     (typeof body.claimId === "string" && body.claimId.trim()) ||
     "";
 
-  if (!organizationId) return NextResponse.json({ success: false, error: "organizationId is required" }, { status: 400 });
+  if (!organizationId)
+    return NextResponse.json(
+      { success: false, error: "organizationId is required" },
+      { status: 400 },
+    );
   if (!claimNumber && !claimIdInput)
     return NextResponse.json(
-      { success: false, error: "professionalClaimId, claimId, or claimNumber is required" },
+      {
+        success: false,
+        error: "professionalClaimId, claimId, or claimNumber is required",
+      },
       { status: 400 },
     );
 
@@ -52,7 +74,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         .maybeSingle();
       if (claimErr) throw claimErr;
       if (!claim?.id) {
-        return NextResponse.json({ success: false, error: `No claim found with number "${claimNumber}" in this organization.` }, { status: 404 });
+        return NextResponse.json(
+          {
+            success: false,
+            error: `No claim found with number "${claimNumber}" in this organization.`,
+          },
+          { status: 404 },
+        );
       }
       claimId = String(claim.id);
     } else {
@@ -68,13 +96,17 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       if (ownErr) throw ownErr;
       if (!ownClaim?.id) {
         return NextResponse.json(
-          { success: false, error: "Professional claim not found in this organization." },
+          {
+            success: false,
+            error: "Professional claim not found in this organization.",
+          },
           { status: 404 },
         );
       }
     }
 
-    const clientIdInput = typeof body.clientId === "string" ? body.clientId.trim() : "";
+    const clientIdInput =
+      typeof body.clientId === "string" ? body.clientId.trim() : "";
     if (clientIdInput) {
       // Same cross-tenant guard for clientId.
       const { data: ownClient, error: ownClientErr } = await supabase
@@ -110,14 +142,39 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       .single();
     if (error) throw error;
 
+    // Keep a same-id era_claim_payments row in lockstep when one has already
+    // been materialized for ledger posting. Most poster rows start as
+    // payment_import_items and are mirrored on post, but this best-effort sync
+    // prevents stale unmatched legacy rows from blocking an immediate post.
+    await supabase
+      .from("era_claim_payments")
+      .update({
+        professional_claim_id: claimId,
+        client_id: clientIdInput || null,
+        claim_match_status: "matched",
+        posting_status: "ready",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id)
+      .eq("organization_id", organizationId);
+
     return NextResponse.json({ success: true, payment: data });
   } catch (e) {
     if (e instanceof PaymentPostingUnauthenticatedError) {
-      return NextResponse.json({ success: false, error: e.message }, { status: 401 });
+      return NextResponse.json(
+        { success: false, error: e.message },
+        { status: 401 },
+      );
     }
     if (e instanceof PaymentPostingForbiddenError) {
-      return NextResponse.json({ success: false, error: e.message }, { status: 403 });
+      return NextResponse.json(
+        { success: false, error: e.message },
+        { status: 403 },
+      );
     }
-    return NextResponse.json({ success: false, error: errMsg(e) }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: errMsg(e) },
+      { status: 500 },
+    );
   }
 }
