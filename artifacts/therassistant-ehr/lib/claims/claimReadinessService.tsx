@@ -216,7 +216,7 @@ export async function createProfessionalClaimDraft(
   addRequired(errors, "billing_provider.npi", input.billingProvider.npi, "Billing provider NPI is required");
   addRequired(errors, "billing_provider.tax_id", input.billingProvider.taxId, "Billing provider tax ID is required");
   addRequired(errors, "billing_provider.address1", input.billingProvider.address1, "Billing provider address is required");
-  addRequired(errors, "billing_provider.city", input.billingProvider.city, "Billing provider city is required");
+  addRequired(errors, "billing_provider.city", input.billingProvider.city, "Billing provider city is required. Populate provider_credentialing_profiles.practice_address city or the default service_locations.address_city before claim creation.");
   addRequired(errors, "billing_provider.state", input.billingProvider.state, "Billing provider state is required");
   addRequired(errors, "billing_provider.zip", input.billingProvider.zip, "Billing provider ZIP is required");
 
