@@ -31,17 +31,26 @@ function firstServiceDate(serviceLines: unknown): string | null {
   return null;
 }
 
-export async function GET(request: Request, ctx: { params: Promise<{ id: string }> }) {
+export async function GET(
+  request: Request,
+  ctx: { params: Promise<{ id: string }> },
+) {
   try {
     const { id } = await ctx.params;
     const supabase = createServerSupabaseAdminClient();
     if (!supabase) {
-      return NextResponse.json({ success: false, error: "Database connection not available" }, { status: 500 });
+      return NextResponse.json(
+        { success: false, error: "Database connection not available" },
+        { status: 500 },
+      );
     }
     const { searchParams } = new URL(request.url);
     const organizationId = searchParams.get("organizationId");
     if (!organizationId) {
-      return NextResponse.json({ success: false, error: "organizationId is required" }, { status: 400 });
+      return NextResponse.json(
+        { success: false, error: "organizationId is required" },
+        { status: 400 },
+      );
     }
     await requireAuthenticatedPaymentPoster(organizationId);
 
@@ -54,16 +63,22 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
       .eq("id", id)
       .maybeSingle();
     if (!payment) {
-      return NextResponse.json({ success: false, error: "ERA claim payment not found" }, { status: 404 });
+      return NextResponse.json(
+        { success: false, error: "ERA claim payment not found" },
+        { status: 404 },
+      );
     }
 
     const payload =
       payment.raw_item_payload && typeof payment.raw_item_payload === "object"
         ? (payment.raw_item_payload as Record<string, unknown>)
         : {};
-    const clp01ClaimControlNumber = String(payload.claim_ref ?? payment.imported_item_ref ?? "").trim();
+    const clp01ClaimControlNumber = String(
+      payload.claim_ref ?? payment.imported_item_ref ?? "",
+    ).trim();
     const payerClaimControlNumber =
-      payload.payer_claim_control_number === null || payload.payer_claim_control_number === undefined
+      payload.payer_claim_control_number === null ||
+      payload.payer_claim_control_number === undefined
         ? null
         : String(payload.payer_claim_control_number);
     const serviceDate = firstServiceDate(payload.service_lines);
@@ -76,7 +91,8 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
       .maybeSingle();
     const payerProfileId =
       batch?.parsed_summary && typeof batch.parsed_summary === "object"
-        ? (((batch.parsed_summary as Record<string, unknown>).payerProfileId as string) ?? null)
+        ? (((batch.parsed_summary as Record<string, unknown>)
+            .payerProfileId as string) ?? null)
         : null;
 
     const result = await findCandidatesForEraClaimPayment({
@@ -94,13 +110,23 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     return NextResponse.json({ success: true, ...result });
   } catch (error) {
     if (error instanceof PaymentPostingUnauthenticatedError) {
-      return NextResponse.json({ success: false, error: error.message }, { status: 401 });
+      return NextResponse.json(
+        { success: false, error: error.message },
+        { status: 401 },
+      );
     }
     if (error instanceof PaymentPostingForbiddenError) {
-      return NextResponse.json({ success: false, error: error.message }, { status: 403 });
+      return NextResponse.json(
+        { success: false, error: error.message },
+        { status: 403 },
+      );
     }
     return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : "Match suggestions failed" },
+      {
+        success: false,
+        error:
+          error instanceof Error ? error.message : "Match suggestions failed",
+      },
       { status: 500 },
     );
   }

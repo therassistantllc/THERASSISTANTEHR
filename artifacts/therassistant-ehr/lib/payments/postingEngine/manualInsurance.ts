@@ -348,10 +348,17 @@ export async function commitManualInsurancePosting(
           await writeLedger(supabase, organizationId, manualId, hydrated!, clientId, {
             entryType: "contractual_adjustment",
             amount: la,
-            groupCode: "CO",
+            groupCode: a.adjustmentGroupCode ?? src.adjustmentGroupCode ?? "CO",
+            reasonCode: a.adjustmentReasonCode ?? src.adjustmentReasonCode ?? null,
             description: `Contractual adjustment (line ${a.serviceLineId})`,
           });
-          result.effects.push({ entryType: "contractual_adjustment", amount: la, groupCode: "CO", description: `Line ${a.serviceLineId} adjustment` });
+          result.effects.push({
+            entryType: "contractual_adjustment",
+            amount: la,
+            groupCode: a.adjustmentGroupCode ?? src.adjustmentGroupCode ?? "CO",
+            reasonCode: a.adjustmentReasonCode ?? src.adjustmentReasonCode ?? null,
+            description: `Line ${a.serviceLineId} adjustment`,
+          });
         }
         if (lpr > 0) {
           await writeLedger(supabase, organizationId, manualId, hydrated!, clientId, {
@@ -380,10 +387,17 @@ export async function commitManualInsurancePosting(
       await writeLedger(supabase, organizationId, manualId, hydrated!, clientId, {
         entryType: "contractual_adjustment",
         amount: adj,
-        groupCode: "CO",
+        groupCode: src.adjustmentGroupCode ?? "CO",
+        reasonCode: src.adjustmentReasonCode ?? null,
         description: "Contractual adjustment from manual EOB",
       });
-      result.effects.push({ entryType: "contractual_adjustment", amount: adj, groupCode: "CO", description: "Contractual adjustment" });
+      result.effects.push({
+        entryType: "contractual_adjustment",
+        amount: adj,
+        groupCode: src.adjustmentGroupCode ?? "CO",
+        reasonCode: src.adjustmentReasonCode ?? null,
+        description: "Contractual adjustment",
+      });
     }
     if (pr > 0) {
       await writeLedger(supabase, organizationId, manualId, hydrated!, clientId, {
@@ -423,6 +437,8 @@ export async function commitManualInsurancePosting(
         claim_status: newClaimStatus,
         insurance_payment: paid,
         contractual_adjustment: adj,
+        adjustment_group_code: src.adjustmentGroupCode ?? "CO",
+        adjustment_reason_code: src.adjustmentReasonCode ?? null,
         patient_responsibility: pr,
         source: "manual_insurance",
         check_number: src.checkOrEftNumber ?? null,
@@ -481,6 +497,7 @@ async function writeLedger(
     entryType: "insurance_payment" | "contractual_adjustment" | "patient_responsibility";
     amount: number;
     groupCode?: string;
+    reasonCode?: string | null;
     description: string;
   },
 ) {
@@ -494,6 +511,7 @@ async function writeLedger(
     entry_type: effect.entryType,
     amount: effect.amount,
     group_code: effect.groupCode ?? null,
+    reason_code: effect.reasonCode ?? null,
     description: effect.description,
   });
   if (error) throw new Error(error.message);

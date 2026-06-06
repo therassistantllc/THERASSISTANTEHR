@@ -37,6 +37,7 @@ export interface CreateClaimDraftInput {
   clientId: string;
   policyId?: string | null;
   appointmentId?: string | null;
+  encounterId?: string | null;
   placeOfService?: string | null;
   diagnosisCodes: string[];
   serviceLines: ClaimServiceLineInput[];
@@ -342,6 +343,7 @@ export async function createProfessionalClaimDraft(
       organization_id: input.organizationId,
       patient_id: input.clientId,
       appointment_id: input.appointmentId ?? undefined,
+      encounter_id: input.encounterId ?? undefined,
       payer_profile_id: payerProfileId,
       claim_number: claimNumber,
       patient_account_number: patientAccountNumber,
