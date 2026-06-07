@@ -274,7 +274,15 @@ export default function ChargeCaptureClient() {
     setQueueLoading(true);
     setQueueError(null);
     try {
-      const res = await fetch(`/api/billing/charge-capture?organizationId=${encodeURIComponent(orgId)}`, { cache: "no-store" });
+      const params = new URLSearchParams({ organizationId: orgId });
+      if (typeof window !== "undefined") {
+        const current = new URLSearchParams(window.location.search);
+        ["chargeCaptureId", "encounterId", "claimId"].forEach((key) => {
+          const value = current.get(key);
+          if (value) params.set(key, value);
+        });
+      }
+      const res = await fetch(`/api/billing/charge-capture?${params.toString()}`, { cache: "no-store" });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error ?? "Failed to load charges");
       setCharges(json.items ?? []);
@@ -635,9 +643,9 @@ export default function ChargeCaptureClient() {
       {/* ── Page header ── */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#0F172A" }}>Charges</h1>
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#0F172A" }}>Claim Prep</h1>
           <p style={{ margin: "4px 0 0", fontSize: 13, color: "#64748B" }}>
-            Release charges, then generate 837P batches by payer / TIN, download, and upload to Availity.
+            Review signed-note charges, edit CMS-1500 claim details, then release them to automatically batch 837P files by payer / TIN.
           </p>
         </div>
         <button

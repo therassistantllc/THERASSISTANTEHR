@@ -261,7 +261,7 @@ async function getDefaultServiceLocation(organizationId: string): Promise<DbRow 
   return (data as DbRow | null) ?? null;
 }
 
-async function getProviderNpiFromStaffId(organizationId: string, providerId: string | null | undefined) {
+async function getProviderNpiFromLegacySource(providerId: string | null | undefined) {
   if (!providerId) return null;
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) throw new Error("Database connection not available");
@@ -281,6 +281,66 @@ async function getProviderNpiFromStaffId(organizationId: string, providerId: str
   return null;
 }
 
+async function findCredentialingProfile(params: {
+  organizationId: string;
+  providerId?: string | null;
+  renderingProviderId?: string | null;
+}): Promise<{ profile: DbRow | null; source: string | null }> {
+  const supabase = createServerSupabaseAdminClient();
+  if (!supabase) throw new Error("Database connection not available");
+
+  const candidateProviderIds = [params.renderingProviderId, params.providerId]
+    .map(text)
+    .filter(Boolean);
+
+  for (const providerId of candidateProviderIds) {
+    const { data, error } = await supabase
+      .from("provider_credentialing_profiles")
+      .select("*")
+      .eq("organization_id", params.organizationId)
+      .eq("provider_id", providerId)
+      .eq("is_active", true)
+      .is("archived_at", null)
+      .limit(1)
+      .maybeSingle();
+
+    if (!error && data) {
+      return { profile: data as DbRow, source: "provider_credentialing_profiles.provider_id" };
+    }
+  }
+
+  for (const providerId of candidateProviderIds) {
+    const requestedNpi = await getProviderNpiFromLegacySource(providerId);
+    if (!requestedNpi) continue;
+
+    const { data, error } = await supabase
+      .from("provider_credentialing_profiles")
+      .select("*")
+      .eq("organization_id", params.organizationId)
+      .eq("individual_npi", requestedNpi)
+      .eq("is_active", true)
+      .is("archived_at", null)
+      .limit(1)
+      .maybeSingle();
+
+    if (!error && data) {
+      return { profile: data as DbRow, source: "provider_credentialing_profiles.individual_npi_legacy" };
+    }
+  }
+
+  const { data } = await supabase
+    .from("provider_credentialing_profiles")
+    .select("*")
+    .eq("organization_id", params.organizationId)
+    .eq("is_active", true)
+    .is("archived_at", null)
+    .order("provider_name", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  return { profile: (data as DbRow | null) ?? null, source: data ? "provider_credentialing_profiles.first_active_fallback" : null };
+}
+
 function providerDiagnostic(params: {
   organizationId: string;
   providerId?: string | null;
@@ -288,6 +348,7 @@ function providerDiagnostic(params: {
   profile: DbRow | null;
   fallbackLocation: DbRow | null;
   billingProvider: (BillingProviderInput & { addressSource?: string; columnsRead?: string[] }) | null;
+  profileSource?: string | null;
 }) {
   const profile = params.profile;
   const location = params.fallbackLocation;
@@ -298,6 +359,7 @@ function providerDiagnostic(params: {
     renderingProviderId: params.renderingProviderId ?? null,
     providerCredentialingProfileId: text(profile?.id) || null,
     billingProviderSourceTable: profile ? "provider_credentialing_profiles" : null,
+    providerCredentialingMatchSource: params.profileSource ?? null,
     addressSourceTable: billingProvider?.addressSource ?? null,
     fallbackServiceLocationId: text(location?.id) || null,
     fallbackServiceLocationName: text(location?.name) || null,
@@ -324,6 +386,7 @@ function missingBillingProviderError(params: {
   profile: DbRow | null;
   fallbackLocation: DbRow | null;
   billingProvider: BillingProviderInput & { addressSource?: string; columnsRead?: string[] };
+  profileSource?: string | null;
 }): ProviderCredentialingError {
   const diagnostic = providerDiagnostic(params);
   const locationLabel = diagnostic.fallbackServiceLocationId
@@ -331,7 +394,7 @@ function missingBillingProviderError(params: {
     : "no active service location";
   return {
     field: params.field,
-    message: `${params.label} is missing. Resolver checked provider_credentialing_profiles structured address columns, provider_credentialing_profiles.practice_address, and service_locations address columns (${locationLabel}). Add ${params.label.toLowerCase()} to provider credentialing or the default service location before claim creation.`,
+    message: `${params.label} is missing. Resolver checked provider_credentialing_profiles.provider_id, legacy NPI lookup, provider_credentialing_profiles structured address columns, provider_credentialing_profiles.practice_address, and service_locations address columns (${locationLabel}). Add ${params.label.toLowerCase()} to provider credentialing or the default service location before claim creation.`,
     diagnostic,
   };
 }
@@ -351,37 +414,11 @@ export async function resolveProviderCredentialingProfile(
     };
   }
 
-  const requestedNpi = await getProviderNpiFromStaffId(
-    input.organizationId,
-    input.renderingProviderId ?? input.providerId ?? null,
-  );
-
-  let profile: DbRow | null = null;
-  if (requestedNpi) {
-    const { data } = await supabase
-      .from("provider_credentialing_profiles")
-      .select("*")
-      .eq("organization_id", input.organizationId)
-      .eq("individual_npi", requestedNpi)
-      .eq("is_active", true)
-      .is("archived_at", null)
-      .limit(1)
-      .maybeSingle();
-    profile = (data as DbRow | null) ?? null;
-  }
-
-  if (!profile) {
-    const { data } = await supabase
-      .from("provider_credentialing_profiles")
-      .select("*")
-      .eq("organization_id", input.organizationId)
-      .eq("is_active", true)
-      .is("archived_at", null)
-      .order("provider_name", { ascending: true })
-      .limit(1)
-      .maybeSingle();
-    profile = (data as DbRow | null) ?? null;
-  }
+  const { profile, source: profileSource } = await findCredentialingProfile({
+    organizationId: input.organizationId,
+    providerId: input.providerId ?? null,
+    renderingProviderId: input.renderingProviderId ?? null,
+  });
 
   if (!profile) {
     return {
@@ -398,6 +435,7 @@ export async function resolveProviderCredentialingProfile(
           providerId: input.providerId ?? null,
           renderingProviderId: input.renderingProviderId ?? null,
           billingProviderSourceTable: "provider_credentialing_profiles",
+          providerCredentialingMatchSource: profileSource,
         },
       }],
     };
@@ -406,7 +444,7 @@ export async function resolveProviderCredentialingProfile(
   const fallbackLocation = await getDefaultServiceLocation(input.organizationId);
   const billingProvider = billingProviderFromProfile(profile, fallbackLocation);
   const errors: ProviderCredentialingError[] = [];
-  const baseDiagnostic = { organizationId: input.organizationId, providerId: input.providerId ?? null, renderingProviderId: input.renderingProviderId ?? null, profile, fallbackLocation, billingProvider };
+  const baseDiagnostic = { organizationId: input.organizationId, providerId: input.providerId ?? null, renderingProviderId: input.renderingProviderId ?? null, profile, fallbackLocation, billingProvider, profileSource };
   if (!billingProvider.name) errors.push(missingBillingProviderError({ ...baseDiagnostic, field: "billing_provider.name", label: "Billing provider name" }));
   if (!billingProvider.npi) errors.push(missingBillingProviderError({ ...baseDiagnostic, field: "billing_provider.npi", label: "Billing provider NPI" }));
   if (!billingProvider.taxId) errors.push(missingBillingProviderError({ ...baseDiagnostic, field: "billing_provider.tax_id", label: "Billing provider tax ID" }));
@@ -419,7 +457,7 @@ export async function resolveProviderCredentialingProfile(
     ok: errors.length === 0,
     providerCredentialingProfileId: text(profile.id),
     billingProvider,
-    renderingProviderNpi: text(profile.individual_npi) || null,
+    renderingProviderNpi: text(profile.individual_npi) || text(profile.group_npi) || null,
     taxonomyCode: text(profile.taxonomy_code) || null,
     errors,
   };

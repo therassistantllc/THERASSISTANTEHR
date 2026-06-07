@@ -1,5 +1,5 @@
-import { redirect } from "next/navigation";
+import ChargeCaptureClient from "./ChargeCaptureClient";
 
-export default function RetiredChargeCapturePage() {
-  redirect("/billing/ready-to-generate");
+export default function ChargeCapturePageWrapper() {
+  return <ChargeCaptureClient />;
 }
