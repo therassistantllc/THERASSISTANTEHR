@@ -1,95 +1,54 @@
 import { NextResponse } from "next/server";
-import { generate837PBatch } from "@/lib/claims/edi837pBatchService";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
-import {
-  assertClaimReadyForSubmission,
-  gateResponse,
-} from "@/lib/validation/claimSubmissionGate";
 
-export async function POST(request: Request) {
-  try {
-    const body = await request.json();
-    if (!body.organizationId) {
-      return NextResponse.json({ success: false, error: "organizationId is required" }, { status: 400 });
-    }
+export async function GET(
+  request: Request,
+  context: { params: Promise<{ batchId: string }> },
+) {
+  const supabase = createServerSupabaseAdminClient();
+  if (!supabase) {
+    return NextResponse.json({ success: false, error: "Database unavailable" }, { status: 500 });
+  }
 
-    const organizationId = String(body.organizationId);
+  const { batchId } = await context.params;
+  const { searchParams } = new URL(request.url);
+  const organizationId = searchParams.get("organizationId");
 
-    // 837P batch generation should validate the persisted claim payload only.
-    // Do not block generation based on organization-level System Readiness settings;
-    // those settings are informational/admin configuration and may differ from the
-    // claim snapshot data actually used to build the X12.
-    const supabase = createServerSupabaseAdminClient();
-    if (!supabase) {
-      return NextResponse.json(
-        { success: false, error: "Database connection not available." },
-        { status: 503 },
-      );
-    }
+  if (!organizationId) {
+    return NextResponse.json({ success: false, error: "organizationId is required" }, { status: 400 });
+  }
 
-    let claimIds: string[] = Array.isArray(body.claimIds) ? body.claimIds.map(String) : [];
-    if (claimIds.length === 0) {
-      const { data } = await supabase
-        .from("professional_claims")
-        .select("id")
-        .eq("organization_id", organizationId)
-        .in("claim_status", ["ready", "queued", "rejected"]);
-      claimIds = ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
-    }
+  const { data, error } = await supabase
+    .from("claim_837p_batches")
+    .select("id, generated_file_name, generated_file_content, batch_status")
+    .eq("id", batchId)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
 
-    const perClaimBlocking: string[] = [];
-    // Bounded-concurrency fan-out so large batches don't serialize end-to-end.
-    const CONCURRENCY = 6;
-    for (let i = 0; i < claimIds.length; i += CONCURRENCY) {
-      const slice = claimIds.slice(i, i + CONCURRENCY);
-      const results = await Promise.all(
-        slice.map(async (cid) => ({
-          cid,
-          gate: await assertClaimReadyForSubmission({ organizationId, claimId: cid }),
-        })),
-      );
-      for (const { cid, gate: g } of results) {
-        if (g.ok) continue;
-        // Surface infrastructure failures with their original status so we
-        // don't masquerade an outage as "content blocked".
-        if (g.reason !== "blocking_findings") {
-          const resp = gateResponse(g);
-          if (resp) return resp;
-        }
-        perClaimBlocking.push(cid);
-      }
-    }
+  if (error) {
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
 
-    if (perClaimBlocking.length > 0) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: `Batch blocked: ${perClaimBlocking.length} claim(s) failed content validation.`,
-          gate: {
-            blocked: true,
-            reason: "blocking_findings",
-            scope: "claim_content",
-            blockedClaimIds: perClaimBlocking,
-            fixRoute: "/billing/claims",
-          },
-        },
-        { status: 422 },
-      );
-    }
+  if (!data) {
+    return NextResponse.json({ success: false, error: "Batch not found" }, { status: 404 });
+  }
 
-    const result = await generate837PBatch({
-      organizationId,
-      claimIds: Array.isArray(body.claimIds) ? body.claimIds.map(String) : undefined,
-      mode: body.mode === "production" ? "production" : "test",
-      fileName: body.fileName ?? null,
-    });
-
-    return NextResponse.json({ success: result.ok, result }, { status: result.ok ? 200 : 422 });
-  } catch (error) {
-    console.error("837P batch API error:", error);
+  if (!data.generated_file_content) {
     return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : "837P batch generation failed" },
-      { status: 500 },
+      { success: false, error: "Batch has no generated 837P file content yet." },
+      { status: 422 },
     );
   }
+
+  const fileName =
+    data.generated_file_name || `837P_${batchId}.edi`;
+
+  return new Response(String(data.generated_file_content), {
+    status: 200,
+    headers: {
+      "Content-Type": "application/edi-x12; charset=utf-8",
+      "Content-Disposition": `attachment; filename="${fileName}"`,
+      "Cache-Control": "no-store",
+    },
+  });
 }
