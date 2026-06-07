@@ -42,6 +42,47 @@ function normalizeModifiers(line: DbRow) {
     .filter(Boolean);
 }
 
+function uniqueNonEmpty(values: Array<unknown>) {
+  return Array.from(new Set(values.map(normalizeText).filter(Boolean)));
+}
+
+async function resolveActiveCredentialingProfileId(params: {
+  organizationId: string;
+  explicitProfileIds: Array<unknown>;
+}) {
+  const supabase = createServerSupabaseAdminClient();
+  if (!supabase) throw new Error("Database connection not available");
+
+  const explicitIds = uniqueNonEmpty(params.explicitProfileIds);
+  if (explicitIds.length === 1) {
+    const { data, error } = await supabase
+      .from("provider_credentialing_profiles")
+      .select("id")
+      .eq("organization_id", params.organizationId)
+      .eq("id", explicitIds[0])
+      .eq("is_active", true)
+      .is("archived_at", null)
+      .maybeSingle();
+
+    if (error) throw new Error(error.message);
+    return data?.id ? String(data.id) : null;
+  }
+
+  if (explicitIds.length > 1) return null;
+
+  const { data, error } = await supabase
+    .from("provider_credentialing_profiles")
+    .select("id")
+    .eq("organization_id", params.organizationId)
+    .eq("is_active", true)
+    .is("archived_at", null)
+    .order("created_at", { ascending: true })
+    .limit(2);
+
+  if (error) throw new Error(error.message);
+  return data && data.length === 1 && data[0]?.id ? String(data[0].id) : null;
+}
+
 async function getActivePrimaryPolicy(params: { organizationId: string; clientId: string }) {
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) throw new Error("Database connection not available");
@@ -76,7 +117,7 @@ export async function captureSignedEncounterCharge(
 
   const { data: encounter, error: encounterError } = await supabase
     .from("encounters")
-    .select("id, organization_id, appointment_id, client_id, provider_id, encounter_status, service_date, case_id")
+    .select("id, organization_id, appointment_id, client_id, provider_id, provider_credentialing_profile_id, encounter_status, service_date, case_id")
     .eq("id", input.encounterId)
     .eq("organization_id", input.organizationId)
     .is("archived_at", null)
@@ -119,7 +160,7 @@ export async function captureSignedEncounterCharge(
 
   const { data: serviceRows, error: serviceError } = await supabase
     .from("encounter_service_lines")
-    .select("id, service_date, sequence_number, cpt_hcpcs_code, modifier_1, modifier_2, modifier_3, modifier_4, units, charge_amount, place_of_service_code, rendering_provider_id")
+    .select("id, service_date, sequence_number, cpt_hcpcs_code, modifier_1, modifier_2, modifier_3, modifier_4, units, charge_amount, place_of_service_code, rendering_provider_id, rendering_provider_credentialing_profile_id")
     .eq("organization_id", input.organizationId)
     .eq("encounter_id", input.encounterId)
     .is("archived_at", null)
@@ -140,6 +181,7 @@ export async function captureSignedEncounterCharge(
       chargeAmount,
       placeOfService: normalizeText(line.place_of_service_code) || null,
       renderingProviderId: line.rendering_provider_id ?? null,
+      renderingProviderCredentialingProfileId: line.rendering_provider_credentialing_profile_id ?? null,
     };
   });
 
@@ -151,6 +193,31 @@ export async function captureSignedEncounterCharge(
     if (!line.procedureCode) blockers.push({ field: `service_lines.${index}.procedure_code`, message: "Service line is missing procedure code" });
     if (line.chargeAmount <= 0) blockers.push({ field: `service_lines.${index}.charge_amount`, message: "Service line charge must be greater than zero" });
   }
+
+  let appointmentCredentialingProfileId: string | null = null;
+  if (encounter.appointment_id) {
+    const { data: appointment, error: appointmentError } = await supabase
+      .from("appointments")
+      .select("provider_credentialing_profile_id")
+      .eq("organization_id", input.organizationId)
+      .eq("id", encounter.appointment_id)
+      .is("archived_at", null)
+      .maybeSingle();
+
+    if (appointmentError) throw new Error(appointmentError.message);
+    appointmentCredentialingProfileId = appointment?.provider_credentialing_profile_id
+      ? String(appointment.provider_credentialing_profile_id)
+      : null;
+  }
+
+  const providerCredentialingProfileId = await resolveActiveCredentialingProfileId({
+    organizationId: input.organizationId,
+    explicitProfileIds: [
+      encounter.provider_credentialing_profile_id,
+      appointmentCredentialingProfileId,
+      ...serviceLines.map((line) => line.renderingProviderCredentialingProfileId),
+    ],
+  });
 
   // Resolve the case for this encounter — explicit case_id wins, then the
   // client's default case. Self-pay / charity cases route to client
@@ -213,6 +280,7 @@ export async function captureSignedEncounterCharge(
       .update({
         insurance_policy_id: policyId,
         case_id: resolvedCaseId,
+        provider_credentialing_profile_id: providerCredentialingProfileId,
         charge_status: nextStatus,
         diagnosis_codes: diagnosisCodes,
         service_lines: serviceLines,
@@ -239,6 +307,7 @@ export async function captureSignedEncounterCharge(
       appointment_id: encounter.appointment_id,
       insurance_policy_id: policyId,
       case_id: resolvedCaseId,
+      provider_credentialing_profile_id: providerCredentialingProfileId,
       source_object_type: "encounter",
       source_object_id: input.encounterId,
       charge_status: status,
