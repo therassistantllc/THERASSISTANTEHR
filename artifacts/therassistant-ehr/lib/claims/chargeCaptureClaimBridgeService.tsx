@@ -841,28 +841,27 @@ export async function createClaimDraftFromChargeCapture(
     providerResolution.billingProvider ?? fallbackBillingProvider();
 
   const draft = await createProfessionalClaimDraft({
-    organizationId: input.organizationId,
-    clientId: String(charge.client_id),
-    policyId: charge.insurance_policy_id ? String(charge.insurance_policy_id) : null,
-    appointmentId: charge.appointment_id ? String(charge.appointment_id) : null,
-    encounterId: charge.encounter_id ? String(charge.encounter_id) : null,
-    placeOfService: text(charge.place_of_service) || null,
-    providerCredentialingProfileId: text((charge as DbRow).provider_credentialing_profile_id) || null,
-    diagnosisCodes: readTextArray(charge.diagnosis_codes),
-    serviceLines: serviceLinesFromCharge(
-      charge as DbRow,
-      providerResolution.renderingProviderNpi,
-      providerResolution.providerCredentialingProfileId,
-    ),
-    billingProvider,
-    providerCredentialingProfileId:
-      nullableText((charge as DbRow).provider_credentialing_profile_id) ??
-      providerResolution.providerCredentialingProfileId,
-    patientAccountNumber: charge.encounter_id
-      ? `ENC-${String(charge.encounter_id).slice(0, 8)}`
-      : null,
-    claimNumber: `CLM-${String(charge.id).slice(0, 8)}`,
-  });
+  organizationId: input.organizationId,
+  clientId: String(charge.client_id),
+  policyId: charge.insurance_policy_id ? String(charge.insurance_policy_id) : null,
+  appointmentId: charge.appointment_id ? String(charge.appointment_id) : null,
+  encounterId: charge.encounter_id ? String(charge.encounter_id) : null,
+  placeOfService: text(charge.place_of_service) || null,
+  billingProvider,
+  providerCredentialingProfileId:
+    nullableText((charge as DbRow).provider_credentialing_profile_id) ??
+    providerResolution.providerCredentialingProfileId,
+  diagnosisCodes: readTextArray(charge.diagnosis_codes),
+  serviceLines: serviceLinesFromCharge(
+    charge as DbRow,
+    providerResolution.renderingProviderNpi,
+    providerResolution.providerCredentialingProfileId,
+  ),
+  patientAccountNumber: charge.encounter_id
+    ? `ENC-${String(charge.encounter_id).slice(0, 8)}`
+    : null,
+  claimNumber: `CLM-${String(charge.id).slice(0, 8)}`,
+});
 
   if (!draft.claimId) {
     return {
