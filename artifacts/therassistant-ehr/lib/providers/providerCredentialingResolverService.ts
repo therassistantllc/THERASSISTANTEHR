@@ -7,6 +7,7 @@ export interface ResolveProviderCredentialingInput {
   organizationId: string;
   providerId?: string | null;
   renderingProviderId?: string | null;
+  providerCredentialingProfileId?: string | null;
 }
 
 export interface ProviderCredentialingError {
@@ -285,9 +286,29 @@ async function findCredentialingProfile(params: {
   organizationId: string;
   providerId?: string | null;
   renderingProviderId?: string | null;
-}): Promise<{ profile: DbRow | null; source: string | null }> {
+  providerCredentialingProfileId?: string | null;
+}): Promise<{ profile: DbRow | null; source: string | null; requestedProfileId: string | null }> {
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) throw new Error("Database connection not available");
+
+  const requestedProfileId = text(params.providerCredentialingProfileId) || null;
+  if (requestedProfileId) {
+    const { data, error } = await supabase
+      .from("provider_credentialing_profiles")
+      .select("*")
+      .eq("organization_id", params.organizationId)
+      .eq("id", requestedProfileId)
+      .eq("is_active", true)
+      .is("archived_at", null)
+      .limit(1)
+      .maybeSingle();
+
+    return {
+      profile: !error && data ? (data as DbRow) : null,
+      source: "provider_credentialing_profiles.id",
+      requestedProfileId,
+    };
+  }
 
   const candidateProviderIds = [params.renderingProviderId, params.providerId]
     .map(text)
@@ -305,7 +326,7 @@ async function findCredentialingProfile(params: {
       .maybeSingle();
 
     if (!error && data) {
-      return { profile: data as DbRow, source: "provider_credentialing_profiles.provider_id" };
+      return { profile: data as DbRow, source: "provider_credentialing_profiles.provider_id", requestedProfileId: null };
     }
   }
 
@@ -324,7 +345,7 @@ async function findCredentialingProfile(params: {
       .maybeSingle();
 
     if (!error && data) {
-      return { profile: data as DbRow, source: "provider_credentialing_profiles.individual_npi_legacy" };
+      return { profile: data as DbRow, source: "provider_credentialing_profiles.individual_npi_legacy", requestedProfileId: null };
     }
   }
 
@@ -338,13 +359,18 @@ async function findCredentialingProfile(params: {
     .limit(1)
     .maybeSingle();
 
-  return { profile: (data as DbRow | null) ?? null, source: data ? "provider_credentialing_profiles.first_active_fallback" : null };
+  return {
+    profile: (data as DbRow | null) ?? null,
+    source: data ? "provider_credentialing_profiles.first_active_fallback" : null,
+    requestedProfileId: null,
+  };
 }
 
 function providerDiagnostic(params: {
   organizationId: string;
   providerId?: string | null;
   renderingProviderId?: string | null;
+  requestedProviderCredentialingProfileId?: string | null;
   profile: DbRow | null;
   fallbackLocation: DbRow | null;
   billingProvider: (BillingProviderInput & { addressSource?: string; columnsRead?: string[] }) | null;
@@ -357,6 +383,7 @@ function providerDiagnostic(params: {
     organizationId: params.organizationId,
     providerId: params.providerId ?? null,
     renderingProviderId: params.renderingProviderId ?? null,
+    requestedProviderCredentialingProfileId: params.requestedProviderCredentialingProfileId ?? null,
     providerCredentialingProfileId: text(profile?.id) || null,
     billingProviderSourceTable: profile ? "provider_credentialing_profiles" : null,
     providerCredentialingMatchSource: params.profileSource ?? null,
@@ -383,6 +410,7 @@ function missingBillingProviderError(params: {
   organizationId: string;
   providerId?: string | null;
   renderingProviderId?: string | null;
+  requestedProviderCredentialingProfileId?: string | null;
   profile: DbRow | null;
   fallbackLocation: DbRow | null;
   billingProvider: BillingProviderInput & { addressSource?: string; columnsRead?: string[] };
@@ -414,13 +442,18 @@ export async function resolveProviderCredentialingProfile(
     };
   }
 
-  const { profile, source: profileSource } = await findCredentialingProfile({
+  const { profile, source: profileSource, requestedProfileId } = await findCredentialingProfile({
     organizationId: input.organizationId,
     providerId: input.providerId ?? null,
     renderingProviderId: input.renderingProviderId ?? null,
+    providerCredentialingProfileId: input.providerCredentialingProfileId ?? null,
   });
 
   if (!profile) {
+    const explicitProfileMessage = requestedProfileId
+      ? "Referenced provider credentialing profile is missing, inactive, archived, or not available for this organization"
+      : "No active provider credentialing profile found for claim billing identity";
+
     return {
       ok: false,
       providerCredentialingProfileId: null,
@@ -428,12 +461,15 @@ export async function resolveProviderCredentialingProfile(
       renderingProviderNpi: null,
       taxonomyCode: null,
       errors: [{
-        field: "provider_credentialing_profiles",
-        message: "No active provider credentialing profile found for claim billing identity",
+        field: requestedProfileId
+          ? "provider_credentialing_profile_id"
+          : "provider_credentialing_profiles",
+        message: explicitProfileMessage,
         diagnostic: {
           organizationId: input.organizationId,
           providerId: input.providerId ?? null,
           renderingProviderId: input.renderingProviderId ?? null,
+          requestedProviderCredentialingProfileId: requestedProfileId,
           billingProviderSourceTable: "provider_credentialing_profiles",
           providerCredentialingMatchSource: profileSource,
         },
@@ -444,7 +480,16 @@ export async function resolveProviderCredentialingProfile(
   const fallbackLocation = await getDefaultServiceLocation(input.organizationId);
   const billingProvider = billingProviderFromProfile(profile, fallbackLocation);
   const errors: ProviderCredentialingError[] = [];
-  const baseDiagnostic = { organizationId: input.organizationId, providerId: input.providerId ?? null, renderingProviderId: input.renderingProviderId ?? null, profile, fallbackLocation, billingProvider, profileSource };
+  const baseDiagnostic = {
+    organizationId: input.organizationId,
+    providerId: input.providerId ?? null,
+    renderingProviderId: input.renderingProviderId ?? null,
+    requestedProviderCredentialingProfileId: requestedProfileId,
+    profile,
+    fallbackLocation,
+    billingProvider,
+    profileSource,
+  };
   if (!billingProvider.name) errors.push(missingBillingProviderError({ ...baseDiagnostic, field: "billing_provider.name", label: "Billing provider name" }));
   if (!billingProvider.npi) errors.push(missingBillingProviderError({ ...baseDiagnostic, field: "billing_provider.npi", label: "Billing provider NPI" }));
   if (!billingProvider.taxId) errors.push(missingBillingProviderError({ ...baseDiagnostic, field: "billing_provider.tax_id", label: "Billing provider tax ID" }));
