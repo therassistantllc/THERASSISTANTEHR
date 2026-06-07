@@ -3,6 +3,7 @@ import { Client } from "pg";
 const REQUIRED_TABLES = [
   "professional_claims",
   "professional_claim_service_lines",
+  "claim_status_events",
   "claim_837p_batches",
   "claim_837p_batch_claims",
   "eligibility_270_batches",
@@ -31,10 +32,54 @@ const REQUIRED_COLUMNS: Record<string, string[]> = {
     "charge_amount",
   ],
   payer_profiles: ["payer_id"],
+  claim_status_events: [
+    "claim_id",
+    "source",
+    "detail",
+    "status",
+    "status_message",
+    "raw_payload",
+    "created_at",
+  ],
   clearinghouse_connections: [
     "claims_x12_version",
     "eligibility_x12_version",
   ],
+};
+
+const REQUIRED_FUNCTIONS = [
+  "billing_ready_to_generate_page",
+  "create_837p_batch_atomic",
+];
+
+const REQUIRED_CODE_REFERENCES = [
+  {
+    tableName: "diagnosis_codes",
+    code: "Z81.8",
+    codeSystem: "ICD-10-CM",
+  },
+  {
+    tableName: "procedure_codes",
+    code: "90899",
+    codeSystem: "CPT",
+  },
+] as const;
+
+const CODE_REFERENCE_QUERIES: Record<(typeof REQUIRED_CODE_REFERENCES)[number]["tableName"], string> = {
+  diagnosis_codes: `select exists (
+    select 1
+    from public.diagnosis_codes
+    where code = $1
+      and code_system = $2
+      and is_active = true
+  ) as exists`,
+  procedure_codes: `select exists (
+    select 1
+    from public.procedure_codes
+    where code = $1
+      and code_system = $2
+      and is_active = true
+  ) as exists`,
 };
 
 function getDatabaseUrl(): string | null {
@@ -89,6 +134,36 @@ async function main() {
         console.log(`${exists ? "OK  " : "MISS"} ${tableName}.${columnName}`);
         if (!exists) failures += 1;
       }
+    }
+
+    console.log("\nSCHEMA FUNCTION CHECK");
+    for (const functionName of REQUIRED_FUNCTIONS) {
+      const result = await client.query(
+        `select exists (
+          select 1
+          from pg_proc p
+          join pg_namespace n on n.oid = p.pronamespace
+          where n.nspname = 'public'
+            and p.proname = $1
+        ) as exists`,
+        [functionName],
+      );
+      const exists = Boolean(result.rows[0]?.exists);
+      console.log(`${exists ? "OK  " : "MISS"} ${functionName}()`);
+      if (!exists) failures += 1;
+    }
+
+    console.log("\nBILLING CODE REFERENCE CHECK");
+    for (const reference of REQUIRED_CODE_REFERENCES) {
+      const result = await client.query(
+        CODE_REFERENCE_QUERIES[reference.tableName],
+        [reference.code, reference.codeSystem],
+      );
+      const exists = Boolean(result.rows[0]?.exists);
+      console.log(
+        `${exists ? "OK  " : "MISS"} ${reference.tableName}.${reference.codeSystem}:${reference.code}`,
+      );
+      if (!exists) failures += 1;
     }
 
     if (failures > 0) {
