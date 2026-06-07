@@ -92,6 +92,7 @@ function fallbackBillingProvider(): BillingProviderInput {
 function serviceLinesFromCharge(
   charge: DbRow,
   renderingProviderNpi: string | null,
+  providerCredentialingProfileId: string | null,
 ): ClaimServiceLineInput[] {
   return readArray(charge.service_lines)
     .map((line) => ({
@@ -104,6 +105,11 @@ function serviceLinesFromCharge(
       placeOfService: text(line.placeOfService) || text(charge.place_of_service) || null,
       renderingProviderNpi: text(line.renderingProviderNpi) || renderingProviderNpi,
       authorizationNumber: text(line.authorizationNumber) || null,
+      providerCredentialingProfileId:
+        text(line.providerCredentialingProfileId) ||
+        text(line.provider_credentialing_profile_id) ||
+        text(charge.provider_credentialing_profile_id) ||
+        providerCredentialingProfileId,
     }))
     .filter((line) => line.procedureCode && line.chargeAmount > 0 && line.serviceDate);
 }
@@ -455,6 +461,7 @@ function serviceLinePayloadFromCharge(params: {
   claimId: string;
   serviceLines: ClaimServiceLineInput[];
   placeOfService: string;
+  providerCredentialingProfileId?: string | null;
 }) {
   return params.serviceLines.map((line, index) => ({
     claim_id: params.claimId,
@@ -469,6 +476,9 @@ function serviceLinePayloadFromCharge(params: {
     place_of_service: nullableText(line.placeOfService) ?? params.placeOfService,
     rendering_provider_npi: nullableText(line.renderingProviderNpi),
     authorization_number: nullableText(line.authorizationNumber),
+    provider_credentialing_profile_id:
+      nullableText(line.providerCredentialingProfileId) ??
+      nullableText(params.providerCredentialingProfileId),
     updated_at: new Date().toISOString(),
   }));
 }
@@ -520,6 +530,9 @@ async function syncExistingClaimFromCharge(params: {
   const providerResolution = await resolveProviderCredentialingProfile({
     organizationId: params.organizationId,
     providerId: params.charge.provider_id ? String(params.charge.provider_id) : null,
+    providerCredentialingProfileId: params.charge.provider_credentialing_profile_id
+      ? String(params.charge.provider_credentialing_profile_id)
+      : null,
   });
 
   const providerErrors =
@@ -552,6 +565,7 @@ async function syncExistingClaimFromCharge(params: {
   const serviceLines = serviceLinesFromCharge(
     params.charge,
     providerResolution.renderingProviderNpi,
+    providerResolution.providerCredentialingProfileId,
   );
 
   const placeOfService =
@@ -575,6 +589,7 @@ async function syncExistingClaimFromCharge(params: {
       encounter_id: nullableText(params.charge.encounter_id) ?? undefined,
       case_id: nullableText(params.charge.case_id) ?? undefined,
       payer_profile_id: payerProfileId,
+      provider_credentialing_profile_id: nullableText(params.charge.provider_credentialing_profile_id),
       total_charge: totalCharge,
       place_of_service: placeOfService,
       diagnosis_codes: diagnosisCodes,
@@ -611,6 +626,9 @@ async function syncExistingClaimFromCharge(params: {
     claimId: params.claimId,
     serviceLines,
     placeOfService,
+    providerCredentialingProfileId:
+      nullableText(params.charge.provider_credentialing_profile_id) ??
+      providerResolution.providerCredentialingProfileId,
   });
 
   if (linePayload.length > 0) {
@@ -752,7 +770,7 @@ export async function createClaimDraftFromChargeCapture(
   const { data: charge, error: chargeError } = await supabase
     .from("charge_capture_items")
     .select(
-      "id, organization_id, encounter_id, client_id, provider_id, appointment_id, insurance_policy_id, case_id, charge_status, service_date, diagnosis_codes, service_lines, place_of_service, total_charge, claim_id",
+      "id, organization_id, encounter_id, client_id, provider_id, provider_credentialing_profile_id, appointment_id, insurance_policy_id, case_id, charge_status, service_date, diagnosis_codes, service_lines, place_of_service, total_charge, claim_id",
     )
     .eq("organization_id", input.organizationId)
     .eq("id", input.chargeCaptureId)
@@ -809,6 +827,9 @@ export async function createClaimDraftFromChargeCapture(
   const providerResolution = await resolveProviderCredentialingProfile({
     organizationId: input.organizationId,
     providerId: charge.provider_id ? String(charge.provider_id) : null,
+    providerCredentialingProfileId: charge.provider_credentialing_profile_id
+      ? String(charge.provider_credentialing_profile_id)
+      : null,
   });
 
   const providerErrors =
@@ -826,12 +847,17 @@ export async function createClaimDraftFromChargeCapture(
     appointmentId: charge.appointment_id ? String(charge.appointment_id) : null,
     encounterId: charge.encounter_id ? String(charge.encounter_id) : null,
     placeOfService: text(charge.place_of_service) || null,
+    providerCredentialingProfileId: text((charge as DbRow).provider_credentialing_profile_id) || null,
     diagnosisCodes: readTextArray(charge.diagnosis_codes),
     serviceLines: serviceLinesFromCharge(
       charge as DbRow,
       providerResolution.renderingProviderNpi,
+      providerResolution.providerCredentialingProfileId,
     ),
     billingProvider,
+    providerCredentialingProfileId:
+      nullableText((charge as DbRow).provider_credentialing_profile_id) ??
+      providerResolution.providerCredentialingProfileId,
     patientAccountNumber: charge.encounter_id
       ? `ENC-${String(charge.encounter_id).slice(0, 8)}`
       : null,
