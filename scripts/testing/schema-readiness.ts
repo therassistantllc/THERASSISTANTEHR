@@ -19,6 +19,10 @@ const REQUIRED_TABLES = [
 ];
 
 const REQUIRED_COLUMNS: Record<string, string[]> = {
+  charge_capture_items: [
+    "claim_id",
+    "claim_created_at",
+  ],
   professional_claims: [
     "patient_account_number",
     "claim_status",
