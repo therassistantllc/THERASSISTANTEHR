@@ -519,7 +519,9 @@ async function syncExistingClaimFromCharge(params: {
 
   const providerResolution = await resolveProviderCredentialingProfile({
     organizationId: params.organizationId,
-    providerId: params.charge.provider_id ? String(params.charge.provider_id) : null,
+    providerCredentialingProfileId: params.charge.provider_credentialing_profile_id
+      ? String(params.charge.provider_credentialing_profile_id)
+      : null,
   });
 
   const providerErrors =
@@ -752,7 +754,7 @@ export async function createClaimDraftFromChargeCapture(
   const { data: charge, error: chargeError } = await supabase
     .from("charge_capture_items")
     .select(
-      "id, organization_id, encounter_id, client_id, provider_id, appointment_id, insurance_policy_id, case_id, charge_status, service_date, diagnosis_codes, service_lines, place_of_service, total_charge, claim_id",
+      "id, organization_id, encounter_id, client_id, provider_id, provider_credentialing_profile_id, appointment_id, insurance_policy_id, case_id, charge_status, service_date, diagnosis_codes, service_lines, place_of_service, total_charge, claim_id",
     )
     .eq("organization_id", input.organizationId)
     .eq("id", input.chargeCaptureId)
@@ -808,7 +810,9 @@ export async function createClaimDraftFromChargeCapture(
 
   const providerResolution = await resolveProviderCredentialingProfile({
     organizationId: input.organizationId,
-    providerId: charge.provider_id ? String(charge.provider_id) : null,
+    providerCredentialingProfileId: charge.provider_credentialing_profile_id
+      ? String(charge.provider_credentialing_profile_id)
+      : null,
   });
 
   const providerErrors =
