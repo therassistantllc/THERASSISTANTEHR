@@ -65,6 +65,14 @@ const REQUIRED_CODE_REFERENCES = [
   },
 ] as const;
 
+const REQUIRED_FOREIGN_KEYS = [
+  {
+    tableName: "charge_capture_items",
+    constraintName: "charge_capture_items_claim_id_fkey",
+    referencedTableName: "professional_claims",
+  },
+] as const;
+
 const CODE_REFERENCE_QUERIES: Record<(typeof REQUIRED_CODE_REFERENCES)[number]["tableName"], string> = {
   diagnosis_codes: `select exists (
     select 1
@@ -162,6 +170,36 @@ async function main() {
       const exists = Boolean(result.rows[0]?.exists);
       console.log(
         `${exists ? "OK  " : "MISS"} ${reference.tableName}.${reference.codeSystem}:${reference.code}`,
+      );
+      if (!exists) failures += 1;
+    }
+
+    console.log("\nSCHEMA FOREIGN KEY CHECK");
+    for (const foreignKey of REQUIRED_FOREIGN_KEYS) {
+      const result = await client.query(
+        `select exists (
+          select 1
+          from pg_constraint c
+          join pg_class source_table on source_table.oid = c.conrelid
+          join pg_namespace source_schema on source_schema.oid = source_table.relnamespace
+          join pg_class referenced_table on referenced_table.oid = c.confrelid
+          join pg_namespace referenced_schema on referenced_schema.oid = referenced_table.relnamespace
+          where c.contype = 'f'
+            and source_schema.nspname = 'public'
+            and referenced_schema.nspname = 'public'
+            and source_table.relname = $1
+            and c.conname = $2
+            and referenced_table.relname = $3
+        ) as exists`,
+        [
+          foreignKey.tableName,
+          foreignKey.constraintName,
+          foreignKey.referencedTableName,
+        ],
+      );
+      const exists = Boolean(result.rows[0]?.exists);
+      console.log(
+        `${exists ? "OK  " : "MISS"} ${foreignKey.tableName}.${foreignKey.constraintName} -> ${foreignKey.referencedTableName}`,
       );
       if (!exists) failures += 1;
     }
