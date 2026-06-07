@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { captureSignedEncounterCharge, isClaimBridgeChargeStatus } from "@/lib/charges/signedEncounterChargeCaptureService";
 import { createClaimDraftFromChargeCapture } from "@/lib/claims/chargeCaptureClaimBridgeService";
-import { captureSignedEncounterCharge } from "@/lib/charges/signedEncounterChargeCaptureService";
 import { buildTextReportPdf } from "@/lib/pdf/textReportPdf";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 
@@ -207,6 +206,7 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
     }
 
     let chargeCapture = null;
+    let claimDraft = null;
     let createdDocuments: Array<{ id: string; type: string; title: string }> = [];
     if (action === "sign") {
       const { error: encounterUpdateError } = await supabase
@@ -367,6 +367,7 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
       encounterId,
       status: noteStatus,
       chargeCapture,
+      claimDraft,
       createdDocuments,
     });
   } catch (error) {
