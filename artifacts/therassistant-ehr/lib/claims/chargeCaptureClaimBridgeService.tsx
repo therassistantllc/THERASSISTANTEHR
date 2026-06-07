@@ -794,13 +794,23 @@ export async function createClaimDraftFromChargeCapture(
     providerId: charge.provider_id ? String(charge.provider_id) : null,
   });
 
-  if (!providerResolution.ok || !providerResolution.billingProvider) {
-    return {
-      ok: false,
-      claimId: null,
-      errors: providerResolution.errors,
-    };
-  }
+ const providerErrors = !providerResolution.ok || !providerResolution.billingProvider
+  ? providerResolution.errors
+  : [];
+
+const fallbackBillingProvider =
+  providerResolution.billingProvider ??
+  {
+    name: "Needs billing provider review",
+    npi: "0000000000",
+    taxId: "000000000",
+    taxIdType: "EI" as const,
+    address1: "Needs billing provider address",
+    address2: null,
+    city: "Needs review",
+    state: "CO",
+    zip: "00000",
+  };
 
   const draft = await createProfessionalClaimDraft({
     organizationId: input.organizationId,
@@ -814,7 +824,7 @@ export async function createClaimDraftFromChargeCapture(
       charge as DbRow,
       providerResolution.renderingProviderNpi,
     ),
-    billingProvider: providerResolution.billingProvider,
+billingProvider: fallbackBillingProvider,
     patientAccountNumber: charge.encounter_id
       ? `ENC-${String(charge.encounter_id).slice(0, 8)}`
       : null,
@@ -831,12 +841,56 @@ export async function createClaimDraftFromChargeCapture(
     caseId: text((charge as DbRow).case_id) || null,
   });
 
-  if (!draft.ok) return draft;
+ await linkChargeToClaim({
+  organizationId: input.organizationId,
+  chargeCaptureId: input.chargeCaptureId,
+  claimId: draft.claimId,
+  encounterId: charge.encounter_id ? String(charge.encounter_id) : null,
+  caseId: text((charge as DbRow).case_id) || null,
+});
 
-  await keepClaimInPrepDraft({
-    organizationId: input.organizationId,
+await keepClaimInPrepDraft({
+  organizationId: input.organizationId,
+  claimId: draft.claimId,
+});
+
+const combinedErrors = [
+  ...providerErrors,
+  ...(draft.errors ?? []),
+];
+
+if (combinedErrors.length > 0) {
+  const { error: validationErrorUpdateError } = await supabase
+    .from("professional_claims")
+    .update({
+      claim_status: "validation_failed",
+      validation_errors: combinedErrors,
+      last_validated_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("organization_id", input.organizationId)
+    .eq("id", draft.claimId);
+
+  if (validationErrorUpdateError) {
+    return {
+      ok: false,
+      claimId: draft.claimId,
+      errors: [{ field: "professional_claims", message: validationErrorUpdateError.message }],
+    };
+  }
+
+  return {
+    ok: false,
     claimId: draft.claimId,
-  });
+    errors: combinedErrors,
+  };
+}
+
+return {
+  ok: true,
+  claimId: draft.claimId,
+  errors: [],
+};
 
   return {
     ok: true,
