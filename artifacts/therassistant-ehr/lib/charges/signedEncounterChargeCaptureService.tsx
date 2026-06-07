@@ -19,6 +19,10 @@ export interface CaptureSignedEncounterChargeResult {
   routing?: "insurance_claim" | "patient_responsibility";
 }
 
+export function isClaimBridgeChargeStatus(status: CaptureSignedEncounterChargeResult["status"]): boolean {
+  return status === "ready_for_claim" || status === "claim_created";
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type DbRow = Record<string, any>;
 

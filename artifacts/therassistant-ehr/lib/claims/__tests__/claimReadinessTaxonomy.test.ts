@@ -116,7 +116,7 @@ function matches(row: Row, filters: Filter[]): boolean {
 }
 
 function makeBuilder(table: keyof Tables, mode: "select" | "insert" | "update") {
-  let filters: Filter[] = [];
+  const filters: Filter[] = [];
   let insertRows: Row[] = [];
   let updatePatch: Row | null = null;
   let singleMode: "single" | "maybeSingle" | null = null;
@@ -311,4 +311,120 @@ test("snapshot writer writes null when provider_profile has no taxonomy_code", a
     ORG,
   );
   assert.equal(typeof readiness.ok, "boolean");
+});
+
+test("claim drafts start in editable draft status until Claim Prep releases them", async () => {
+  tables = freshTables();
+  nextClaimId = 0;
+  const { createProfessionalClaimDraft } = await import(
+    "../claimReadinessService"
+  );
+
+  const draft = await createProfessionalClaimDraft({
+    organizationId: ORG,
+    clientId: CLIENT,
+    appointmentId: APPT,
+    placeOfService: "11",
+    diagnosisCodes: ["F32.9"],
+    serviceLines: [
+      {
+        serviceDate: "2026-05-01",
+        procedureCode: "90837",
+        chargeAmount: 200,
+        units: 1,
+      },
+    ],
+    billingProvider: {
+      name: "Test Practice",
+      npi: "1234567890",
+      taxId: "12-3456789",
+      address1: "500 Practice Way",
+      city: "Austin",
+      state: "TX",
+      zip: "78701",
+    },
+  });
+
+  assert.equal(draft.ok, true, JSON.stringify(draft.errors));
+  assert.equal(tables.professional_claims[0].claim_status, "draft");
+});
+
+test("Claim Prep release advances valid drafts to ready_for_batch", async () => {
+  tables = freshTables();
+  nextClaimId = 0;
+  const { createProfessionalClaimDraft, releaseProfessionalClaimToBatch } = await import(
+    "../claimReadinessService"
+  );
+
+  const draft = await createProfessionalClaimDraft({
+    organizationId: ORG,
+    clientId: CLIENT,
+    appointmentId: APPT,
+    placeOfService: "11",
+    diagnosisCodes: ["F32.9"],
+    serviceLines: [
+      {
+        serviceDate: "2026-05-01",
+        procedureCode: "90837",
+        chargeAmount: 200,
+        units: 1,
+      },
+    ],
+    billingProvider: {
+      name: "Test Practice",
+      npi: "1234567890",
+      taxId: "12-3456789",
+      address1: "500 Practice Way",
+      city: "Austin",
+      state: "TX",
+      zip: "78701",
+    },
+  });
+
+  const release = await releaseProfessionalClaimToBatch(String(draft.claimId), ORG);
+
+  assert.equal(release.ok, true, JSON.stringify(release.errors));
+  assert.equal(tables.professional_claims[0].claim_status, "ready_for_batch");
+  assert.deepEqual(tables.professional_claims[0].validation_errors, []);
+});
+
+test("Claim Prep release persists validation errors and keeps invalid claims editable", async () => {
+  tables = freshTables();
+  nextClaimId = 0;
+  const { createProfessionalClaimDraft, releaseProfessionalClaimToBatch } = await import(
+    "../claimReadinessService"
+  );
+
+  const draft = await createProfessionalClaimDraft({
+    organizationId: ORG,
+    clientId: CLIENT,
+    appointmentId: APPT,
+    placeOfService: "11",
+    diagnosisCodes: ["F32.9"],
+    serviceLines: [
+      {
+        serviceDate: "2026-05-01",
+        procedureCode: "90837",
+        chargeAmount: 200,
+        units: 1,
+      },
+    ],
+    billingProvider: {
+      name: "Test Practice",
+      npi: "1234567890",
+      taxId: "12-3456789",
+      address1: "500 Practice Way",
+      city: "Austin",
+      state: "TX",
+      zip: "78701",
+    },
+  });
+  tables.professional_claims[0].total_charge = 0;
+
+  const release = await releaseProfessionalClaimToBatch(String(draft.claimId), ORG);
+
+  assert.equal(release.ok, false);
+  assert.equal(tables.professional_claims[0].claim_status, "draft");
+  assert.ok(Array.isArray(tables.professional_claims[0].validation_errors));
+  assert.ok((tables.professional_claims[0].validation_errors as unknown[]).length > 0);
 });

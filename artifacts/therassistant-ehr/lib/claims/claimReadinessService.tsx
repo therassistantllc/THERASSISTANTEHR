@@ -87,6 +87,22 @@ function addRequired(errors: ClaimReadinessError[], field: string, value: unknow
   }
 }
 
+function firstDbText(row: DbRecord | null | undefined, keys: string[]): string {
+  if (!row) return "";
+  for (const key of keys) {
+    const value = normalizeText(row[key]);
+    if (value) return value;
+  }
+  return "";
+}
+
+async function cleanupPartialClaimDraft(supabase: ReturnType<typeof createServerSupabaseAdminClient>, claimId: string) {
+  if (!supabase) return;
+  await supabase.from("claim_parties_snapshot").delete().eq("claim_id", claimId);
+  await supabase.from("professional_claim_service_lines").delete().eq("claim_id", claimId);
+  await supabase.from("professional_claims").delete().eq("id", claimId);
+}
+
 function addPlaceOfServiceError(errors: ClaimReadinessError[], field: string, value: unknown) {
   const pos = normalizePlaceOfService(value);
   if (!pos) return;
@@ -117,7 +133,7 @@ async function resolvePrimaryPolicy(params: {
 
   let policyQuery = supabase
     .from("insurance_policies")
-    .select("id, payer_id, subscriber_id, plan_name, policy_number, priority, active_flag")
+    .select("id, payer_id, subscriber_id, plan_name, policy_number, priority, active_flag, subscriber_relationship")
     .eq("organization_id", params.organizationId)
     .eq("client_id", params.clientId)
     .eq("active_flag", true)
@@ -154,7 +170,7 @@ async function resolvePrimaryPolicy(params: {
 
   const { data: subscriber } = await supabase
     .from("insurance_subscribers")
-    .select("id, first_name, last_name, date_of_birth, member_id, group_number, relationship_to_client")
+    .select("*")
     .eq("id", policy.subscriber_id)
     .is("archived_at", null)
     .maybeSingle();
@@ -347,7 +363,7 @@ export async function createProfessionalClaimDraft(
       payer_profile_id: payerProfileId,
       claim_number: claimNumber,
       patient_account_number: patientAccountNumber,
-      claim_status: "ready_for_validation",
+      claim_status: "draft",
       total_charge: totalCharge,
       place_of_service: placeOfService,
       diagnosis_codes: input.diagnosisCodes,
@@ -382,13 +398,34 @@ export async function createProfessionalClaimDraft(
 
   const { error: lineError } = await supabase.from("professional_claim_service_lines").insert(serviceLinePayload);
   if (lineError) {
-    return { ok: false, claimId, errors: [{ field: "professional_claim_service_lines", message: lineError.message }] };
+    await cleanupPartialClaimDraft(supabase, claimId);
+    return {
+      ok: false,
+      claimId: null,
+      errors: [{ field: "professional_claim_service_lines", message: `${lineError.message}. Partial claim draft was rolled back.` }],
+    };
   }
 
-  const subscriberAddress1 = normalizeNullable(client!.address_line_1) ?? input.billingProvider.address1;
-  const subscriberCity = normalizeNullable(client!.city) ?? input.billingProvider.city;
-  const subscriberState = normalizeNullable(client!.state) ?? input.billingProvider.state;
-  const subscriberZip = normalizeNullable(client!.postal_code) ?? input.billingProvider.zip;
+  const subscriberRelationship = normalizeText(subscriber!.relationship_to_client) || normalizeText(policyResolution.policy?.subscriber_relationship) || "self";
+  const subscriberIsClient = ["self", "client", "patient", "insured"].includes(subscriberRelationship.toLowerCase());
+  const subscriberAddress1 = firstDbText(subscriber, ["address_line1", "address_line_1", "address1", "street", "subscriber_address1"]) || (subscriberIsClient ? normalizeText(client!.address_line_1) : "");
+  const subscriberCity = firstDbText(subscriber, ["address_city", "city", "subscriber_city"]) || (subscriberIsClient ? normalizeText(client!.city) : "");
+  const subscriberState = (firstDbText(subscriber, ["address_state", "state", "subscriber_state"]) || (subscriberIsClient ? normalizeText(client!.state) : "")).toUpperCase();
+  const subscriberZip = firstDbText(subscriber, ["address_zip", "zip", "postal_code", "subscriber_zip"]) || (subscriberIsClient ? normalizeText(client!.postal_code) : "");
+
+  const subscriberErrors: ClaimReadinessError[] = [];
+  addRequired(subscriberErrors, "insurance_subscribers.first_name", subscriber!.first_name, "Subscriber first name is required");
+  addRequired(subscriberErrors, "insurance_subscribers.last_name", subscriber!.last_name, "Subscriber last name is required");
+  addRequired(subscriberErrors, "insurance_subscribers.date_of_birth", subscriber!.date_of_birth, "Subscriber DOB is required");
+  addRequired(subscriberErrors, "insurance_subscribers.member_id", subscriber!.member_id, "Subscriber member ID is required");
+  addRequired(subscriberErrors, "subscriber.address1", subscriberAddress1, subscriberIsClient ? "Subscriber address line 1 is required from clients.address_line_1" : "Subscriber address line 1 is required from insurance_subscribers address fields");
+  addRequired(subscriberErrors, "subscriber.city", subscriberCity, subscriberIsClient ? "Subscriber city is required from clients.city" : "Subscriber city is required from insurance_subscribers address_city/city");
+  addRequired(subscriberErrors, "subscriber.state", subscriberState, subscriberIsClient ? "Subscriber state is required from clients.state" : "Subscriber state is required from insurance_subscribers address_state/state");
+  addRequired(subscriberErrors, "subscriber.zip", subscriberZip, subscriberIsClient ? "Subscriber ZIP is required from clients.postal_code" : "Subscriber ZIP is required from insurance_subscribers address_zip/zip/postal_code");
+  if (subscriberErrors.length > 0) {
+    await cleanupPartialClaimDraft(supabase, claimId);
+    return { ok: false, claimId: null, errors: subscriberErrors };
+  }
 
   // Pull rendering provider taxonomy directly from provider_profiles for the
   // appointment's rendering provider. provider_profiles.taxonomy_code is the
@@ -412,7 +449,7 @@ export async function createProfessionalClaimDraft(
       // accept either match and pick the first active row.
       const { data: profileByStaff } = await supabase
         .from("provider_profiles")
-        .select("id, taxonomy_code")
+        .select("*")
         .eq("organization_id", input.organizationId)
         .eq("staff_id", renderingProviderId)
         .is("archived_at", null)
@@ -422,7 +459,7 @@ export async function createProfessionalClaimDraft(
       if (!profile) {
         const { data: profileById } = await supabase
           .from("provider_profiles")
-          .select("id, taxonomy_code")
+          .select("*")
           .eq("organization_id", input.organizationId)
           .eq("id", renderingProviderId)
           .is("archived_at", null)
@@ -430,7 +467,7 @@ export async function createProfessionalClaimDraft(
           .maybeSingle();
         profile = (profileById as DbRecord | null) ?? null;
       }
-      renderingProviderTaxonomy = profile ? normalizeNullable(profile.taxonomy_code) : null;
+      renderingProviderTaxonomy = profile ? (normalizeNullable(profile.taxonomy_code) ?? normalizeNullable(profile.taxonomy) ?? normalizeNullable(profile.provider_taxonomy_code)) : null;
     }
   }
 
@@ -454,7 +491,7 @@ export async function createProfessionalClaimDraft(
     subscriber_city: subscriberCity,
     subscriber_state: subscriberState,
     subscriber_zip: subscriberZip,
-    patient_is_subscriber: true,
+    patient_is_subscriber: subscriberIsClient,
     payer_name: normalizeText(payer!.payer_name),
     payer_id: normalizeText(payer!.payer_id),
     rendering_same_as_billing: true,
@@ -463,7 +500,12 @@ export async function createProfessionalClaimDraft(
   });
 
   if (snapshotError) {
-    return { ok: false, claimId, errors: [{ field: "claim_parties_snapshot", message: snapshotError.message }] };
+    await cleanupPartialClaimDraft(supabase, claimId);
+    return {
+      ok: false,
+      claimId: null,
+      errors: [{ field: "claim_parties_snapshot", message: `${snapshotError.message}. Partial claim draft was rolled back.` }],
+    };
   }
 
   return { ok: true, claimId, errors: [] };
@@ -678,7 +720,6 @@ export async function validateProfessionalClaimReadiness(
   await supabase
     .from("professional_claims")
     .update({
-      claim_status: ready ? "ready_for_batch" : "validation_failed",
       validation_errors: errors,
       last_validated_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -691,4 +732,39 @@ export async function validateProfessionalClaimReadiness(
     claimId,
     errors,
   };
+}
+
+export async function releaseProfessionalClaimToBatch(
+  claimId: string,
+  organizationId: string,
+): Promise<ClaimReadinessResult> {
+  const readiness = await validateProfessionalClaimReadiness(claimId, organizationId);
+  const supabase = createServerSupabaseAdminClient();
+  if (!supabase) return readiness;
+
+  if (readiness.ok) {
+    await supabase
+      .from("professional_claims")
+      .update({
+        claim_status: "ready_for_batch",
+        validation_errors: [],
+        last_validated_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", claimId)
+      .eq("organization_id", organizationId);
+  } else {
+    await supabase
+      .from("professional_claims")
+      .update({
+        claim_status: "draft",
+        validation_errors: readiness.errors,
+        last_validated_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", claimId)
+      .eq("organization_id", organizationId);
+  }
+
+  return readiness;
 }

@@ -93,11 +93,6 @@ type NoteActionResponse = {
     blockers?: RevenueCycleError[];
     routing?: string | null;
   } | null;
-  claimDraft?: {
-    ok?: boolean;
-    claimId?: string | null;
-    errors?: RevenueCycleError[];
-  } | null;
 };
 
 function describeRevenueCycleErrors(errors: RevenueCycleError[] | null | undefined): string {

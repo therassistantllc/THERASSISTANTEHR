@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { captureSignedEncounterCharge } from "@/lib/charges/signedEncounterChargeCaptureService";
+import { captureSignedEncounterCharge, isClaimBridgeChargeStatus } from "@/lib/charges/signedEncounterChargeCaptureService";
 import { createClaimDraftFromChargeCapture } from "@/lib/claims/chargeCaptureClaimBridgeService";
 import { buildTextReportPdf } from "@/lib/pdf/textReportPdf";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
@@ -222,12 +222,15 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
       if (encounterUpdateError) throw encounterUpdateError;
       chargeCapture = await captureSignedEncounterCharge({ organizationId, encounterId });
 
-      if (chargeCapture.chargeId && chargeCapture.status === "ready_for_claim") {
+      if (chargeCapture.chargeId && isClaimBridgeChargeStatus(chargeCapture.status)) {
         claimDraft = await createClaimDraftFromChargeCapture({
           organizationId,
           chargeCaptureId: chargeCapture.chargeId,
         });
       }
+      // Signing a note should create/update the charge capture row and route
+      // billers to Claim Prep. Claim draft creation and 837P batching happen
+      // only when the biller releases the charge from Claim Prep.
 
       const signedAt = notePayload.signed_at ?? now;
       const dateToken = signedAt.slice(0, 10);
@@ -350,7 +353,7 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
     } else if (action === "amend") {
       // Note remains signed; just bump updated_at on the encounter so the
       // chart reflects the amendment time. Do NOT re-run charge capture or
-      // create a new claim draft — those were handled at original sign time.
+      // create a new claim draft — Claim Prep release owns claim generation.
       await supabase
         .from("encounters")
         .update({ updated_at: now })
