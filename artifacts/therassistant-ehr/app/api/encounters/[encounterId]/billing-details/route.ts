@@ -146,6 +146,14 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
       .is("archived_at", null)
       .maybeSingle();
 
+      console.log("BILLING DETAILS DEBUG", {
+  supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
+  hasServiceRole: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
+  encounterId,
+  organizationId,
+  encounter,
+  encounterError,
+});
     if (encounterError || !encounter) return NextResponse.json({ success: false, error: "Encounter not found" }, { status: 404 });
 
     const now = new Date().toISOString();
