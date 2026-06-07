@@ -519,6 +519,7 @@ async function syncExistingClaimFromCharge(params: {
 
   const providerResolution = await resolveProviderCredentialingProfile({
     organizationId: params.organizationId,
+    providerId: params.charge.provider_id ? String(params.charge.provider_id) : null,
     providerCredentialingProfileId: params.charge.provider_credentialing_profile_id
       ? String(params.charge.provider_credentialing_profile_id)
       : null,
@@ -810,6 +811,7 @@ export async function createClaimDraftFromChargeCapture(
 
   const providerResolution = await resolveProviderCredentialingProfile({
     organizationId: input.organizationId,
+    providerId: charge.provider_id ? String(charge.provider_id) : null,
     providerCredentialingProfileId: charge.provider_credentialing_profile_id
       ? String(charge.provider_credentialing_profile_id)
       : null,
