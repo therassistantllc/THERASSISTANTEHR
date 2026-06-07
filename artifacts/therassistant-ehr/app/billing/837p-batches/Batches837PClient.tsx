@@ -186,7 +186,7 @@ export default function Batches837PClient() {
       if (filePreviews[batchId] !== undefined) return;
       try {
         const res = await fetch(
-          `/api/claims/837p/batch/${encodeURIComponent(batchId)}/file?organizationId=${encodeURIComponent(organizationId)}`,
+          `/api/claims/837p/batch/${encodeURIComponent(batchId)}/download?organizationId=${encodeURIComponent(organizationId)}`,
           { cache: "no-store" },
         );
         if (!res.ok) {
@@ -362,7 +362,7 @@ export default function Batches837PClient() {
       id: "download",
       label: "Download 837",
       onClick: (r) => {
-        const url = `/api/claims/837p/batch/${encodeURIComponent(r.id)}/file?organizationId=${encodeURIComponent(organizationId)}`;
+        const url = `/api/claims/837p/batch/${encodeURIComponent(r.id)}/download?organizationId=${encodeURIComponent(organizationId)}`;
         window.open(url, "_blank", "noopener,noreferrer");
       },
     },
@@ -464,7 +464,7 @@ export default function Batches837PClient() {
             <div style={{ marginBottom: 8 }}>
               <a
                 className="button button-secondary"
-                href={`/api/claims/837p/batch/${encodeURIComponent(selectedBatch.id)}/file?organizationId=${encodeURIComponent(organizationId)}`}
+                href={`/api/claims/837p/batch/${encodeURIComponent(selectedBatch.id)}/download?organizationId=${encodeURIComponent(organizationId)}`}
                 target="_blank"
                 rel="noopener noreferrer"
               >
@@ -640,7 +640,7 @@ export default function Batches837PClient() {
           id: "download",
           label: "Download 837",
           onClick: () => {
-            const url = `/api/claims/837p/batch/${encodeURIComponent(selectedBatch.id)}/file?organizationId=${encodeURIComponent(organizationId)}`;
+            const url = `/api/claims/837p/batch/${encodeURIComponent(selectedBatch.id)}/download?organizationId=${encodeURIComponent(organizationId)}`;
             window.open(url, "_blank", "noopener,noreferrer");
           },
         },
