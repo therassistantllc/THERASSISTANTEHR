@@ -575,6 +575,7 @@ async function syncExistingClaimFromCharge(params: {
       encounter_id: nullableText(params.charge.encounter_id) ?? undefined,
       case_id: nullableText(params.charge.case_id) ?? undefined,
       payer_profile_id: payerProfileId,
+      provider_credentialing_profile_id: nullableText(params.charge.provider_credentialing_profile_id),
       total_charge: totalCharge,
       place_of_service: placeOfService,
       diagnosis_codes: diagnosisCodes,
@@ -752,7 +753,7 @@ export async function createClaimDraftFromChargeCapture(
   const { data: charge, error: chargeError } = await supabase
     .from("charge_capture_items")
     .select(
-      "id, organization_id, encounter_id, client_id, provider_id, appointment_id, insurance_policy_id, case_id, charge_status, service_date, diagnosis_codes, service_lines, place_of_service, total_charge, claim_id",
+      "id, organization_id, encounter_id, client_id, provider_id, provider_credentialing_profile_id, appointment_id, insurance_policy_id, case_id, charge_status, service_date, diagnosis_codes, service_lines, place_of_service, total_charge, claim_id",
     )
     .eq("organization_id", input.organizationId)
     .eq("id", input.chargeCaptureId)
@@ -826,6 +827,7 @@ export async function createClaimDraftFromChargeCapture(
     appointmentId: charge.appointment_id ? String(charge.appointment_id) : null,
     encounterId: charge.encounter_id ? String(charge.encounter_id) : null,
     placeOfService: text(charge.place_of_service) || null,
+    providerCredentialingProfileId: text((charge as DbRow).provider_credentialing_profile_id) || null,
     diagnosisCodes: readTextArray(charge.diagnosis_codes),
     serviceLines: serviceLinesFromCharge(
       charge as DbRow,
