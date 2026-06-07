@@ -131,9 +131,9 @@ type EncounterCodingReportDocument = {
 };
 
 function getOrganizationId() {
-  if (typeof window === "undefined") return DEFAULT_ORG_ID;
+  if (typeof window === "undefined") return "";
   const params = new URLSearchParams(window.location.search);
-  return params.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
+  return params.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || "";
 }
 
 function formatDate(value: string | null | undefined): string {
