@@ -84,6 +84,27 @@ async function linkChargeToClaim(params: {
   }
 }
 
+async function keepClaimInPrepDraft(params: {
+  organizationId: string;
+  claimId: string;
+}) {
+  const supabase = createServerSupabaseAdminClient();
+  if (!supabase) throw new Error("Database connection not available");
+
+  const { error } = await supabase
+    .from("professional_claims")
+    .update({
+      claim_status: "draft",
+      validation_errors: [],
+      last_validated_at: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("organization_id", params.organizationId)
+    .eq("id", params.claimId);
+
+  if (error) throw new Error(error.message);
+}
+
 async function findExistingClaimForCharge(charge: DbRow, organizationId: string): Promise<string | null> {
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) throw new Error("Database connection not available");
@@ -204,6 +225,16 @@ export async function createClaimDraftFromChargeCapture(
   });
 
   if (!draft.ok) return draft;
+
+  // Charge-capture and signed-note claim creation should only produce an
+  // editable Claim Prep draft linked back to the charge capture item. Do not
+  // validate it into ready_for_batch or auto-link it to claim_837p_batches here;
+  // batching belongs to the explicit Claim Prep release / Ready-to-Generate
+  // action after the biller has reviewed and released the professional claim.
+  await keepClaimInPrepDraft({
+    organizationId: input.organizationId,
+    claimId: draft.claimId,
+  });
 
   return { ok: true, claimId: draft.claimId, errors: [] };
 }
