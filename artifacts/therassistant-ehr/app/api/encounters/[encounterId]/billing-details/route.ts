@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { isAllowedPlaceOfService, placeOfServiceWarning } from "@/lib/billing/placeOfService";
 import { captureSignedEncounterCharge } from "@/lib/charges/signedEncounterChargeCaptureService";
-import { createClaimDraftFromChargeCapture } from "@/lib/claims/chargeCaptureClaimBridgeService";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 
 type DiagnosisInput = {
@@ -214,15 +213,14 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
     }
 
     let chargeCapture = null;
-    let claimDraft = null;
     if (encounter.encounter_status === "signed") {
+      // Keep the Claim Prep queue synchronized after billing edits, but do not
+      // create/release the professional claim until the biller clicks Release
+      // from Claim Prep.
       chargeCapture = await captureSignedEncounterCharge({ organizationId, encounterId });
-      if (chargeCapture.chargeId && chargeCapture.status === "ready_for_claim") {
-        claimDraft = await createClaimDraftFromChargeCapture({ organizationId, chargeCaptureId: chargeCapture.chargeId });
-      }
     }
 
-    return NextResponse.json({ success: true, encounterId, diagnosisCount: diagnosisPayload.length, serviceLineCount: servicePayload.length, chargeCapture, claimDraft });
+    return NextResponse.json({ success: true, encounterId, diagnosisCount: diagnosisPayload.length, serviceLineCount: servicePayload.length, chargeCapture });
   } catch (error) {
     console.error("Encounter billing details POST error:", error);
     return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "Encounter billing details save failed" }, { status: 500 });

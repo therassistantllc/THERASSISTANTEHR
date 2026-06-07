@@ -77,6 +77,30 @@ type EncounterSummary = {
   }>;
 };
 
+
+type RevenueCycleError = { field?: string | null; message?: string | null };
+
+type NoteActionResponse = {
+  success?: boolean;
+  error?: string;
+  noteId?: string | null;
+  encounterId?: string | null;
+  status?: string | null;
+  chargeCapture?: {
+    ok?: boolean;
+    chargeId?: string | null;
+    status?: string | null;
+    blockers?: RevenueCycleError[];
+    routing?: string | null;
+  } | null;
+};
+
+function describeRevenueCycleErrors(errors: RevenueCycleError[] | null | undefined): string {
+  const messages = (errors ?? []).map((item) => item?.message).filter(Boolean) as string[];
+  if (messages.length === 0) return "No revenue-cycle detail was returned.";
+  return messages.slice(0, 3).join("; ");
+}
+
 type NoteTemplate = {
   id: string;
   name: string;
@@ -453,7 +477,7 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
     if (!response.ok || !json.success) throw new Error(json.error ?? "Failed to save billing details");
   }
 
-  async function persistNote(action: "save" | "amend" | "sign", codingReport?: CodingHelperReport) {
+  async function persistNote(action: "save" | "amend" | "sign", codingReport?: CodingHelperReport): Promise<NoteActionResponse> {
     const response = await fetch(`/api/encounters/${encounterId}/note`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -468,8 +492,9 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
         codingReport,
       }),
     });
-    const json = (await response.json()) as { success?: boolean; error?: string };
+    const json = (await response.json()) as NoteActionResponse;
     if (!response.ok || !json.success) throw new Error(json.error ?? "Note action failed");
+    return json;
   }
 
   async function saveNote() {
@@ -556,10 +581,33 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
         questionnaireScore: scoreCodingQuestionnaire({}),
         noteAnalysis: medicaidSuggestions ?? analyzeMedicaidDocumentation(medicaidDocumentationText),
       });
-      await persistNote("sign", codingReport);
+      const signResult = await persistNote("sign", codingReport);
       setShowSignModal(false);
-      if (client?.id) router.push(`/clients/${client.id}/documents?organizationId=${encodeURIComponent(organizationId)}`);
-      else router.push(`/billing/charges?organizationId=${encodeURIComponent(organizationId)}`);
+
+      const chargeCaptureId = signResult.chargeCapture?.chargeId;
+      const claimPrepUrl = `/billing/charge-capture?organizationId=${encodeURIComponent(organizationId)}&encounterId=${encodeURIComponent(encounterId)}${chargeCaptureId ? `&chargeCaptureId=${encodeURIComponent(chargeCaptureId)}` : ""}`;
+
+      const chargeStatus = signResult.chargeCapture?.status;
+      if (chargeStatus === "patient_responsibility") {
+        router.push(`/billing/patient-responsibility?organizationId=${encodeURIComponent(organizationId)}&encounterId=${encodeURIComponent(encounterId)}`);
+        return;
+      }
+
+      await loadEncounter();
+      if (chargeStatus === "blocked") {
+        setMessage("Note signed, but the encounter is blocked before claim creation.");
+        setError(`Revenue-cycle blocker: ${describeRevenueCycleErrors(signResult.chargeCapture?.blockers)}`);
+        return;
+      }
+
+      if (chargeStatus === "ready_for_claim") {
+        setMessage("Note signed. Review and release the charge from Claim Prep.");
+        router.push(claimPrepUrl);
+        return;
+      }
+
+      setMessage("Note signed. Review charge capture for next billing steps.");
+      router.push(claimPrepUrl);
     } catch (signError) {
       setError(signError instanceof Error ? signError.message : "Failed to sign note");
     } finally {

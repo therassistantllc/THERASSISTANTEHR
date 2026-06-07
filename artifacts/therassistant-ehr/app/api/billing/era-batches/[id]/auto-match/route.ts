@@ -50,19 +50,32 @@ function firstServiceDate(serviceLines: unknown): string | null {
   return null;
 }
 
-export async function POST(request: Request, ctx: { params: Promise<{ id: string }> }) {
+export async function POST(
+  request: Request,
+  ctx: { params: Promise<{ id: string }> },
+) {
   try {
     const { id } = await ctx.params;
-    const body = (await request.json().catch(() => ({}))) as { organizationId?: string };
-    const organizationId = body.organizationId ? String(body.organizationId) : "";
+    const body = (await request.json().catch(() => ({}))) as {
+      organizationId?: string;
+    };
+    const organizationId = body.organizationId
+      ? String(body.organizationId)
+      : "";
     if (!organizationId) {
-      return NextResponse.json({ success: false, error: "organizationId is required" }, { status: 400 });
+      return NextResponse.json(
+        { success: false, error: "organizationId is required" },
+        { status: 400 },
+      );
     }
     await requireAuthenticatedPaymentPoster(organizationId);
 
     const supabase = createServerSupabaseAdminClient();
     if (!supabase) {
-      return NextResponse.json({ success: false, error: "Database connection not available" }, { status: 500 });
+      return NextResponse.json(
+        { success: false, error: "Database connection not available" },
+        { status: 500 },
+      );
     }
 
     const { data: batch } = await supabase
@@ -72,12 +85,16 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       .eq("id", id)
       .maybeSingle();
     if (!batch) {
-      return NextResponse.json({ success: false, error: "Batch not found" }, { status: 404 });
+      return NextResponse.json(
+        { success: false, error: "Batch not found" },
+        { status: 404 },
+      );
     }
     const batchRow = batch as BatchRow;
     const payerProfileId =
       batchRow.parsed_summary && typeof batchRow.parsed_summary === "object"
-        ? (((batchRow.parsed_summary as Record<string, unknown>).payerProfileId as string) ?? null)
+        ? (((batchRow.parsed_summary as Record<string, unknown>)
+            .payerProfileId as string) ?? null)
         : null;
 
     const { data: payments } = await supabase
@@ -106,9 +123,12 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
           ? (row.raw_item_payload as Record<string, unknown>)
           : {};
       const serviceDate = firstServiceDate(payload.service_lines);
-      const clp01 = String(payload.claim_ref ?? row.imported_item_ref ?? "").trim();
+      const clp01 = String(
+        payload.claim_ref ?? row.imported_item_ref ?? "",
+      ).trim();
       const payerClaimControlNumber =
-        payload.payer_claim_control_number === null || payload.payer_claim_control_number === undefined
+        payload.payer_claim_control_number === null ||
+        payload.payer_claim_control_number === undefined
           ? null
           : String(payload.payer_claim_control_number);
       const { exact, probable } = await findCandidatesForEraClaimPayment({
@@ -120,7 +140,12 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
         payerProfileId,
         serviceDateFrom: serviceDate,
         serviceDateTo: serviceDate,
-        patientLastName: null,
+        patientLastName:
+          typeof payload.patient_last_name === "string"
+            ? payload.patient_last_name
+            : typeof payload.patientLastName === "string"
+              ? payload.patientLastName
+              : null,
       });
 
       if (exact && exact.confidence >= 0.95) {
@@ -158,17 +183,31 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       });
     }
 
-    return NextResponse.json({ success: true, processed: rows.length, bound, results });
+    return NextResponse.json({
+      success: true,
+      processed: rows.length,
+      bound,
+      results,
+    });
   } catch (error) {
     if (error instanceof PaymentPostingUnauthenticatedError) {
-      return NextResponse.json({ success: false, error: error.message }, { status: 401 });
+      return NextResponse.json(
+        { success: false, error: error.message },
+        { status: 401 },
+      );
     }
     if (error instanceof PaymentPostingForbiddenError) {
-      return NextResponse.json({ success: false, error: error.message }, { status: 403 });
+      return NextResponse.json(
+        { success: false, error: error.message },
+        { status: 403 },
+      );
     }
     console.error("ERA batch auto-match error:", error);
     return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : "Auto-match failed" },
+      {
+        success: false,
+        error: error instanceof Error ? error.message : "Auto-match failed",
+      },
       { status: 500 },
     );
   }
