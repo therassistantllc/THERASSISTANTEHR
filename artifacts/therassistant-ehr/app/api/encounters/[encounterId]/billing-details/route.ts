@@ -77,8 +77,30 @@ export async function GET(request: Request, context: { params: Promise<{ encount
       .is("archived_at", null)
       .maybeSingle();
 
-    if (encounterError || !encounter) return NextResponse.json({ success: false, error: "Encounter not found" }, { status: 404 });
+if (encounterError || !encounter) {
+  console.error("Billing details encounter lookup failed", {
+    encounterId,
+    organizationId,
+    encounterError,
+    found: Boolean(encounter),
+  });
 
+  return NextResponse.json(
+    {
+      success: false,
+      error: encounterError?.message || "Encounter not found",
+      debug: {
+        encounterId,
+        organizationId,
+        found: Boolean(encounter),
+        code: encounterError?.code ?? null,
+        details: encounterError?.details ?? null,
+        hint: encounterError?.hint ?? null,
+      },
+    },
+    { status: 404 },
+  );
+}
     const { data: diagnoses } = await supabase
       .from("encounter_diagnoses")
       .select("id, diagnosis_code, diagnosis_description, is_primary, sequence_number, present_on_claim")
