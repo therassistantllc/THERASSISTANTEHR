@@ -578,6 +578,7 @@ async function syncExistingClaimFromCharge(params: {
       encounter_id: nullableText(params.charge.encounter_id) ?? undefined,
       case_id: nullableText(params.charge.case_id) ?? undefined,
       payer_profile_id: payerProfileId,
+      provider_credentialing_profile_id: nullableText(params.charge.provider_credentialing_profile_id),
       total_charge: totalCharge,
       place_of_service: placeOfService,
       diagnosis_codes: diagnosisCodes,
@@ -832,6 +833,7 @@ export async function createClaimDraftFromChargeCapture(
     appointmentId: charge.appointment_id ? String(charge.appointment_id) : null,
     encounterId: charge.encounter_id ? String(charge.encounter_id) : null,
     placeOfService: text(charge.place_of_service) || null,
+    providerCredentialingProfileId: text((charge as DbRow).provider_credentialing_profile_id) || null,
     diagnosisCodes: readTextArray(charge.diagnosis_codes),
     serviceLines: serviceLinesFromCharge(
       charge as DbRow,
