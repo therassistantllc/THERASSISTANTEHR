@@ -30,6 +30,7 @@ export interface ClaimServiceLineInput {
   placeOfService?: string | null;
   renderingProviderNpi?: string | null;
   authorizationNumber?: string | null;
+  providerCredentialingProfileId?: string | null;
 }
 
 export interface CreateClaimDraftInput {
@@ -42,8 +43,10 @@ export interface CreateClaimDraftInput {
   diagnosisCodes: string[];
   serviceLines: ClaimServiceLineInput[];
   billingProvider: BillingProviderInput;
+  providerCredentialingProfileId?: string | null;
   patientAccountNumber?: string | null;
   claimNumber?: string | null;
+  providerCredentialingProfileId?: string | null;
 }
 
 export interface CreateClaimDraftResult {
@@ -361,6 +364,7 @@ export async function createProfessionalClaimDraft(
       appointment_id: input.appointmentId ?? undefined,
       encounter_id: input.encounterId ?? undefined,
       payer_profile_id: payerProfileId,
+      provider_credentialing_profile_id: normalizeNullable(input.providerCredentialingProfileId),
       claim_number: claimNumber,
       patient_account_number: patientAccountNumber,
       claim_status: "draft",
@@ -394,6 +398,9 @@ export async function createProfessionalClaimDraft(
     place_of_service: normalizeNullable(line.placeOfService) ?? placeOfService,
     rendering_provider_npi: normalizeNullable(line.renderingProviderNpi),
     authorization_number: normalizeNullable(line.authorizationNumber),
+    provider_credentialing_profile_id:
+      normalizeNullable(line.providerCredentialingProfileId) ??
+      normalizeNullable(input.providerCredentialingProfileId),
   }));
 
   const { error: lineError } = await supabase.from("professional_claim_service_lines").insert(serviceLinePayload);
@@ -427,48 +434,26 @@ export async function createProfessionalClaimDraft(
     return { ok: false, claimId: null, errors: subscriberErrors };
   }
 
-  // Pull rendering provider taxonomy directly from provider_profiles for the
-  // appointment's rendering provider. provider_profiles.taxonomy_code is the
-  // single source of truth for the NUCC code that flows to 837P loop 2310B
-  // PRV*PXC. The downstream claim_readiness rule
-  // (`renderingTaxonomyMissing` in facts.ts) reads this snapshot field, so
-  // missing taxonomies surface as a real validation error instead of being
-  // silently dropped from outgoing claims.
+  // Pull rendering provider taxonomy from the already-resolved
+  // provider_credentialing_profiles row. The downstream claim_readiness rule
+  // (`renderingTaxonomyMissing` in facts.ts) reads this snapshot field, so a
+  // credentialing profile with no taxonomy still produces the existing claim
+  // readiness issue instead of blocking draft creation here.
   let renderingProviderTaxonomy: string | null = null;
-  if (input.appointmentId) {
-    const { data: appointment } = await supabase
-      .from("appointments")
-      .select("id, provider_id")
+  const providerCredentialingProfileId = normalizeNullable(input.providerCredentialingProfileId);
+  if (providerCredentialingProfileId) {
+    const { data: credentialingProfile } = await supabase
+      .from("provider_credentialing_profiles")
+      .select("taxonomy_code")
       .eq("organization_id", input.organizationId)
-      .eq("id", input.appointmentId)
+      .eq("id", providerCredentialingProfileId)
+      .is("archived_at", null)
+      .limit(1)
       .maybeSingle();
-    const renderingProviderId = appointment ? normalizeNullable((appointment as DbRecord).provider_id) : null;
-    if (renderingProviderId) {
-      // provider_profiles links to the canonical staff/provider row via
-      // staff_id; some older orgs share IDs across the two tables, so we
-      // accept either match and pick the first active row.
-      const { data: profileByStaff } = await supabase
-        .from("provider_profiles")
-        .select("*")
-        .eq("organization_id", input.organizationId)
-        .eq("staff_id", renderingProviderId)
-        .is("archived_at", null)
-        .limit(1)
-        .maybeSingle();
-      let profile = profileByStaff as DbRecord | null;
-      if (!profile) {
-        const { data: profileById } = await supabase
-          .from("provider_profiles")
-          .select("*")
-          .eq("organization_id", input.organizationId)
-          .eq("id", renderingProviderId)
-          .is("archived_at", null)
-          .limit(1)
-          .maybeSingle();
-        profile = (profileById as DbRecord | null) ?? null;
-      }
-      renderingProviderTaxonomy = profile ? (normalizeNullable(profile.taxonomy_code) ?? normalizeNullable(profile.taxonomy) ?? normalizeNullable(profile.provider_taxonomy_code)) : null;
-    }
+
+    renderingProviderTaxonomy = credentialingProfile
+      ? normalizeNullable((credentialingProfile as DbRecord).taxonomy_code)
+      : null;
   }
 
   const { error: snapshotError } = await supabase.from("claim_parties_snapshot").insert({

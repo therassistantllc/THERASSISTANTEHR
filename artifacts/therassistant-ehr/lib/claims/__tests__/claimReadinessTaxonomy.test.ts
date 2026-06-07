@@ -1,9 +1,9 @@
 /**
  * Pins the contract that `createProfessionalClaimDraft` pulls
- * `rendering_provider_taxonomy` for the claim_parties_snapshot directly
- * from `provider_profiles.taxonomy_code` for the appointment's rendering
- * provider — so every new 837P claim carries the correct loop 2310B
- * PRV*PXC value without anyone having to type it in.
+ * `rendering_provider_taxonomy` for the claim_parties_snapshot from
+ * `provider_credentialing_profiles.taxonomy_code` using the resolved
+ * credentialing profile ID — so every new 837P claim carries the correct
+ * loop 2310B PRV*PXC value without anyone having to type it in.
  */
 import { test, before, mock } from "node:test";
 import assert from "node:assert/strict";
@@ -21,7 +21,7 @@ const TAXONOMY = "103TC0700X";
 
 interface Tables {
   appointments: Row[];
-  provider_profiles: Row[];
+  provider_credentialing_profiles: Row[];
   clients: Row[];
   insurance_policies: Row[];
   insurance_payers: Row[];
@@ -42,11 +42,11 @@ function freshTables(): Tables {
     appointments: [
       { id: APPT, organization_id: ORG, provider_id: PROVIDER },
     ],
-    provider_profiles: [
+    provider_credentialing_profiles: [
       {
-        id: "pp-1",
+        id: "pcp-1",
         organization_id: ORG,
-        staff_id: PROVIDER,
+        provider_id: PROVIDER,
         taxonomy_code: TAXONOMY,
         archived_at: null,
       },
@@ -220,7 +220,7 @@ before(() => {
   });
 });
 
-test("snapshot writer stamps rendering_provider_taxonomy from provider_profiles", async () => {
+test("snapshot writer stamps rendering_provider_taxonomy from provider_credentialing_profiles", async () => {
   tables = freshTables();
   nextClaimId = 0;
   const { createProfessionalClaimDraft } = await import(
@@ -231,6 +231,7 @@ test("snapshot writer stamps rendering_provider_taxonomy from provider_profiles"
     organizationId: ORG,
     clientId: CLIENT,
     appointmentId: APPT,
+    providerCredentialingProfileId: "pcp-1",
     placeOfService: "11",
     diagnosisCodes: ["F32.9"],
     serviceLines: [
@@ -260,10 +261,10 @@ test("snapshot writer stamps rendering_provider_taxonomy from provider_profiles"
   );
 });
 
-test("snapshot writer writes null when provider_profile has no taxonomy_code", async () => {
+test("snapshot writer writes null when provider_credentialing_profile has no taxonomy_code", async () => {
   tables = freshTables();
   nextClaimId = 0;
-  tables.provider_profiles[0].taxonomy_code = null;
+  tables.provider_credentialing_profiles[0].taxonomy_code = null;
 
   const { createProfessionalClaimDraft } = await import(
     "../claimReadinessService"
@@ -276,6 +277,7 @@ test("snapshot writer writes null when provider_profile has no taxonomy_code", a
     organizationId: ORG,
     clientId: CLIENT,
     appointmentId: APPT,
+    providerCredentialingProfileId: "pcp-1",
     placeOfService: "11",
     diagnosisCodes: ["F32.9"],
     serviceLines: [
@@ -324,6 +326,7 @@ test("claim drafts start in editable draft status until Claim Prep releases them
     organizationId: ORG,
     clientId: CLIENT,
     appointmentId: APPT,
+    providerCredentialingProfileId: "pcp-1",
     placeOfService: "11",
     diagnosisCodes: ["F32.9"],
     serviceLines: [
@@ -360,6 +363,7 @@ test("Claim Prep release advances valid drafts to ready_for_batch", async () => 
     organizationId: ORG,
     clientId: CLIENT,
     appointmentId: APPT,
+    providerCredentialingProfileId: "pcp-1",
     placeOfService: "11",
     diagnosisCodes: ["F32.9"],
     serviceLines: [
@@ -399,6 +403,7 @@ test("Claim Prep release persists validation errors and keeps invalid claims edi
     organizationId: ORG,
     clientId: CLIENT,
     appointmentId: APPT,
+    providerCredentialingProfileId: "pcp-1",
     placeOfService: "11",
     diagnosisCodes: ["F32.9"],
     serviceLines: [
