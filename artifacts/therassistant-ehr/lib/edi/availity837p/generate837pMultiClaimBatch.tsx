@@ -157,6 +157,14 @@ function emitClaimSegments(ctx: BuildClaimContext): string[] {
     ]),
   );
 
+  function formatIcd10For837(code: unknown): string {
+  return String(code ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/\./g, "")
+    .replace(/[^A-Z0-9]/g, "");
+}
+
   // Loop 2000B — Subscriber HL
   const hasPatientLoop = !parties.patient_is_subscriber;
   const subscriberHl = hlCounter.value;
@@ -295,11 +303,17 @@ segments.push(
     segments.push(buildSegment(["REF", "G1", sanitizeX12(claim.prior_authorization_number)]));
   }
 
-  const diagnosisCodes = (claim.diagnosis_codes ?? []).filter(Boolean).slice(0, 12);
-  diagnosisCodes.forEach((code, index) => {
-    const qualifier = index === 0 ? "ABK" : "ABF";
-    segments.push(rawSeg("HI", `${qualifier}${X12.componentSeparator}${sanitizeX12(code).replace(/\./g, "")}`));
-  });
+const diagnosisCodes = Array.isArray(claim.diagnosis_codes)
+  ? claim.diagnosis_codes.map(formatIcd10For837).filter(Boolean).slice(0, 12)
+  : [];
+
+if (diagnosisCodes.length > 0) {
+  const hiElements = diagnosisCodes.map((code, index) =>
+    `${index === 0 ? "ABK" : "ABF"}${X12.componentSeparator}${code}`,
+  );
+
+  segments.push(rawSeg("HI", ...hiElements));
+}
 
   if (parties.rendering_same_as_billing === false) {
     segments.push(
@@ -550,3 +564,7 @@ export function generateAvaility837PMultiClaimBatch(input: MultiClaimBatchInput)
     validation,
   };
 }
+function formatIcd10For837(value: string, index: number, array: string[]): unknown {
+  throw new Error("Function not implemented.");
+}
+
