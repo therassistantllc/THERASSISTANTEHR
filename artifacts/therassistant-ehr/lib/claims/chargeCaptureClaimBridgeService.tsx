@@ -1,9 +1,7 @@
 import {
   createProfessionalClaimDraft,
-  validateProfessionalClaimReadiness,
   type ClaimServiceLineInput,
 } from "@/lib/claims/claimReadinessService";
-import { assignClaimToAutoBatch } from "@/lib/claims/autoBatchClaimService";
 import { resolveProviderCredentialingProfile } from "@/lib/providers/providerCredentialingResolverService";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 
@@ -86,6 +84,27 @@ async function linkChargeToClaim(params: {
   }
 }
 
+async function keepClaimInPrepDraft(params: {
+  organizationId: string;
+  claimId: string;
+}) {
+  const supabase = createServerSupabaseAdminClient();
+  if (!supabase) throw new Error("Database connection not available");
+
+  const { error } = await supabase
+    .from("professional_claims")
+    .update({
+      claim_status: "draft",
+      validation_errors: [],
+      last_validated_at: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("organization_id", params.organizationId)
+    .eq("id", params.claimId);
+
+  if (error) throw new Error(error.message);
+}
+
 async function findExistingClaimForCharge(charge: DbRow, organizationId: string): Promise<string | null> {
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) throw new Error("Database connection not available");
@@ -166,8 +185,7 @@ export async function createClaimDraftFromChargeCapture(
       claimId: existingClaimId,
       encounterId: text(charge.encounter_id) || null,
     });
-    const readiness = await validateProfessionalClaimReadiness(existingClaimId, input.organizationId);
-    return { ok: readiness.ok, claimId: existingClaimId, errors: readiness.errors };
+    return { ok: true, claimId: existingClaimId, errors: [] };
   }
 
   if (statusText === "claim_created") {
@@ -208,27 +226,15 @@ export async function createClaimDraftFromChargeCapture(
 
   if (!draft.ok) return draft;
 
-  const readiness = await validateProfessionalClaimReadiness(draft.claimId, input.organizationId);
+  // Charge-capture and signed-note claim creation should only produce an
+  // editable Claim Prep draft linked back to the charge capture item. Do not
+  // validate it into ready_for_batch or auto-link it to claim_837p_batches here;
+  // batching belongs to the explicit Claim Prep release / Ready-to-Generate
+  // action after the biller has reviewed and released the professional claim.
+  await keepClaimInPrepDraft({
+    organizationId: input.organizationId,
+    claimId: draft.claimId,
+  });
 
-  if (readiness.ok) {
-    const autoBatch = await assignClaimToAutoBatch({
-      organizationId: input.organizationId,
-      claimId: draft.claimId,
-    });
-    if (!autoBatch.ok) {
-      return {
-        ok: false,
-        claimId: draft.claimId,
-        errors: [
-          ...readiness.errors,
-          {
-            field: "auto_batch",
-            message: autoBatch.error ?? "Claim was validated but auto-batching failed",
-          },
-        ],
-      };
-    }
-  }
-
-  return { ok: readiness.ok, claimId: draft.claimId, errors: readiness.errors };
+  return { ok: true, claimId: draft.claimId, errors: [] };
 }
