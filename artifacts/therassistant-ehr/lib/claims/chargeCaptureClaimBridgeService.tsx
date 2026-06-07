@@ -75,7 +75,24 @@ function firstDbText(row: DbRow | null | undefined, keys: string[]): string {
   return "";
 }
 
-function serviceLinesFromCharge(charge: DbRow, renderingProviderNpi: string | null): ClaimServiceLineInput[] {
+function fallbackBillingProvider(): BillingProviderInput {
+  return {
+    name: "Needs billing provider review",
+    npi: "0000000000",
+    taxId: "000000000",
+    taxIdType: "EI",
+    address1: "Needs billing provider address",
+    address2: null,
+    city: "Needs review",
+    state: "CO",
+    zip: "00000",
+  };
+}
+
+function serviceLinesFromCharge(
+  charge: DbRow,
+  renderingProviderNpi: string | null,
+): ClaimServiceLineInput[] {
   return readArray(charge.service_lines)
     .map((line) => ({
       serviceDate: text(line.serviceDate) || text(charge.service_date),
@@ -131,20 +148,25 @@ async function linkChargeToClaim(params: {
   }
 }
 
-async function keepClaimInPrepDraft(params: {
+async function setClaimStatus(params: {
   organizationId: string;
   claimId: string;
+  status: "draft" | "validation_failed";
+  errors?: ClaimReadinessError[];
 }) {
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) throw new Error("Database connection not available");
 
+  const now = new Date().toISOString();
+  const errors = params.errors ?? [];
+
   const { error } = await supabase
     .from("professional_claims")
     .update({
-      claim_status: "draft",
-      validation_errors: [],
-      last_validated_at: null,
-      updated_at: new Date().toISOString(),
+      claim_status: params.status,
+      validation_errors: errors,
+      last_validated_at: params.status === "validation_failed" ? now : null,
+      updated_at: now,
     })
     .eq("organization_id", params.organizationId)
     .eq("id", params.claimId);
@@ -204,11 +226,13 @@ async function resolvePolicySnapshot(params: {
   }
 
   const { data: policy, error: policyError } = await policyQuery.maybeSingle();
+
   if (policyError || !policy) {
     errors.push({
       field: "insurance_policy",
       message: "No active primary insurance policy found for this client",
     });
+
     return {
       client: (client as DbRow | null) ?? null,
       policy: null,
@@ -250,7 +274,7 @@ async function resolvePolicySnapshot(params: {
 
   return {
     client: (client as DbRow | null) ?? null,
-    policy: policy as DbRow,
+    policy: (policy as DbRow | null) ?? null,
     payer: (payer as DbRow | null) ?? null,
     subscriber: (subscriber as DbRow | null) ?? null,
     errors,
@@ -264,6 +288,8 @@ async function ensurePayerProfile(params: {
 }): Promise<string | null> {
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) throw new Error("Database connection not available");
+
+  if (!params.payerName || !params.availityPayerId) return null;
 
   const { data: existing } = await supabase
     .from("payer_profiles")
@@ -496,9 +522,13 @@ async function syncExistingClaimFromCharge(params: {
     providerId: params.charge.provider_id ? String(params.charge.provider_id) : null,
   });
 
-  if (!providerResolution.ok || !providerResolution.billingProvider) {
-    return { ok: false, claimId: params.claimId, errors: providerResolution.errors };
-  }
+  const providerErrors =
+    !providerResolution.ok || !providerResolution.billingProvider
+      ? providerResolution.errors
+      : [];
+
+  const billingProvider: BillingProviderInput =
+    providerResolution.billingProvider ?? fallbackBillingProvider();
 
   const policyResolution = await resolvePolicySnapshot({
     organizationId: params.organizationId,
@@ -508,21 +538,16 @@ async function syncExistingClaimFromCharge(params: {
       : null,
   });
 
-  if (
-    policyResolution.errors.length ||
-    !policyResolution.client ||
-    !policyResolution.policy ||
-    !policyResolution.payer ||
-    !policyResolution.subscriber
-  ) {
-    return { ok: false, claimId: params.claimId, errors: policyResolution.errors };
-  }
+  const policyErrors = policyResolution.errors;
 
-  const payerProfileId = await ensurePayerProfile({
-    organizationId: params.organizationId,
-    payerName: text(policyResolution.payer.payer_name),
-    availityPayerId: text(policyResolution.payer.payer_id),
-  });
+  const payerProfileId =
+    policyResolution.payer
+      ? await ensurePayerProfile({
+          organizationId: params.organizationId,
+          payerName: text(policyResolution.payer.payer_name),
+          availityPayerId: text(policyResolution.payer.payer_id),
+        })
+      : null;
 
   const serviceLines = serviceLinesFromCharge(
     params.charge,
@@ -540,6 +565,7 @@ async function syncExistingClaimFromCharge(params: {
 
   const diagnosisCodes = readTextArray(params.charge.diagnosis_codes);
   const now = new Date().toISOString();
+  const combinedErrors = [...providerErrors, ...policyErrors];
 
   const { error: claimUpdateError } = await supabase
     .from("professional_claims")
@@ -552,9 +578,9 @@ async function syncExistingClaimFromCharge(params: {
       total_charge: totalCharge,
       place_of_service: placeOfService,
       diagnosis_codes: diagnosisCodes,
-      claim_status: "draft",
-      validation_errors: [],
-      last_validated_at: null,
+      claim_status: combinedErrors.length ? "validation_failed" : "draft",
+      validation_errors: combinedErrors,
+      last_validated_at: combinedErrors.length ? now : null,
       updated_at: now,
     })
     .eq("organization_id", params.organizationId)
@@ -606,47 +632,56 @@ async function syncExistingClaimFromCharge(params: {
     }
   }
 
-  const taxonomy = await renderingProviderTaxonomy({
-    organizationId: params.organizationId,
-    appointmentId: nullableText(params.charge.appointment_id),
-  });
+  if (
+    policyResolution.client &&
+    policyResolution.policy &&
+    policyResolution.payer &&
+    policyResolution.subscriber
+  ) {
+    const taxonomy = await renderingProviderTaxonomy({
+      organizationId: params.organizationId,
+      appointmentId: nullableText(params.charge.appointment_id),
+    });
 
-  const snapshot = snapshotPayload({
-    claimId: params.claimId,
-    billingProvider: providerResolution.billingProvider,
-    client: policyResolution.client,
-    policy: policyResolution.policy,
-    payer: policyResolution.payer,
-    subscriber: policyResolution.subscriber,
-    renderingProviderTaxonomy: taxonomy,
-  });
-
-  const { error: deleteSnapshotError } = await supabase
-    .from("claim_parties_snapshot")
-    .delete()
-    .eq("claim_id", params.claimId);
-
-  if (deleteSnapshotError) {
-    return {
-      ok: false,
+    const snapshot = snapshotPayload({
       claimId: params.claimId,
-      errors: [{ field: "claim_parties_snapshot", message: deleteSnapshotError.message }],
-    };
+      billingProvider,
+      client: policyResolution.client,
+      policy: policyResolution.policy,
+      payer: policyResolution.payer,
+      subscriber: policyResolution.subscriber,
+      renderingProviderTaxonomy: taxonomy,
+    });
+
+    const { error: deleteSnapshotError } = await supabase
+      .from("claim_parties_snapshot")
+      .delete()
+      .eq("claim_id", params.claimId);
+
+    if (deleteSnapshotError) {
+      return {
+        ok: false,
+        claimId: params.claimId,
+        errors: [{ field: "claim_parties_snapshot", message: deleteSnapshotError.message }],
+      };
+    }
+
+    const { error: insertSnapshotError } = await supabase
+      .from("claim_parties_snapshot")
+      .insert(snapshot);
+
+    if (insertSnapshotError) {
+      return {
+        ok: false,
+        claimId: params.claimId,
+        errors: [{ field: "claim_parties_snapshot", message: insertSnapshotError.message }],
+      };
+    }
   }
 
-  const { error: insertSnapshotError } = await supabase
-    .from("claim_parties_snapshot")
-    .insert(snapshot);
-
-  if (insertSnapshotError) {
-    return {
-      ok: false,
-      claimId: params.claimId,
-      errors: [{ field: "claim_parties_snapshot", message: insertSnapshotError.message }],
-    };
-  }
-
-  return null;
+  return combinedErrors.length
+    ? { ok: false, claimId: params.claimId, errors: combinedErrors }
+    : null;
 }
 
 async function findExistingClaimForCharge(
@@ -758,8 +793,6 @@ export async function createClaimDraftFromChargeCapture(
       claimId: existingClaimId,
     });
 
-    if (syncResult) return syncResult;
-
     await linkChargeToClaim({
       organizationId: input.organizationId,
       chargeCaptureId: input.chargeCaptureId,
@@ -768,25 +801,9 @@ export async function createClaimDraftFromChargeCapture(
       caseId: text((charge as DbRow).case_id) || null,
     });
 
-    await keepClaimInPrepDraft({
-      organizationId: input.organizationId,
-      claimId: existingClaimId,
-    });
+    if (syncResult) return syncResult;
 
     return { ok: true, claimId: existingClaimId, errors: [] };
-  }
-
-  if (statusText === "claim_created") {
-    return {
-      ok: false,
-      claimId: null,
-      errors: [
-        {
-          field: "claim_id",
-          message: "Charge capture item is marked claim_created but no linked claim was found",
-        },
-      ],
-    };
   }
 
   const providerResolution = await resolveProviderCredentialingProfile({
@@ -794,23 +811,13 @@ export async function createClaimDraftFromChargeCapture(
     providerId: charge.provider_id ? String(charge.provider_id) : null,
   });
 
- const providerErrors = !providerResolution.ok || !providerResolution.billingProvider
-  ? providerResolution.errors
-  : [];
+  const providerErrors =
+    !providerResolution.ok || !providerResolution.billingProvider
+      ? providerResolution.errors
+      : [];
 
-const fallbackBillingProvider =
-  providerResolution.billingProvider ??
-  {
-    name: "Needs billing provider review",
-    npi: "0000000000",
-    taxId: "000000000",
-    taxIdType: "EI" as const,
-    address1: "Needs billing provider address",
-    address2: null,
-    city: "Needs review",
-    state: "CO",
-    zip: "00000",
-  };
+  const billingProvider: BillingProviderInput =
+    providerResolution.billingProvider ?? fallbackBillingProvider();
 
   const draft = await createProfessionalClaimDraft({
     organizationId: input.organizationId,
@@ -824,14 +831,20 @@ const fallbackBillingProvider =
       charge as DbRow,
       providerResolution.renderingProviderNpi,
     ),
-billingProvider: fallbackBillingProvider,
+    billingProvider,
     patientAccountNumber: charge.encounter_id
       ? `ENC-${String(charge.encounter_id).slice(0, 8)}`
       : null,
     claimNumber: `CLM-${String(charge.id).slice(0, 8)}`,
   });
 
-  if (!draft.claimId) return draft;
+  if (!draft.claimId) {
+    return {
+      ok: false,
+      claimId: null,
+      errors: [...providerErrors, ...(draft.errors ?? [])],
+    };
+  }
 
   await linkChargeToClaim({
     organizationId: input.organizationId,
@@ -841,60 +854,16 @@ billingProvider: fallbackBillingProvider,
     caseId: text((charge as DbRow).case_id) || null,
   });
 
- await linkChargeToClaim({
-  organizationId: input.organizationId,
-  chargeCaptureId: input.chargeCaptureId,
-  claimId: draft.claimId,
-  encounterId: charge.encounter_id ? String(charge.encounter_id) : null,
-  caseId: text((charge as DbRow).case_id) || null,
-});
+  const combinedErrors = [...providerErrors, ...(draft.errors ?? [])];
 
-await keepClaimInPrepDraft({
-  organizationId: input.organizationId,
-  claimId: draft.claimId,
-});
-
-const combinedErrors = [
-  ...providerErrors,
-  ...(draft.errors ?? []),
-];
-
-if (combinedErrors.length > 0) {
-  const { error: validationErrorUpdateError } = await supabase
-    .from("professional_claims")
-    .update({
-      claim_status: "validation_failed",
-      validation_errors: combinedErrors,
-      last_validated_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
-    .eq("organization_id", input.organizationId)
-    .eq("id", draft.claimId);
-
-  if (validationErrorUpdateError) {
-    return {
-      ok: false,
-      claimId: draft.claimId,
-      errors: [{ field: "professional_claims", message: validationErrorUpdateError.message }],
-    };
-  }
-
-  return {
-    ok: false,
+  await setClaimStatus({
+    organizationId: input.organizationId,
     claimId: draft.claimId,
+    status: combinedErrors.length ? "validation_failed" : "draft",
     errors: combinedErrors,
-  };
-}
+  });
 
-return {
-  ok: true,
-  claimId: draft.claimId,
-  errors: [],
-};
-
-  return {
-    ok: true,
-    claimId: draft.claimId,
-    errors: [],
-  };
+  return combinedErrors.length
+    ? { ok: false, claimId: draft.claimId, errors: combinedErrors }
+    : { ok: true, claimId: draft.claimId, errors: [] };
 }
