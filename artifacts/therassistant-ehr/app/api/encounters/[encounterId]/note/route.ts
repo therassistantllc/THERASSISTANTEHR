@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { captureSignedEncounterCharge } from "@/lib/charges/signedEncounterChargeCaptureService";
+import { captureSignedEncounterCharge, isClaimBridgeChargeStatus } from "@/lib/charges/signedEncounterChargeCaptureService";
 import { createClaimDraftFromChargeCapture } from "@/lib/claims/chargeCaptureClaimBridgeService";
 import { buildTextReportPdf } from "@/lib/pdf/textReportPdf";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
@@ -222,7 +222,7 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
       if (encounterUpdateError) throw encounterUpdateError;
       chargeCapture = await captureSignedEncounterCharge({ organizationId, encounterId });
 
-      if (chargeCapture.chargeId && chargeCapture.status === "ready_for_claim") {
+      if (chargeCapture.chargeId && isClaimBridgeChargeStatus(chargeCapture.status)) {
         claimDraft = await createClaimDraftFromChargeCapture({
           organizationId,
           chargeCaptureId: chargeCapture.chargeId,
