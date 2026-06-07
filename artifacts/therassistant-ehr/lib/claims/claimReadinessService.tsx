@@ -46,6 +46,7 @@ export interface CreateClaimDraftInput {
   providerCredentialingProfileId?: string | null;
   patientAccountNumber?: string | null;
   claimNumber?: string | null;
+  providerCredentialingProfileId?: string | null;
 }
 
 export interface CreateClaimDraftResult {
@@ -363,6 +364,7 @@ export async function createProfessionalClaimDraft(
       appointment_id: input.appointmentId ?? undefined,
       encounter_id: input.encounterId ?? undefined,
       payer_profile_id: payerProfileId,
+      provider_credentialing_profile_id: normalizeNullable(input.providerCredentialingProfileId),
       claim_number: claimNumber,
       patient_account_number: patientAccountNumber,
       claim_status: "draft",
