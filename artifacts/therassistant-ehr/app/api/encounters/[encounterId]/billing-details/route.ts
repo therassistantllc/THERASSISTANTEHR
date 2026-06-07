@@ -43,6 +43,21 @@ function money(value: unknown) {
   return Number.isFinite(numeric) ? Math.round(numeric * 100) / 100 : 0;
 }
 
+function errorPayload(error: unknown, fallback: string) {
+  if (error && typeof error === "object") {
+    const record = error as Record<string, unknown>;
+    const message = text(record.message) || fallback;
+    return {
+      success: false,
+      error: message,
+      code: text(record.code) || null,
+      details: text(record.details) || null,
+      hint: text(record.hint) || null,
+    };
+  }
+  return { success: false, error: error instanceof Error ? error.message : fallback };
+}
+
 export async function GET(request: Request, context: { params: Promise<{ encounterId: string }> }) {
   try {
     const supabase = createServerSupabaseAdminClient();
@@ -56,7 +71,7 @@ export async function GET(request: Request, context: { params: Promise<{ encount
 
     const { data: encounter, error: encounterError } = await supabase
       .from("encounters")
-      .select("id, client_id, provider_id, appointment_id, encounter_status, service_date, started_at, ended_at")
+      .select("id, client_id, provider_id, provider_credentialing_profile_id, appointment_id, encounter_status, service_date, started_at, ended_at")
       .eq("organization_id", organizationId)
       .eq("id", encounterId)
       .is("archived_at", null)
@@ -74,7 +89,7 @@ export async function GET(request: Request, context: { params: Promise<{ encount
 
     const { data: serviceLines } = await supabase
       .from("encounter_service_lines")
-      .select("id, service_date, sequence_number, cpt_hcpcs_code, modifier_1, modifier_2, modifier_3, modifier_4, units, charge_amount, place_of_service_code, rendering_provider_id")
+      .select("id, service_date, sequence_number, cpt_hcpcs_code, modifier_1, modifier_2, modifier_3, modifier_4, units, charge_amount, place_of_service_code, rendering_provider_id, rendering_provider_credentialing_profile_id")
       .eq("organization_id", organizationId)
       .eq("encounter_id", encounterId)
       .is("archived_at", null)
@@ -83,10 +98,7 @@ export async function GET(request: Request, context: { params: Promise<{ encount
     return NextResponse.json({ success: true, organizationId, encounter, diagnoses: diagnoses ?? [], serviceLines: serviceLines ?? [] });
   } catch (error) {
     console.error("Encounter billing details GET error:", error);
-    return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : "Encounter billing details failed" },
-      { status: 500 },
-    );
+    return NextResponse.json(errorPayload(error, "Encounter billing details failed"), { status: 500 });
   }
 }
 
@@ -106,7 +118,7 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
 
     const { data: encounter, error: encounterError } = await supabase
       .from("encounters")
-      .select("id, client_id, provider_id, service_date, encounter_status")
+      .select("id, client_id, provider_id, provider_credentialing_profile_id, service_date, encounter_status")
       .eq("organization_id", organizationId)
       .eq("id", encounterId)
       .is("archived_at", null)
@@ -145,6 +157,7 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
         charge_amount: money(line.chargeAmount ?? line.charge_amount),
         place_of_service_code: text(line.placeOfServiceCode ?? line.place_of_service_code) || null,
         rendering_provider_id: encounter.provider_id,
+        rendering_provider_credentialing_profile_id: encounter.provider_credentialing_profile_id ?? null,
         created_at: now,
         updated_at: now,
       }))
@@ -185,12 +198,13 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
     }
 
     if (incomingDiagnosesProvided) {
-      await supabase
+      const { error: archiveDiagnosisError } = await supabase
         .from("encounter_diagnoses")
         .update({ archived_at: now, updated_at: now })
         .eq("organization_id", organizationId)
         .eq("encounter_id", encounterId)
         .is("archived_at", null);
+      if (archiveDiagnosisError) throw archiveDiagnosisError;
 
       if (diagnosisPayload.length > 0) {
         const { error } = await supabase.from("encounter_diagnoses").insert(diagnosisPayload);
@@ -199,12 +213,13 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
     }
 
     if (incomingServiceLinesProvided) {
-      await supabase
+      const { error: archiveServiceLineError } = await supabase
         .from("encounter_service_lines")
         .update({ archived_at: now, updated_at: now })
         .eq("organization_id", organizationId)
         .eq("encounter_id", encounterId)
         .is("archived_at", null);
+      if (archiveServiceLineError) throw archiveServiceLineError;
 
       if (servicePayload.length > 0) {
         const { error } = await supabase.from("encounter_service_lines").insert(servicePayload);
@@ -223,6 +238,6 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
     return NextResponse.json({ success: true, encounterId, diagnosisCount: diagnosisPayload.length, serviceLineCount: servicePayload.length, chargeCapture });
   } catch (error) {
     console.error("Encounter billing details POST error:", error);
-    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "Encounter billing details save failed" }, { status: 500 });
+    return NextResponse.json(errorPayload(error, "Encounter billing details save failed"), { status: 500 });
   }
 }
