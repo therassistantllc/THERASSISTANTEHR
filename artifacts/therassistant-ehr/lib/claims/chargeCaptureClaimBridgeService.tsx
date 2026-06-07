@@ -832,6 +832,7 @@ export async function createClaimDraftFromChargeCapture(
       providerResolution.renderingProviderNpi,
     ),
     billingProvider,
+    providerCredentialingProfileId: providerResolution.providerCredentialingProfileId,
     patientAccountNumber: charge.encounter_id
       ? `ENC-${String(charge.encounter_id).slice(0, 8)}`
       : null,

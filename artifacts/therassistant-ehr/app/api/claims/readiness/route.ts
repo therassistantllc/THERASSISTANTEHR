@@ -49,6 +49,7 @@ export async function POST(request: Request) {
       diagnosisCodes: body.diagnosisCodes,
       serviceLines: body.serviceLines,
       billingProvider: body.billingProvider,
+      providerCredentialingProfileId: body.providerCredentialingProfileId ?? null,
       patientAccountNumber: body.patientAccountNumber ?? null,
       claimNumber: body.claimNumber ?? null,
     });
