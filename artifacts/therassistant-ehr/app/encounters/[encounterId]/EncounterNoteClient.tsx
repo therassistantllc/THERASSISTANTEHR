@@ -135,7 +135,6 @@ function getOrganizationId() {
   const params = new URLSearchParams(window.location.search);
   return params.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || "";
 }
-
 function formatDate(value: string | null | undefined): string {
   if (!value) return "Not listed";
   const date = new Date(`${value}`.includes("T") ? value : `${value}T00:00:00`);
