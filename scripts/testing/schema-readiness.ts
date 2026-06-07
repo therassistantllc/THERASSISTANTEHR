@@ -45,6 +45,12 @@ const REQUIRED_COLUMNS: Record<string, string[]> = {
     "raw_payload",
     "created_at",
   ],
+  claim_parties_snapshot: [
+    "billing_provider_taxonomy",
+    "submitter_id",
+    "submitter_name",
+    "submitter_contact_email",
+  ],
   clearinghouse_connections: [
     "claims_x12_version",
     "eligibility_x12_version",
