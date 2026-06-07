@@ -44,6 +44,33 @@ type DbRow = Record<string, unknown>;
 
 const ALLOWED_PRIORITIES = new Set(["low", "normal", "high", "urgent"]);
 
+function resolveSafeInternalOrigin(requestUrl: string): string | null {
+  const configured = (process.env.INTERNAL_API_ORIGIN ?? "").trim();
+  if (configured) {
+    try {
+      return new URL(configured).origin;
+    } catch {
+      return null;
+    }
+  }
+
+  const allowlist = (process.env.ALLOWED_APP_ORIGINS ?? "")
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+
+  if (allowlist.length === 0) return null;
+
+  let requestOrigin: string;
+  try {
+    requestOrigin = new URL(requestUrl).origin;
+  } catch {
+    return null;
+  }
+
+  return allowlist.includes(requestOrigin) ? requestOrigin : null;
+}
+
 interface Body {
   organizationId?: string;
   action?:
@@ -124,7 +151,13 @@ export async function POST(
     if (action === "retry") {
       // Delegate to the canonical submit endpoint so we share its
       // idempotency, concurrency, credential, and enrollment gates.
-      const origin = new URL(request.url).origin;
+      const origin = resolveSafeInternalOrigin(request.url);
+      if (!origin) {
+        return NextResponse.json(
+          { success: false, error: "Internal API origin is not configured" },
+          { status: 500 },
+        );
+      }
       const res = await fetch(
         `${origin}/api/claims/837p/batch/${encodeURIComponent(batchId)}/submit`,
         {
