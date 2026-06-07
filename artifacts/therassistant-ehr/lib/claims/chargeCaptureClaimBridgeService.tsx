@@ -1,10 +1,8 @@
 import {
   createProfessionalClaimDraft,
-  validateProfessionalClaimReadiness,
   type BillingProviderInput,
   type ClaimServiceLineInput,
 } from "@/lib/claims/claimReadinessService";
-import { assignClaimToAutoBatch } from "@/lib/claims/autoBatchClaimService";
 import { resolveProviderCredentialingProfile } from "@/lib/providers/providerCredentialingResolverService";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 
@@ -21,6 +19,7 @@ const CLAIM_OVERWRITE_GUARD_STATUSES = new Set([
   "paid",
   "denied",
 ]);
+
 const CLAIM_PRE_SUBMISSION_STATUSES = new Set([
   "draft",
   "ready_for_validation",
@@ -56,18 +55,40 @@ function readTextArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map(text).filter(Boolean) : [];
 }
 
+function nullableText(value: unknown): string | null {
+  const valueText = text(value);
+  return valueText.length > 0 ? valueText : null;
+}
+
+function normalizeDate(value: unknown): string | null {
+  const valueText = text(value);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(valueText)) return null;
+  return valueText;
+}
+
+function firstDbText(row: DbRow | null | undefined, keys: string[]): string {
+  if (!row) return "";
+  for (const key of keys) {
+    const value = text(row[key]);
+    if (value) return value;
+  }
+  return "";
+}
+
 function serviceLinesFromCharge(charge: DbRow, renderingProviderNpi: string | null): ClaimServiceLineInput[] {
-  return readArray(charge.service_lines).map((line) => ({
-    serviceDate: text(line.serviceDate) || text(charge.service_date),
-    procedureCode: text(line.procedureCode),
-    modifiers: readTextArray(line.modifiers),
-    units: Number(line.units ?? 1) || 1,
-    chargeAmount: money(line.chargeAmount),
-    diagnosisPointers: ["1"],
-    placeOfService: text(line.placeOfService) || text(charge.place_of_service) || null,
-    renderingProviderNpi: text(line.renderingProviderNpi) || renderingProviderNpi,
-    authorizationNumber: text(line.authorizationNumber) || null,
-  })).filter((line) => line.procedureCode && line.chargeAmount > 0 && line.serviceDate);
+  return readArray(charge.service_lines)
+    .map((line) => ({
+      serviceDate: text(line.serviceDate) || text(charge.service_date),
+      procedureCode: text(line.procedureCode),
+      modifiers: readTextArray(line.modifiers),
+      units: Number(line.units ?? 1) || 1,
+      chargeAmount: money(line.chargeAmount),
+      diagnosisPointers: ["1"],
+      placeOfService: text(line.placeOfService) || text(charge.place_of_service) || null,
+      renderingProviderNpi: text(line.renderingProviderNpi) || renderingProviderNpi,
+      authorizationNumber: text(line.authorizationNumber) || null,
+    }))
+    .filter((line) => line.procedureCode && line.chargeAmount > 0 && line.serviceDate);
 }
 
 async function linkChargeToClaim(params: {
@@ -95,7 +116,7 @@ async function linkChargeToClaim(params: {
   if (chargeLinkError) throw new Error(chargeLinkError.message);
 
   if (params.encounterId || params.caseId) {
-    const { error: encounterLinkError } = await supabase
+    const { error: claimLinkError } = await supabase
       .from("professional_claims")
       .update({
         encounter_id: params.encounterId ?? undefined,
@@ -105,28 +126,29 @@ async function linkChargeToClaim(params: {
       .eq("organization_id", params.organizationId)
       .eq("id", params.claimId);
 
-    if (encounterLinkError) throw new Error(encounterLinkError.message);
+    if (claimLinkError) throw new Error(claimLinkError.message);
   }
 }
 
-function normalizeDate(value: unknown): string | null {
-  const valueText = text(value);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(valueText)) return null;
-  return valueText;
-}
+async function keepClaimInPrepDraft(params: {
+  organizationId: string;
+  claimId: string;
+}) {
+  const supabase = createServerSupabaseAdminClient();
+  if (!supabase) throw new Error("Database connection not available");
 
-function nullableText(value: unknown): string | null {
-  const valueText = text(value);
-  return valueText.length > 0 ? valueText : null;
-}
+  const { error } = await supabase
+    .from("professional_claims")
+    .update({
+      claim_status: "draft",
+      validation_errors: [],
+      last_validated_at: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("organization_id", params.organizationId)
+    .eq("id", params.claimId);
 
-function firstDbText(row: DbRow | null | undefined, keys: string[]): string {
-  if (!row) return "";
-  for (const key of keys) {
-    const value = text(row[key]);
-    if (value) return value;
-  }
-  return "";
+  if (error) throw new Error(error.message);
 }
 
 async function resolvePolicySnapshot(params: {
@@ -381,10 +403,12 @@ async function syncExistingClaimFromCharge(params: {
     return {
       ok: false,
       claimId: params.claimId,
-      errors: [{
-        field: "claim_status",
-        message: `Claim ${params.claimId} is ${claimStatus}; signed-note charge changes require an amendment/correction flow instead of overwriting this claim.`,
-      }],
+      errors: [
+        {
+          field: "claim_status",
+          message: `Claim ${params.claimId} is ${claimStatus}; signed-note charge changes require an amendment/correction flow instead of overwriting this claim.`,
+        },
+      ],
     };
   }
 
@@ -427,8 +451,9 @@ async function syncExistingClaimFromCharge(params: {
       total_charge: totalCharge,
       place_of_service: placeOfService,
       diagnosis_codes: diagnosisCodes,
-      claim_status: "ready_for_validation",
+      claim_status: "draft",
       validation_errors: [],
+      last_validated_at: null,
       updated_at: now,
     })
     .eq("organization_id", params.organizationId)
@@ -571,8 +596,13 @@ export async function createClaimDraftFromChargeCapture(
       encounterId: text(charge.encounter_id) || null,
       caseId: text((charge as DbRow).case_id) || null,
     });
-    const readiness = await validateProfessionalClaimReadiness(existingClaimId, input.organizationId);
-    return { ok: readiness.ok, claimId: existingClaimId, errors: readiness.errors };
+
+    await keepClaimInPrepDraft({
+      organizationId: input.organizationId,
+      claimId: existingClaimId,
+    });
+
+    return { ok: true, claimId: existingClaimId, errors: [] };
   }
 
   if (statusText === "claim_created") {
@@ -614,27 +644,10 @@ export async function createClaimDraftFromChargeCapture(
 
   if (!draft.ok) return draft;
 
-  const readiness = await validateProfessionalClaimReadiness(draft.claimId, input.organizationId);
+  await keepClaimInPrepDraft({
+    organizationId: input.organizationId,
+    claimId: draft.claimId,
+  });
 
-  if (readiness.ok) {
-    const autoBatch = await assignClaimToAutoBatch({
-      organizationId: input.organizationId,
-      claimId: draft.claimId,
-    });
-    if (!autoBatch.ok) {
-      return {
-        ok: false,
-        claimId: draft.claimId,
-        errors: [
-          ...readiness.errors,
-          {
-            field: "auto_batch",
-            message: autoBatch.error ?? "Claim was validated but auto-batching failed",
-          },
-        ],
-      };
-    }
-  }
-
-  return { ok: readiness.ok, claimId: draft.claimId, errors: readiness.errors };
+  return { ok: true, claimId: draft.claimId, errors: [] };
 }
