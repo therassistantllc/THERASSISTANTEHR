@@ -30,6 +30,7 @@ export interface ClaimServiceLineInput {
   placeOfService?: string | null;
   renderingProviderNpi?: string | null;
   authorizationNumber?: string | null;
+  providerCredentialingProfileId?: string | null;
 }
 
 export interface CreateClaimDraftInput {
@@ -42,6 +43,7 @@ export interface CreateClaimDraftInput {
   diagnosisCodes: string[];
   serviceLines: ClaimServiceLineInput[];
   billingProvider: BillingProviderInput;
+  providerCredentialingProfileId?: string | null;
   patientAccountNumber?: string | null;
   claimNumber?: string | null;
   providerCredentialingProfileId?: string | null;
@@ -396,6 +398,9 @@ export async function createProfessionalClaimDraft(
     place_of_service: normalizeNullable(line.placeOfService) ?? placeOfService,
     rendering_provider_npi: normalizeNullable(line.renderingProviderNpi),
     authorization_number: normalizeNullable(line.authorizationNumber),
+    provider_credentialing_profile_id:
+      normalizeNullable(line.providerCredentialingProfileId) ??
+      normalizeNullable(input.providerCredentialingProfileId),
   }));
 
   const { error: lineError } = await supabase.from("professional_claim_service_lines").insert(serviceLinePayload);

@@ -3713,6 +3713,7 @@ CREATE TABLE IF NOT EXISTS "public"."professional_claim_service_lines" (
     "place_of_service" "text",
     "rendering_provider_npi" "text",
     "authorization_number" "text",
+    "provider_credentialing_profile_id" "uuid",
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL
 );
@@ -8322,6 +8323,10 @@ ALTER TABLE ONLY "public"."payment_postings"
 
 ALTER TABLE ONLY "public"."professional_claim_service_lines"
     ADD CONSTRAINT "professional_claim_service_lines_claim_id_fkey" FOREIGN KEY ("claim_id") REFERENCES "public"."professional_claims"("id") ON DELETE CASCADE;
+
+
+ALTER TABLE ONLY "public"."professional_claim_service_lines"
+    ADD CONSTRAINT "professional_claim_service_lines_provider_credentialing_profile_id_fkey" FOREIGN KEY ("provider_credentialing_profile_id") REFERENCES "public"."provider_credentialing_profiles"("id") ON DELETE SET NULL;
 
 
 
