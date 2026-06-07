@@ -1,9 +1,7 @@
 import {
   createProfessionalClaimDraft,
-  validateProfessionalClaimReadiness,
   type ClaimServiceLineInput,
 } from "@/lib/claims/claimReadinessService";
-import { assignClaimToAutoBatch } from "@/lib/claims/autoBatchClaimService";
 import { resolveProviderCredentialingProfile } from "@/lib/providers/providerCredentialingResolverService";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 
@@ -166,8 +164,7 @@ export async function createClaimDraftFromChargeCapture(
       claimId: existingClaimId,
       encounterId: text(charge.encounter_id) || null,
     });
-    const readiness = await validateProfessionalClaimReadiness(existingClaimId, input.organizationId);
-    return { ok: readiness.ok, claimId: existingClaimId, errors: readiness.errors };
+    return { ok: true, claimId: existingClaimId, errors: [] };
   }
 
   if (statusText === "claim_created") {
@@ -208,27 +205,5 @@ export async function createClaimDraftFromChargeCapture(
 
   if (!draft.ok) return draft;
 
-  const readiness = await validateProfessionalClaimReadiness(draft.claimId, input.organizationId);
-
-  if (readiness.ok) {
-    const autoBatch = await assignClaimToAutoBatch({
-      organizationId: input.organizationId,
-      claimId: draft.claimId,
-    });
-    if (!autoBatch.ok) {
-      return {
-        ok: false,
-        claimId: draft.claimId,
-        errors: [
-          ...readiness.errors,
-          {
-            field: "auto_batch",
-            message: autoBatch.error ?? "Claim was validated but auto-batching failed",
-          },
-        ],
-      };
-    }
-  }
-
-  return { ok: readiness.ok, claimId: draft.claimId, errors: readiness.errors };
+  return { ok: true, claimId: draft.claimId, errors: [] };
 }

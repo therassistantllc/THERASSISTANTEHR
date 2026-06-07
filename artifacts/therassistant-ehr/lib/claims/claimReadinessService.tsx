@@ -363,7 +363,7 @@ export async function createProfessionalClaimDraft(
       payer_profile_id: payerProfileId,
       claim_number: claimNumber,
       patient_account_number: patientAccountNumber,
-      claim_status: "ready_for_validation",
+      claim_status: "draft",
       total_charge: totalCharge,
       place_of_service: placeOfService,
       diagnosis_codes: input.diagnosisCodes,
@@ -720,7 +720,6 @@ export async function validateProfessionalClaimReadiness(
   await supabase
     .from("professional_claims")
     .update({
-      claim_status: ready ? "ready_for_batch" : "validation_failed",
       validation_errors: errors,
       last_validated_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -733,4 +732,39 @@ export async function validateProfessionalClaimReadiness(
     claimId,
     errors,
   };
+}
+
+export async function releaseProfessionalClaimToBatch(
+  claimId: string,
+  organizationId: string,
+): Promise<ClaimReadinessResult> {
+  const readiness = await validateProfessionalClaimReadiness(claimId, organizationId);
+  const supabase = createServerSupabaseAdminClient();
+  if (!supabase) return readiness;
+
+  if (readiness.ok) {
+    await supabase
+      .from("professional_claims")
+      .update({
+        claim_status: "ready_for_batch",
+        validation_errors: [],
+        last_validated_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", claimId)
+      .eq("organization_id", organizationId);
+  } else {
+    await supabase
+      .from("professional_claims")
+      .update({
+        claim_status: "draft",
+        validation_errors: readiness.errors,
+        last_validated_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", claimId)
+      .eq("organization_id", organizationId);
+  }
+
+  return readiness;
 }
