@@ -584,8 +584,11 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
       const signResult = await persistNote("sign", codingReport);
       setShowSignModal(false);
 
-      const chargeCaptureId = signResult.chargeCapture?.chargeId;
-      const claimPrepUrl = `/billing/charge-capture?organizationId=${encodeURIComponent(organizationId)}&encounterId=${encodeURIComponent(encounterId)}${chargeCaptureId ? `&chargeCaptureId=${encodeURIComponent(chargeCaptureId)}` : ""}`;
+      const claimId = signResult.claimDraft?.claimId;
+      if (claimId) {
+        router.push(`/billing/claims/${claimId}?organizationId=${encodeURIComponent(organizationId)}&sourceEncounterId=${encodeURIComponent(encounterId)}`);
+        return;
+      }
 
       const chargeStatus = signResult.chargeCapture?.status;
       if (chargeStatus === "patient_responsibility") {
@@ -601,13 +604,13 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
       }
 
       if (chargeStatus === "ready_for_claim") {
-        setMessage("Note signed. Review and release the charge from Claim Prep.");
-        router.push(claimPrepUrl);
+        setMessage("Note signed and charge capture is ready, but no claim draft was created.");
+        setError(`Claim creation blocker: ${describeRevenueCycleErrors(signResult.claimDraft?.errors)}`);
         return;
       }
 
       setMessage("Note signed. Review charge capture for next billing steps.");
-      router.push(claimPrepUrl);
+      router.push(`/billing/charge-capture?organizationId=${encodeURIComponent(organizationId)}&encounterId=${encodeURIComponent(encounterId)}`);
     } catch (signError) {
       setError(signError instanceof Error ? signError.message : "Failed to sign note");
     } finally {

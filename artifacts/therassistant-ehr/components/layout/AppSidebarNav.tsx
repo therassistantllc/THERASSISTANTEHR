@@ -167,7 +167,7 @@ export default function AppSidebarNav() {
       {billingExpanded ? (
         <div className={styles.subnav}>
           <SubNavLinkIcon href="/billing/my-inbox" icon={<TasksIcon />} label="Dashboard" prefixes={DASHBOARD_PREFIXES} pathname={pathname} badge={<MyInboxBadge />} />
-          <SubNavLinkIcon href="/billing/ready-to-generate" icon={<ClipboardIcon />} label="Claim Prep" prefixes={CLAIM_PREP_PREFIXES} pathname={pathname} />
+          <SubNavLinkIcon href="/billing/ready-to-generate" icon={<ClipboardIcon />} label="Charges" prefixes={CLAIM_PREP_PREFIXES} pathname={pathname} />
           <SubNavLinkIcon href="/billing/batches" icon={<ClipboardIcon />} label="837P Batches" prefixes={BATCHES_837P_PREFIXES} pathname={pathname} />
           <SubNavLinkIcon href="/billing/eligibility-batches" icon={<ShieldIcon />} label="Eligibility" prefixes={["/billing/eligibility-batches", "/billing/eligibility-issues"]} pathname={pathname} />
           <SubNavLinkIcon href="/billing/claims" icon={<ClipboardIcon />} label="Claims" prefixes={CLAIMS_PREFIXES} pathname={pathname} />
@@ -228,4 +228,3 @@ function MyInboxBadge() {
   if (!count) return null;
   return <span aria-label={`${count} routed eligibility items`} style={{ background: "#DC2626", color: "#FFFFFF", borderRadius: 999, fontSize: 10.5, fontWeight: 700, padding: "1px 7px", minWidth: 18, textAlign: "center", lineHeight: 1.4 }}>{count > 99 ? "99+" : count}</span>;
 }
-
