@@ -92,6 +92,7 @@ function fallbackBillingProvider(): BillingProviderInput {
 function serviceLinesFromCharge(
   charge: DbRow,
   renderingProviderNpi: string | null,
+  providerCredentialingProfileId: string | null,
 ): ClaimServiceLineInput[] {
   return readArray(charge.service_lines)
     .map((line) => ({
@@ -104,6 +105,11 @@ function serviceLinesFromCharge(
       placeOfService: text(line.placeOfService) || text(charge.place_of_service) || null,
       renderingProviderNpi: text(line.renderingProviderNpi) || renderingProviderNpi,
       authorizationNumber: text(line.authorizationNumber) || null,
+      providerCredentialingProfileId:
+        text(line.providerCredentialingProfileId) ||
+        text(line.provider_credentialing_profile_id) ||
+        text(charge.provider_credentialing_profile_id) ||
+        providerCredentialingProfileId,
     }))
     .filter((line) => line.procedureCode && line.chargeAmount > 0 && line.serviceDate);
 }
@@ -455,6 +461,7 @@ function serviceLinePayloadFromCharge(params: {
   claimId: string;
   serviceLines: ClaimServiceLineInput[];
   placeOfService: string;
+  providerCredentialingProfileId?: string | null;
 }) {
   return params.serviceLines.map((line, index) => ({
     claim_id: params.claimId,
@@ -469,6 +476,9 @@ function serviceLinePayloadFromCharge(params: {
     place_of_service: nullableText(line.placeOfService) ?? params.placeOfService,
     rendering_provider_npi: nullableText(line.renderingProviderNpi),
     authorization_number: nullableText(line.authorizationNumber),
+    provider_credentialing_profile_id:
+      nullableText(line.providerCredentialingProfileId) ??
+      nullableText(params.providerCredentialingProfileId),
     updated_at: new Date().toISOString(),
   }));
 }
@@ -552,6 +562,7 @@ async function syncExistingClaimFromCharge(params: {
   const serviceLines = serviceLinesFromCharge(
     params.charge,
     providerResolution.renderingProviderNpi,
+    providerResolution.providerCredentialingProfileId,
   );
 
   const placeOfService =
@@ -611,6 +622,9 @@ async function syncExistingClaimFromCharge(params: {
     claimId: params.claimId,
     serviceLines,
     placeOfService,
+    providerCredentialingProfileId:
+      nullableText(params.charge.provider_credentialing_profile_id) ??
+      providerResolution.providerCredentialingProfileId,
   });
 
   if (linePayload.length > 0) {
@@ -830,8 +844,12 @@ export async function createClaimDraftFromChargeCapture(
     serviceLines: serviceLinesFromCharge(
       charge as DbRow,
       providerResolution.renderingProviderNpi,
+      providerResolution.providerCredentialingProfileId,
     ),
     billingProvider,
+    providerCredentialingProfileId:
+      nullableText((charge as DbRow).provider_credentialing_profile_id) ??
+      providerResolution.providerCredentialingProfileId,
     patientAccountNumber: charge.encounter_id
       ? `ENC-${String(charge.encounter_id).slice(0, 8)}`
       : null,
