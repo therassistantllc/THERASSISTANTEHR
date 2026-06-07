@@ -46,62 +46,53 @@ function money(value: unknown) {
 function errorPayload(error: unknown, fallback: string) {
   if (error && typeof error === "object") {
     const record = error as Record<string, unknown>;
-    const message = text(record.message) || fallback;
     return {
       success: false,
-      error: message,
+      error: text(record.message) || fallback,
       code: text(record.code) || null,
       details: text(record.details) || null,
       hint: text(record.hint) || null,
     };
   }
-  return { success: false, error: error instanceof Error ? error.message : fallback };
+
+  return {
+    success: false,
+    error: error instanceof Error ? error.message : fallback,
+  };
 }
 
 export async function GET(request: Request, context: { params: Promise<{ encounterId: string }> }) {
   try {
     const supabase = createServerSupabaseAdminClient();
-    if (!supabase) return NextResponse.json({ success: false, error: "Database connection not available" }, { status: 500 });
+    if (!supabase) {
+      return NextResponse.json({ success: false, error: "Database connection not available" }, { status: 500 });
+    }
 
     const { encounterId } = await context.params;
     const { searchParams } = new URL(request.url);
     const organizationId = searchParams.get("organizationId");
 
-    if (!organizationId) return NextResponse.json({ success: false, error: "organizationId is required" }, { status: 400 });
+    if (!organizationId) {
+      return NextResponse.json({ success: false, error: "organizationId is required" }, { status: 400 });
+    }
 
     const { data: encounter, error: encounterError } = await supabase
       .from("encounters")
-      .select("id, client_id, provider_id, provider_credentialing_profile_id, appointment_id, encounter_status, service_date, started_at, ended_at")
+      .select(
+        "id, client_id, provider_id, provider_credentialing_profile_id, appointment_id, encounter_status, service_date, started_at, ended_at",
+      )
       .eq("organization_id", organizationId)
       .eq("id", encounterId)
       .is("archived_at", null)
       .maybeSingle();
 
-if (encounterError || !encounter) {
-  console.error("Billing details encounter lookup failed", {
-    encounterId,
-    organizationId,
-    encounterError,
-    found: Boolean(encounter),
-  });
+    if (encounterError) throw encounterError;
 
-  return NextResponse.json(
-    {
-      success: false,
-      error: encounterError?.message || "Encounter not found",
-      debug: {
-        encounterId,
-        organizationId,
-        found: Boolean(encounter),
-        code: encounterError?.code ?? null,
-        details: encounterError?.details ?? null,
-        hint: encounterError?.hint ?? null,
-      },
-    },
-    { status: 404 },
-  );
-}
-    const { data: diagnoses } = await supabase
+    if (!encounter) {
+      return NextResponse.json({ success: false, error: "Encounter not found" }, { status: 404 });
+    }
+
+    const { data: diagnoses, error: diagnosesError } = await supabase
       .from("encounter_diagnoses")
       .select("id, diagnosis_code, diagnosis_description, is_primary, sequence_number, present_on_claim")
       .eq("organization_id", organizationId)
@@ -109,15 +100,27 @@ if (encounterError || !encounter) {
       .is("archived_at", null)
       .order("sequence_number", { ascending: true });
 
-    const { data: serviceLines } = await supabase
+    if (diagnosesError) throw diagnosesError;
+
+    const { data: serviceLines, error: serviceLinesError } = await supabase
       .from("encounter_service_lines")
-      .select("id, service_date, sequence_number, cpt_hcpcs_code, modifier_1, modifier_2, modifier_3, modifier_4, units, charge_amount, place_of_service_code, rendering_provider_id, rendering_provider_credentialing_profile_id")
+      .select(
+        "id, service_date, sequence_number, cpt_hcpcs_code, modifier_1, modifier_2, modifier_3, modifier_4, units, charge_amount, place_of_service_code, rendering_provider_id, rendering_provider_credentialing_profile_id",
+      )
       .eq("organization_id", organizationId)
       .eq("encounter_id", encounterId)
       .is("archived_at", null)
       .order("sequence_number", { ascending: true });
 
-    return NextResponse.json({ success: true, organizationId, encounter, diagnoses: diagnoses ?? [], serviceLines: serviceLines ?? [] });
+    if (serviceLinesError) throw serviceLinesError;
+
+    return NextResponse.json({
+      success: true,
+      organizationId,
+      encounter,
+      diagnoses: diagnoses ?? [],
+      serviceLines: serviceLines ?? [],
+    });
   } catch (error) {
     console.error("Encounter billing details GET error:", error);
     return NextResponse.json(errorPayload(error, "Encounter billing details failed"), { status: 500 });
@@ -127,16 +130,24 @@ if (encounterError || !encounter) {
 export async function POST(request: Request, context: { params: Promise<{ encounterId: string }> }) {
   try {
     const supabase = createServerSupabaseAdminClient();
-    if (!supabase) return NextResponse.json({ success: false, error: "Database connection not available" }, { status: 500 });
+    if (!supabase) {
+      return NextResponse.json({ success: false, error: "Database connection not available" }, { status: 500 });
+    }
 
     const { encounterId } = await context.params;
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
-    if (!body || typeof body !== "object") return NextResponse.json({ success: false, error: "Request body must be valid JSON" }, { status: 400 });
+
+    if (!body || typeof body !== "object") {
+      return NextResponse.json({ success: false, error: "Request body must be valid JSON" }, { status: 400 });
+    }
 
     const organizationId = text(body.organizationId);
     const diagnoses = Array.isArray(body.diagnoses) ? (body.diagnoses as DiagnosisInput[]) : [];
     const serviceLines = Array.isArray(body.serviceLines) ? (body.serviceLines as ServiceLineInput[]) : [];
-    if (!organizationId) return NextResponse.json({ success: false, error: "organizationId is required" }, { status: 400 });
+
+    if (!organizationId) {
+      return NextResponse.json({ success: false, error: "organizationId is required" }, { status: 400 });
+    }
 
     const { data: encounter, error: encounterError } = await supabase
       .from("encounters")
@@ -146,15 +157,11 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
       .is("archived_at", null)
       .maybeSingle();
 
-      console.log("BILLING DETAILS DEBUG", {
-  supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
-  hasServiceRole: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
-  encounterId,
-  organizationId,
-  encounter,
-  encounterError,
-});
-    if (encounterError || !encounter) return NextResponse.json({ success: false, error: "Encounter not found" }, { status: 404 });
+    if (encounterError) throw encounterError;
+
+    if (!encounter) {
+      return NextResponse.json({ success: false, error: "Encounter not found" }, { status: 404 });
+    }
 
     const now = new Date().toISOString();
 
@@ -193,79 +200,86 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
       }))
       .filter((line) => line.cpt_hcpcs_code && line.charge_amount > 0 && line.service_date);
 
-    const existingDiagnosisCount = await supabase
-      .from("encounter_diagnoses")
-      .select("id", { count: "exact", head: true })
-      .eq("organization_id", organizationId)
-      .eq("encounter_id", encounterId)
-      .is("archived_at", null);
-
-    const existingServiceLineCount = await supabase
-      .from("encounter_service_lines")
-      .select("id", { count: "exact", head: true })
-      .eq("organization_id", organizationId)
-      .eq("encounter_id", encounterId)
-      .is("archived_at", null);
-
     const incomingDiagnosesProvided = diagnoses.length > 0;
     const incomingServiceLinesProvided = serviceLines.length > 0;
 
-    if (incomingDiagnosesProvided && diagnosisPayload.length === 0 && (existingDiagnosisCount.count ?? 0) > 0) {
-      return NextResponse.json({ success: false, error: "Refusing to replace existing diagnoses with an empty or invalid diagnosis payload." }, { status: 422 });
+    if (incomingDiagnosesProvided && diagnosisPayload.length === 0) {
+      return NextResponse.json(
+        { success: false, error: "Refusing to save an empty or invalid diagnosis payload." },
+        { status: 422 },
+      );
     }
 
-    if (incomingServiceLinesProvided && servicePayload.length === 0 && (existingServiceLineCount.count ?? 0) > 0) {
-      return NextResponse.json({ success: false, error: "Refusing to replace existing service lines with an empty or invalid service line payload." }, { status: 422 });
+    if (incomingServiceLinesProvided && servicePayload.length === 0) {
+      return NextResponse.json(
+        { success: false, error: "Refusing to save an empty or invalid service line payload." },
+        { status: 422 },
+      );
     }
 
     const invalidPos = servicePayload.find((line) => {
       const pos = String(line.place_of_service_code ?? "").trim();
       return pos.length > 0 && !isAllowedPlaceOfService(pos);
     });
+
     if (invalidPos) {
-      const warning = placeOfServiceWarning(invalidPos.place_of_service_code) ?? `POS ${String(invalidPos.place_of_service_code ?? "").trim()} is not allowed. Use 11 (office) or 02 (telehealth).`;
-      return NextResponse.json({ success: false, error: warning, errors: [{ field: "serviceLines.placeOfServiceCode", message: warning }] }, { status: 422 });
+      const warning =
+        placeOfServiceWarning(invalidPos.place_of_service_code) ??
+        `POS ${String(invalidPos.place_of_service_code ?? "").trim()} is not allowed. Use 11 (office) or 02 (telehealth).`;
+
+      return NextResponse.json(
+        {
+          success: false,
+          error: warning,
+          errors: [{ field: "serviceLines.placeOfServiceCode", message: warning }],
+        },
+        { status: 422 },
+      );
     }
 
     if (incomingDiagnosesProvided) {
-      const { error: archiveDiagnosisError } = await supabase
+      const { error: deleteDiagnosisError } = await supabase
         .from("encounter_diagnoses")
-        .update({ archived_at: now, updated_at: now })
+        .delete()
         .eq("organization_id", organizationId)
-        .eq("encounter_id", encounterId)
-        .is("archived_at", null);
-      if (archiveDiagnosisError) throw archiveDiagnosisError;
+        .eq("encounter_id", encounterId);
+
+      if (deleteDiagnosisError) throw deleteDiagnosisError;
 
       if (diagnosisPayload.length > 0) {
-        const { error } = await supabase.from("encounter_diagnoses").insert(diagnosisPayload);
-        if (error) throw error;
+        const { error: insertDiagnosisError } = await supabase.from("encounter_diagnoses").insert(diagnosisPayload);
+        if (insertDiagnosisError) throw insertDiagnosisError;
       }
     }
 
     if (incomingServiceLinesProvided) {
-      const { error: archiveServiceLineError } = await supabase
+      const { error: deleteServiceLineError } = await supabase
         .from("encounter_service_lines")
-        .update({ archived_at: now, updated_at: now })
+        .delete()
         .eq("organization_id", organizationId)
-        .eq("encounter_id", encounterId)
-        .is("archived_at", null);
-      if (archiveServiceLineError) throw archiveServiceLineError;
+        .eq("encounter_id", encounterId);
+
+      if (deleteServiceLineError) throw deleteServiceLineError;
 
       if (servicePayload.length > 0) {
-        const { error } = await supabase.from("encounter_service_lines").insert(servicePayload);
-        if (error) throw error;
+        const { error: insertServiceLineError } = await supabase.from("encounter_service_lines").insert(servicePayload);
+        if (insertServiceLineError) throw insertServiceLineError;
       }
     }
 
     let chargeCapture = null;
+
     if (encounter.encounter_status === "signed") {
-      // Keep the Claim Prep queue synchronized after billing edits, but do not
-      // create/release the professional claim until the biller clicks Release
-      // from Claim Prep.
       chargeCapture = await captureSignedEncounterCharge({ organizationId, encounterId });
     }
 
-    return NextResponse.json({ success: true, encounterId, diagnosisCount: diagnosisPayload.length, serviceLineCount: servicePayload.length, chargeCapture });
+    return NextResponse.json({
+      success: true,
+      encounterId,
+      diagnosisCount: diagnosisPayload.length,
+      serviceLineCount: servicePayload.length,
+      chargeCapture,
+    });
   } catch (error) {
     console.error("Encounter billing details POST error:", error);
     return NextResponse.json(errorPayload(error, "Encounter billing details save failed"), { status: 500 });
