@@ -20,6 +20,14 @@ path = "scripts/post-merge.sh"
 timeoutMs = 20000
 
 [[ports]]
+localPort = 8080
+externalPort = 8080
+
+[[ports]]
+localPort = 8081
+externalPort = 8081
+
+[[ports]]
 localPort = 22803
 externalPort = 80
 
@@ -27,3 +35,5 @@ externalPort = 80
 
 [userenv.shared]
 NEXT_PUBLIC_ORGANIZATION_ID = "11111111-1111-1111-1111-111111111111"
+NEXT_PUBLIC_SUPABASE_URL = "https://btsbmozbggjllpcsuyyy.supabase.co"
+NEXT_PUBLIC_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ0c2Jtb3piZ2dqbGxwY3N1eXl5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY2MjY5NzIsImV4cCI6MjA5MjIwMjk3Mn0.0UxjkwJe5hmL88qUiVxishNg7UKjE4r6Yms-U2obhDk"
