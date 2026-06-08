@@ -18,3 +18,12 @@ expertMode = true
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 20000
+
+[[ports]]
+localPort = 22803
+externalPort = 80
+
+[userenv]
+
+[userenv.shared]
+NEXT_PUBLIC_ORGANIZATION_ID = "11111111-1111-1111-1111-111111111111"
