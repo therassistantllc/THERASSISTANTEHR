@@ -1,0 +1,123 @@
+Perform a table/process deduplication audit across the entire THERASSISTANT EHR.
+
+For every duplicated or overlapping concept, classify each table as one of:
+
+Canonical active table
+Staging/import table
+Audit/history table
+Join/link table
+Compatibility/legacy table
+Deprecated/unused table
+Unknown, requires code trace
+
+Do not delete unknown or legacy tables. Do not drop columns. Do not migrate data until the canonical role is proven.
+
+For each business concept, identify:
+
+Which file writes to the table
+Which file reads from the table
+Which API endpoint exposes it
+Which UI page displays it
+Which downstream process depends on it
+Whether it has rows in production
+Whether it has foreign keys to the rest of the system
+Whether another table represents the same event
+
+Produce a matrix like this:
+
+Business concept	Candidate tables	Active writer	Active reader	Rows	Canonical decision	Required bridge/fix
+
+Audit these overlap groups first:
+
+Documentation overlap:
+
+encounter_notes
+encounter_clinical_notes
+clinical_notes
+
+Determine which table represents the legally signed clinical note. The signed note must feed charge capture. Do not leave multiple signed-note paths.
+
+Patient check-in overlap:
+
+patient_checkins
+patient_check_ins
+
+Determine which table is used by portal/check-in UI. Pick one canonical table and bridge or retire the other from active reads.
+
+ERA/payment import overlap:
+
+payment_import_batches
+payment_import_items
+era_claim_payments
+era_service_lines
+era_import_staging_items
+
+Determine which table family is canonical for parsed 835 ERA rows. Current verified route app/api/billing/era-batches/[id]/route.ts reads payment_import_items. Do not leave ERA import writing one table while ERA review/posting reads another.
+
+Claim batch overlap:
+
+claim_837p_batches
+claim_837p_batch_claims
+edi_batch_claims
+
+Determine which join table is canonical. Current database has claim_837p_batches populated but both claim-link tables empty. Fix 837P generation so batch-to-claim links are created transactionally.
+
+Payment ledger overlap:
+
+client_payments
+patient_invoice_payments
+payment_postings
+payment_posting_allocations
+payment_applications
+client_ledger_entries
+patient_balances
+client_credits
+client_credit_applications
+
+Define the canonical patient-payment ledger path. Stripe, portal checkout, manual patient payments, refunds, credits, posted payments, and reports must all read/write the same ledger path.
+
+Payer/config overlap:
+
+insurance_payers
+payer_profiles
+payer_configurations
+payer_rules
+payer_search_option_configs
+insurance_policies
+
+Define which table provides payer ID for eligibility, 837P, 276, ERA matching, and reports.
+
+Client/patient/contact overlap:
+
+clients
+client_contacts
+patient_contacts
+client_cases
+client_case_policies
+
+Define the canonical patient identity and case/policy relationship. Inbox, mailroom, portal invite, scheduling, encounters, claims, payments, and balances must all resolve to the same clients.id.
+
+Admin/settings overlap:
+
+system_settings
+custom_app_config
+custom_billing_settings
+organization/provider/payer-specific settings tables
+
+Define where operational settings live. Do not hardcode organization, provider, Availity, Stripe, portal, or billing rules if they belong in settings.
+
+Required final output before coding:
+
+Canonical table map
+Deprecated/legacy table list
+Staging table list
+Compatibility bridge/view list
+Active writer/reader mismatch list
+Highest-risk broken workflows
+Exact files to change
+Exact migrations needed, if any
+No destructive SQL
+No table drops
+No duplicate replacements
+
+Then implement only the smallest safe wiring fixes.

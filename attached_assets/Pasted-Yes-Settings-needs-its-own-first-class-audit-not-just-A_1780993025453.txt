@@ -1,0 +1,251 @@
+Yes — **Settings needs its own first-class audit**, not just “Admin Settings” as one vague item.
+
+Right now, settings look scattered across several places:
+
+* `system_settings`
+* `custom_app_config`
+* `custom_billing_settings`
+* `integration_connections`
+* `clearinghouse_connections`
+* `payer_configurations`
+* `payer_rules`
+* `payer_profiles`
+* `payer_search_option_configs`
+* `portalSettings.ts`
+* `app/settings/portal/page.tsx`
+* `app/settings/mailroom/page.tsx`
+* Stripe Connect settings/files
+* Gmail/OAuth connector settings/files
+* Availity/clearinghouse settings/files
+
+That is exactly the type of overlap that can break the whole app. Settings should be the **control layer** for the system, not random hardcoded values and half-connected config tables.
+
+Add this to the Replit prompt:
+
+---
+
+## Settings Audit Must Come First
+
+Before fixing billing, portal, scheduling, mailroom, Stripe, or EDI, audit all settings/configuration paths.
+
+Settings must be classified into these domains:
+
+1. **Organization Settings**
+
+   * Organization legal name
+   * DBA
+   * Tax ID/TIN
+   * NPI
+   * Address
+   * Phone
+   * Timezone
+   * Active/inactive status
+   * Default state
+   * Submitter ID
+   * Branding/defaults
+
+2. **User / Staff / Role Settings**
+
+   * Staff profile
+   * Role
+   * Permissions
+   * Organization membership
+   * Billing access
+   * Provider access
+   * Portal access admin permissions
+   * Payment posting permissions
+
+3. **Provider / Clinician Settings**
+
+   * Provider identity
+   * NPI
+   * Credentials
+   * Credentialing profile
+   * Rendering provider rules
+   * Default organization
+   * Telehealth settings
+   * Stripe Connect provider status, if provider-specific
+
+4. **Patient Portal Settings**
+
+   * Portal enabled/disabled
+   * Invite rules
+   * Patient-visible documents
+   * Journal/check-in visibility
+   * Balance/invoice/payment visibility
+   * Portal session behavior
+   * Portal checkout behavior
+   * Patient messaging rules
+
+5. **Mailroom Settings**
+
+   * Mailroom categories
+   * Filing rules
+   * Document routing rules
+   * Entity linking rules
+   * Patient/claim/payment/document association rules
+   * Mailroom upload settings
+
+6. **Inbox / Email Connector Settings**
+
+   * Gmail OAuth connection
+   * Per-user Gmail isolation
+   * Polling rules
+   * Inbound email matching
+   * Email-to-workqueue rules
+   * Email-to-mailroom/document routing
+   * Integration connection status
+
+7. **Chat / Messaging Settings**
+
+   * Who can message
+   * Organization-scoped chat
+   * Patient vs staff messaging, if supported
+   * Notification rules
+   * Presence settings
+
+8. **Scheduling Settings**
+
+   * Appointment types
+   * Appointment statuses
+   * Calendar behavior
+   * Reminder settings
+   * Provider availability, if present
+   * Telehealth link creation
+   * Appointment-to-encounter rules
+
+9. **Clinical Documentation Settings**
+
+   * Note types
+   * Templates
+   * Required fields
+   * Signature rules
+   * Golden thread/treatment plan requirement
+   * Documentation-to-charge rules
+   * Coding suggestion behavior
+
+10. **Billing / RCM Settings**
+
+* Charge readiness rules
+* CPT/HCPCS rules
+* Diagnosis requirements
+* Fee schedules
+* Payer rules
+* Eligibility rules
+* Authorization requirements
+* Claim generation rules
+* 837P-only MVP behavior
+* Rendering provider rules
+
+11. **EDI / Availity Settings**
+
+* Clearinghouse connection
+* Submitter ID
+* SFTP/API settings
+* ISA/GS control numbers
+* 837P, 270, 276 outbound settings
+* 835, 271, 277, 999 inbound settings
+* Environment: QA/Production
+
+12. **Stripe / Payment Settings**
+
+* Stripe Connect account
+* Provider/organization payment ownership
+* Payment intent settings
+* Saved card rules
+* Autopay settings
+* Refund settings
+* Webhook idempotency settings
+* Portal checkout settings
+
+13. **Reports / Audit Settings**
+
+* Report date basis
+* AR aging buckets
+* Export permissions
+* Audit event requirements
+* Retention rules
+
+---
+
+## Required Settings Audit Output
+
+For every setting/config source, Replit must identify:
+
+| Setting area | UI page | API route | Table/source | Used by | Hardcoded fallback? | Canonical setting location | Fix needed |
+| ------------ | ------- | --------- | ------------ | ------- | ------------------- | -------------------------- | ---------- |
+
+Replit must specifically audit these tables/sources:
+
+* `system_settings`
+* `custom_app_config`
+* `custom_billing_settings`
+* `integration_connections`
+* `clearinghouse_connections`
+* `payer_configurations`
+* `payer_rules`
+* `payer_profiles`
+* `payer_search_option_configs`
+* `organizations`
+* `providers`
+* `provider_credentialing_profiles`
+* `staff_profiles`
+* `staff_roles`
+* `staff_role_permissions`
+* `portal_invites`
+* `notification_rules`
+* `dashboard_user_preferences`
+* `staff_notification_preferences`
+
+And these files/areas:
+
+* `app/settings/*`
+* `app/settings/portal/page.tsx`
+* `app/settings/mailroom/page.tsx`
+* `lib/portal/portalSettings.ts`
+* `lib/navigation/roles.ts`
+* `lib/rbac/*`
+* `lib/auth/requireOrgAccess.ts`
+* `lib/billing/requireBillingAccess.ts`
+* `lib/stripe/connect.ts`
+* `lib/payments/autopayService.ts`
+* `lib/payments/savedCardService.ts`
+* `lib/edi/*`
+* `supabase/functions/gmail-*`
+* `supabase/functions/outlook-*`
+
+---
+
+## Hard Rule for Settings
+
+Do not hardcode operational settings inside workflows if those values belong in settings.
+
+That includes:
+
+* Organization ID
+* Submitter ID
+* Billing NPI
+* Rendering provider
+* Payer ID
+* Stripe account
+* Portal visibility
+* Mailroom filing behavior
+* Gmail polling behavior
+* Appointment status rules
+* Documentation required fields
+* Charge readiness rules
+* ERA posting behavior
+* Claim generation behavior
+* Payment/refund behavior
+
+Seed/default values are allowed, but active workflow behavior must read from canonical settings.
+
+---
+
+## Better Replit Opening Prompt
+
+Use this as the first paragraph now:
+
+“Start with Settings. THERASSISTANT appears to have overlapping settings/config sources across `system_settings`, `custom_app_config`, `custom_billing_settings`, organization/provider/payer config tables, portal settings, mailroom settings, Stripe settings, Gmail/OAuth settings, Availity/clearinghouse settings, navigation/RBAC settings, and workflow-specific hardcoded defaults. Before fixing any workflow, audit settings as the control layer for the entire app. Identify which settings table/file is canonical for each domain, which workflows consume it, and where hardcoded values bypass settings. Do not build new settings tables until overlap is classified.”
+
+That is the right framing. Settings is the control panel. Everything else should obey it.
