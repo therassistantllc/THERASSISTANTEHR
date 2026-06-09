@@ -31,11 +31,12 @@ export async function GET(
 
     const clientId = (appt as Row | null)?.client_id as string | null;
 
-    let priorSession: {
+    let currentSessionNote: {
       encounterId: string;
       date: string | null;
       plan: string | null;
       assessment: string | null;
+      status: string | null;
     } | null = null;
 
     let goals: Array<{ id: string; description: string; status: string }> = [];
@@ -46,11 +47,9 @@ export async function GET(
           .from("encounters")
           .select("id, service_date, encounter_status")
           .eq("organization_id", organizationId)
-          .eq("client_id", clientId)
-          .eq("encounter_status", "signed")
+          .eq("appointment_id", appointmentId)
           .is("archived_at", null)
-          .order("service_date", { ascending: false })
-          .limit(1),
+          .maybeSingle(),
         (supabase as any)
           .from("treatment_plan_goals")
           .select("id, goal_description, description, goal_status, status")
@@ -62,23 +61,24 @@ export async function GET(
       ]);
 
       if (encResult.status === "fulfilled" && !encResult.value.error) {
-        const lastEnc = ((encResult.value.data ?? []) as Row[])[0];
-        if (lastEnc) {
+        const enc = (encResult.value.data ?? null) as Row | null;
+        if (enc) {
           const { data: note } = await supabase
             .from("encounter_clinical_notes")
             .select("plan, assessment")
             .eq("organization_id", organizationId)
-            .eq("encounter_id", lastEnc.id)
+            .eq("encounter_id", text(enc.id))
             .is("archived_at", null)
             .maybeSingle();
           const noteRow = note as Row | null;
           const planRaw = text(noteRow?.plan);
           const assessRaw = text(noteRow?.assessment);
-          priorSession = {
-            encounterId: text(lastEnc.id),
-            date: (lastEnc.service_date as string | null) ?? null,
+          currentSessionNote = {
+            encounterId: text(enc.id),
+            date: (enc.service_date as string | null) ?? null,
             plan: planRaw || null,
             assessment: assessRaw || null,
+            status: text(enc.encounter_status) || null,
           };
         }
       }
@@ -105,7 +105,7 @@ export async function GET(
 
     return NextResponse.json({
       success: true,
-      priorSession,
+      currentSessionNote,
       goals,
       telehealth: { isVirtual, existingUrl: telehealthUrl },
     });

@@ -155,11 +155,12 @@ export default function AppointmentWorkspace({
   const checkingInRef = useRef(false);
 
   type WorkspaceCtx = {
-    priorSession: {
+    currentSessionNote: {
       encounterId: string;
       date: string | null;
       plan: string | null;
       assessment: string | null;
+      status: string | null;
     } | null;
     goals: Array<{ id: string; description: string; status: string }>;
     telehealth: { isVirtual: boolean; existingUrl: string | null };
@@ -779,25 +780,28 @@ export default function AppointmentWorkspace({
                 </section>
               </div>
 
-              {/* Prior session summary */}
-              {workspaceCtx?.priorSession ? (
+              {/* Encounter clinical note */}
+              {workspaceCtx?.currentSessionNote ? (
                 <section className={styles.panelFull}>
-                  <h3 className={styles.panelTitle}>Prior Session</h3>
+                  <h3 className={styles.panelTitle}>Current Session Note</h3>
                   <div className={styles.priorSessionMeta}>
-                    {workspaceCtx.priorSession.date
-                      ? `Last visit: ${new Date(workspaceCtx.priorSession.date).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`
-                      : "Last signed session"}
+                    {workspaceCtx.currentSessionNote.date
+                      ? `Visit: ${new Date(workspaceCtx.currentSessionNote.date).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`
+                      : "Clinical note"}
+                    {workspaceCtx.currentSessionNote.status
+                      ? ` · ${workspaceCtx.currentSessionNote.status}`
+                      : ""}
                   </div>
-                  {workspaceCtx.priorSession.assessment ? (
+                  {workspaceCtx.currentSessionNote.assessment ? (
                     <div className={styles.priorSessionSection}>
                       <span className={styles.priorSessionSectionLabel}>Assessment</span>
-                      <p className={styles.priorSessionText}>{workspaceCtx.priorSession.assessment}</p>
+                      <p className={styles.priorSessionText}>{workspaceCtx.currentSessionNote.assessment}</p>
                     </div>
                   ) : null}
-                  {workspaceCtx.priorSession.plan ? (
+                  {workspaceCtx.currentSessionNote.plan ? (
                     <div className={styles.priorSessionSection}>
                       <span className={styles.priorSessionSectionLabel}>Plan</span>
-                      <p className={styles.priorSessionText}>{workspaceCtx.priorSession.plan}</p>
+                      <p className={styles.priorSessionText}>{workspaceCtx.currentSessionNote.plan}</p>
                     </div>
                   ) : null}
                 </section>
