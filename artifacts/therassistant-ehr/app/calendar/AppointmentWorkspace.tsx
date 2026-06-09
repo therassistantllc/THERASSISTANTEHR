@@ -2,9 +2,27 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import styles from "./AppointmentWorkspace.module.css";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 import EncounterNoteClient from "../encounters/[encounterId]/EncounterNoteClient";
+import {
+  Calendar,
+  Clock,
+  MapPin,
+  User,
+  FileText,
+  Activity,
+  ShieldCheck,
+  CreditCard,
+  ExternalLink,
+  Video,
+  CheckCircle2,
+  ChevronRight,
+  Edit3,
+  Navigation,
+  X,
+  AlertTriangle,
+  ArrowRight,
+} from "lucide-react";
 
 const ORG_ID =
   (typeof process !== "undefined" && process.env.NEXT_PUBLIC_ORGANIZATION_ID) ||
@@ -64,30 +82,23 @@ function money(amount: number): string {
   return `$${amount.toFixed(2)}`;
 }
 
-function fmtDateTime(iso: string): string {
+function fmtDate(iso: string): string {
   const d = new Date(iso);
-  return d.toLocaleString(undefined, {
-    month: "short",
+  return d.toLocaleDateString(undefined, {
+    month: "long",
     day: "numeric",
     year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
   });
 }
 
-function fmtTime(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleTimeString(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-function apptTypeLabel(appt: { appointmentType: string | null; cptCode: string | null }): string | null {
-  if (appt.cptCode) return appt.cptCode;
-  const type = appt.appointmentType ?? "";
-  if (/^9\d{4}$/.test(type)) return type;
-  return type || null;
+function fmtTimeRange(start: string, end: string): string {
+  const s = new Date(start);
+  const e = new Date(end);
+  const opts: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit" };
+  const startStr = s.toLocaleTimeString(undefined, opts);
+  const endStr = e.toLocaleTimeString(undefined, opts);
+  const diffMin = Math.round((e.getTime() - s.getTime()) / 60000);
+  return `${startStr} \u2014 ${endStr} (${diffMin} min)`;
 }
 
 function focusableElements(container: HTMLElement): HTMLElement[] {
@@ -101,20 +112,30 @@ function focusableElements(container: HTMLElement): HTMLElement[] {
   });
 }
 
-function chipClassForStatus(status: string): string {
-  switch (status) {
-    case "completed":
-      return styles.statusCompleted;
-    case "cancelled":
-      return styles.statusCancelled;
-    case "no_show":
-      return styles.statusNoShow;
-    case "in_progress":
-    case "checked_in":
-      return styles.statusInProgress;
-    default:
-      return "";
+function statusBadge(status: string) {
+  const s = status.replace(/_/g, " ").toUpperCase();
+  if (status === "checked_in" || status === "completed" || status === "in_progress") {
+    return (
+      <span className="px-2.5 py-1 text-xs font-bold tracking-wide bg-emerald-100 text-emerald-800 rounded-md flex items-center gap-1.5">
+        <div className="w-1.5 h-1.5 rounded-full bg-emerald-600" />
+        {s}
+      </span>
+    );
   }
+  if (status === "cancelled" || status === "no_show") {
+    return (
+      <span className="px-2.5 py-1 text-xs font-bold tracking-wide bg-red-100 text-red-800 rounded-md flex items-center gap-1.5">
+        <div className="w-1.5 h-1.5 rounded-full bg-red-600" />
+        {s}
+      </span>
+    );
+  }
+  return (
+    <span className="px-2.5 py-1 text-xs font-bold tracking-wide bg-slate-100 text-slate-800 rounded-md flex items-center gap-1.5">
+      <div className="w-1.5 h-1.5 rounded-full bg-slate-600" />
+      {s}
+    </span>
+  );
 }
 
 // --- Component ------------------------------------------------------------
@@ -146,7 +167,7 @@ export default function AppointmentWorkspace({
   const [detail, setDetail] = useState<AppointmentDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [banner, setBanner] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+  const [banner, setBanner] = useState<{ kind: "success" | "error" | "warning"; text: string } | null>(null);
   const [checkingIn, setCheckingIn] = useState(false);
   const [mode, setMode] = useState<"preview" | "encounter">("preview");
   const [encounterId, setEncounterId] = useState<string | null>(null);
@@ -173,8 +194,6 @@ export default function AppointmentWorkspace({
   const [chargeResult, setChargeResult] = useState<{ chargeStatus: string | null; claimId: string | null } | null>(null);
   const [telehealthLoading, setTelehealthLoading] = useState(false);
   const [joinUrl, setJoinUrl] = useState<string | null>(null);
-  const [detailsExpanded, setDetailsExpanded] = useState(false);
-  const [actionsExpanded, setActionsExpanded] = useState(false);
 
   // Load appointment details
   const loadDetail = useCallback(async (id: string) => {
@@ -322,7 +341,7 @@ export default function AppointmentWorkspace({
     }
   }, [detail]);
 
-  // Telehealth — generate/open join link
+  // Telehealth
   const handleTelehealth = useCallback(async () => {
     if (!detail) return;
     if (joinUrl) {
@@ -342,7 +361,7 @@ export default function AppointmentWorkspace({
           setJoinUrl(url);
           window.open(url, "_blank");
           try { await navigator.clipboard.writeText(url); } catch { /* ignore */ }
-          setBanner({ kind: "success", text: "Telehealth session started — link copied to clipboard." });
+          setBanner({ kind: "success", text: "Telehealth session started \u2014 link copied to clipboard." });
         } else {
           setBanner({ kind: "error", text: "Session created but no link returned." });
         }
@@ -382,512 +401,586 @@ export default function AppointmentWorkspace({
     };
   }, [detail]);
 
+  // --- Render ---------------------------------------------------------------
+
+  if (loading || !detail) {
+    return (
+      <div
+        className="fixed inset-0 z-50 bg-black/40 flex justify-end"
+        onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+        role="dialog"
+        aria-modal="true"
+      >
+        <div
+          ref={workspaceRef}
+          className="w-full max-w-[720px] h-full bg-[#f9fafc] flex flex-col animate-pulse"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex justify-between items-start p-6 bg-white border-b border-slate-200">
+            <div className="space-y-3">
+              <div className="h-8 w-48 bg-slate-200 rounded" />
+              <div className="flex items-center gap-2">
+                <div className="h-6 w-24 bg-slate-200 rounded-md" />
+                <div className="h-6 w-28 bg-slate-200 rounded-md" />
+              </div>
+            </div>
+            <div className="space-y-2 text-right">
+              <div className="h-5 w-32 bg-slate-200 rounded ml-auto" />
+              <div className="h-4 w-40 bg-slate-200 rounded ml-auto" />
+              <div className="h-4 w-36 bg-slate-200 rounded ml-auto" />
+            </div>
+          </div>
+          <div className="p-6 flex-1 flex flex-col gap-6">
+            <div className="grid grid-cols-2 gap-6">
+              <div className="flex flex-col gap-6">
+                <div className="h-72 bg-slate-200 rounded-xl" />
+                <div className="h-56 bg-slate-200 rounded-xl" />
+                <div className="h-48 bg-slate-200 rounded-xl" />
+              </div>
+              <div className="flex flex-col gap-6">
+                <div className="h-96 bg-slate-200 rounded-xl" />
+              </div>
+            </div>
+            <div className="h-24 bg-slate-200 rounded-xl" />
+            <div className="h-24 bg-slate-200 rounded-xl" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div
+        className="fixed inset-0 z-50 bg-black/40 flex justify-end"
+        onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+        role="dialog"
+        aria-modal="true"
+      >
+        <div
+          ref={workspaceRef}
+          className="w-full max-w-[720px] h-full bg-[#f9fafc] flex flex-col"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex justify-between items-center p-6 bg-white border-b border-slate-200">
+            <h2 className="text-xl font-bold text-slate-900">Appointment</h2>
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-600" aria-label="Close" type="button">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="flex-1 flex items-center justify-center">
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-8 max-w-md text-center">
+              <div className="w-12 h-12 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                <AlertTriangle className="w-6 h-6 text-red-500" />
+              </div>
+              <h2 className="text-lg font-bold text-slate-900 mb-2">Unable to load workspace</h2>
+              <p className="text-sm text-slate-600">{error}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const { appointment, insurance, eligibility, balance, encounter, clientDetails, authorization } = detail;
+  const meta = actionMeta;
+
   return (
     <div
-      className={styles.overlay}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+      className="fixed inset-0 z-50 bg-black/40 flex justify-end"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
       role="dialog"
       aria-modal="true"
       aria-labelledby="workspace-title"
     >
       <div
         ref={workspaceRef}
-        className={styles.workspace}
+        className="w-full max-w-[720px] h-full bg-[#f9fafc] text-slate-800 font-sans flex flex-col overflow-hidden shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className={styles.header}>
-          <h2 id="workspace-title" className={styles.title}>
-            {mode === "preview" ? "Appointment" : "Visit Workspace"}
-          </h2>
+        <div className="flex justify-between items-start p-6 bg-white border-b border-slate-200 shrink-0">
+          <div>
+            <h1 id="workspace-title" className="text-2xl font-bold text-slate-900 flex items-center gap-2">
+              {appointment.clientName}
+            </h1>
+            <div className="flex items-center gap-2 mt-3">
+              {statusBadge(appointment.status)}
+              {encounter ? (
+                <span className="px-2.5 py-1 text-xs font-bold tracking-wide bg-amber-100 text-amber-800 rounded-md flex items-center gap-1.5">
+                  <Edit3 className="w-3 h-3" />
+                  NOTE: {encounter.encounter_status.replace(/_/g, " ").toUpperCase()}
+                </span>
+              ) : null}
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="text-slate-800 font-semibold text-base flex items-center justify-end gap-1.5">
+              <Calendar className="w-4 h-4 text-slate-400" />
+              {fmtDate(appointment.scheduledStartAt)}
+            </div>
+            <div className="text-slate-500 text-sm mt-1 flex items-center justify-end gap-1.5">
+              <Clock className="w-4 h-4 text-slate-400" />
+              {fmtTimeRange(appointment.scheduledStartAt, appointment.scheduledEndAt)}
+            </div>
+            <div className="text-slate-500 text-sm mt-1.5 font-medium flex items-center justify-end gap-1.5">
+              <User className="w-4 h-4 text-slate-400" />
+              {appointment.providerName}
+            </div>
+          </div>
           <button
-            className={styles.closeBtn}
+            className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"
             onClick={onClose}
             aria-label="Close workspace"
             type="button"
           >
-            ×
+            <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Body */}
-        <div className={styles.body}>
-          {loading ? <div className={styles.loading}>Loading…</div> : null}
-          {error ? (
-            <div className={`${styles.banner} ${styles.bannerError}`}>
-              {error}
+        {/* Banner messages */}
+        {banner ? (
+          <div className={`px-6 py-2 text-sm font-medium shrink-0 ${
+            banner.kind === "success"
+              ? "bg-emerald-50 text-emerald-800 border-b border-emerald-100"
+              : banner.kind === "warning"
+                ? "bg-amber-50 text-amber-800 border-b border-amber-100"
+                : "bg-red-50 text-red-800 border-b border-red-100"
+          }`}>
+            {banner.text}
+          </div>
+        ) : null}
+
+        {/* Scrollable Body */}
+        <div className="p-6 flex-1 overflow-y-auto flex flex-col gap-6">
+
+          {/* Warnings */}
+          {meta?.eligibilityWarning ? (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4" />
+              Eligibility is {eligibility?.displayStatus ?? "not checked"}. Check-in allowed.
             </div>
           ) : null}
-          {banner ? (
-            <div
-              className={`${styles.banner} ${
-                banner.kind === "success" ? styles.bannerSuccess : styles.bannerError
-              }`}
-            >
-              {banner.text}
+          {meta?.authWarning ? (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4" />
+              No authorization on file. Check-in allowed.
+            </div>
+          ) : null}
+          {!meta?.hasProvider && appointment.cptCode ? (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4" />
+              No provider assigned — check-in disabled for billable appointment.
             </div>
           ) : null}
 
-          {/* Charge capture result after signing */}
-          {chargeResult && mode === "preview" ? (
-            <div className={styles.chargeResultPanel}>
-              <div className={styles.chargeResultHeader}>
-                {chargeResult.chargeStatus === "patient_responsibility" ? (
-                  <span className={styles.chargeResultBadge} data-status="pr">💳 Patient Responsibility</span>
-                ) : chargeResult.chargeStatus === "blocked" ? (
-                  <span className={styles.chargeResultBadge} data-status="blocked">⚠️ Charge Blocked</span>
-                ) : chargeResult.chargeStatus === "ready_for_claim" || chargeResult.claimId ? (
-                  <span className={styles.chargeResultBadge} data-status="ready">✓ Claim Ready</span>
-                ) : (
-                  <span className={styles.chargeResultBadge} data-status="ready">✓ Note Signed</span>
-                )}
-                <span className={styles.chargeResultNote}>Visit documentation complete.</span>
+          {/* 2-Column Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+            {/* LEFT COLUMN */}
+            <div className="flex flex-col gap-6">
+
+              {/* Card: Visit Details */}
+              <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                  <FileText className="w-4 h-4" /> Visit Details
+                </h2>
+                <div className="space-y-3.5 text-sm">
+                  <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
+                    <span className="text-slate-500 font-medium">Date of Birth</span>
+                    <span className="font-semibold text-slate-800">
+                      {clientDetails?.dateOfBirth
+                        ? new Date(clientDetails.dateOfBirth).toLocaleDateString()
+                        : "\u2014"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
+                    <span className="text-slate-500 font-medium">Visit Type</span>
+                    <span className="font-semibold text-slate-800">
+                      {appointment.appointmentType ?? "\u2014"}{" "}
+                      {appointment.cptCode ? (
+                        <span className="text-slate-400 font-normal">({appointment.cptCode})</span>
+                      ) : null}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
+                    <span className="text-slate-500 font-medium">Location</span>
+                    <span className="font-semibold text-slate-800 flex items-center gap-1">
+                      <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                      {appointment.serviceLocation ?? "\u2014"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
+                    <span className="text-slate-500 font-medium">Clinician</span>
+                    <span className="font-semibold text-slate-800">{appointment.providerName || "\u2014"}</span>
+                  </div>
+                  <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
+                    <span className="text-slate-500 font-medium">Balance</span>
+                    <span className="font-semibold text-slate-800">{money(balance.openBalance)} open</span>
+                  </div>
+                  {appointment.memo ? (
+                    <div className="pt-1">
+                      <span className="text-slate-500 font-medium block mb-1.5">Memo</span>
+                      <div className="text-slate-700 bg-amber-50/50 border border-amber-100 p-3 rounded-lg text-sm italic">
+                        &ldquo;{appointment.memo}&rdquo;
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
               </div>
-              <div className={styles.chargeResultActions}>
+
+              {/* Card: Quick Actions */}
+              <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                  <Activity className="w-4 h-4" /> Quick Actions
+                </h2>
+                <div className="grid grid-cols-2 gap-2.5">
+                  {/* Primary action */}
+                  {meta?.alreadyCheckedIn || meta?.hasEncounter ? (
+                    <button
+                      className="col-span-2 py-2.5 bg-[#2c6cf6] text-white rounded-lg text-sm font-semibold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
+                      type="button"
+                      onClick={handleOpenEncounter}
+                      disabled={checkingIn}
+                    >
+                      <Edit3 className="w-4 h-4" />
+                      {meta?.hasEncounter ? "Open Encounter" : "Open Note"}
+                    </button>
+                  ) : (
+                    <button
+                      className="col-span-2 py-2.5 bg-[#2c6cf6] text-white rounded-lg text-sm font-semibold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
+                      type="button"
+                      onClick={handleCheckIn}
+                      disabled={checkingIn || !meta?.canCheckIn}
+                      aria-busy={checkingIn || undefined}
+                      title={
+                        !meta?.hasProvider && appointment.cptCode
+                          ? "Assign a provider before checking in"
+                          : meta?.isCancelled || meta?.isNoShow
+                            ? "Cannot check in cancelled/no-show appointment"
+                            : undefined
+                      }
+                    >
+                      {checkingIn ? (
+                        <>
+                          <span className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          Checking in…
+                        </>
+                      ) : (
+                        <>
+                          <Edit3 className="w-4 h-4" /> Check In / Start Encounter
+                        </>
+                      )}
+                    </button>
+                  )}
+
+                  {/* Telehealth */}
+                  {workspaceCtx?.telehealth?.isVirtual ? (
+                    <button
+                      className="col-span-2 py-2.5 bg-sky-50 text-sky-700 border border-sky-200 rounded-lg text-sm font-semibold hover:bg-sky-100 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+                      type="button"
+                      onClick={handleTelehealth}
+                      disabled={telehealthLoading}
+                    >
+                      {telehealthLoading ? (
+                        <>
+                          <span className="inline-block w-4 h-4 border-2 border-sky-300 border-t-sky-700 rounded-full animate-spin" />
+                          Starting…
+                        </>
+                      ) : joinUrl ? (
+                        <>
+                          <Video className="w-4 h-4" /> Rejoin Telehealth
+                        </>
+                      ) : (
+                        <>
+                          <Video className="w-4 h-4" /> Start Telehealth
+                        </>
+                      )}
+                    </button>
+                  ) : null}
+
+                  {/* Open Chart */}
+                  {appointment.clientId ? (
+                    <Link
+                      href={`/clients/${appointment.clientId}`}
+                      className="py-2 bg-white border border-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors flex items-center justify-center gap-1"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" /> Open Chart
+                    </Link>
+                  ) : (
+                    <button className="py-2 bg-white border border-slate-200 text-slate-400 rounded-lg text-sm font-medium cursor-not-allowed" disabled>
+                      Open Chart
+                    </button>
+                  )}
+
+                  {/* Collect */}
+                  {appointment.clientId && onCollect ? (
+                    <button
+                      className="py-2 bg-white border border-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"
+                      type="button"
+                      onClick={() => {
+                        onCollect({
+                          appointmentId: appointment.id,
+                          clientId: appointment.clientId,
+                          providerId: appointment.providerId,
+                          openBalance: balance.openBalance,
+                          clientName: appointment.clientName,
+                        });
+                      }}
+                    >
+                      Collect Copay
+                    </button>
+                  ) : (
+                    <button className="py-2 bg-white border border-slate-200 text-slate-400 rounded-lg text-sm font-medium cursor-not-allowed" disabled>
+                      Collect Copay
+                    </button>
+                  )}
+
+                  {/* Reschedule */}
+                  {meta?.canReschedule ? (
+                    <button
+                      className="py-2 bg-white border border-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"
+                      type="button"
+                      onClick={() => {
+                        setBanner({ kind: "error", text: "Reschedule flow via schedule page \u2014 not yet wired" });
+                      }}
+                    >
+                      Reschedule
+                    </button>
+                  ) : (
+                    <button className="py-2 bg-white border border-slate-200 text-slate-400 rounded-lg text-sm font-medium cursor-not-allowed" disabled>
+                      Reschedule
+                    </button>
+                  )}
+
+                  {/* Cancel */}
+                  {meta?.canCancel && onCancel ? (
+                    <button
+                      className="py-2 bg-white border border-slate-200 text-red-600 rounded-lg text-sm font-medium hover:bg-red-50 transition-colors"
+                      type="button"
+                      onClick={() => {
+                        onCancel({
+                          appointmentId: appointment.id,
+                          alreadyCancelled: appointment.status === "cancelled",
+                        });
+                      }}
+                    >
+                      Cancel Visit
+                    </button>
+                  ) : (
+                    <button className="py-2 bg-white border border-slate-200 text-slate-400 rounded-lg text-sm font-medium cursor-not-allowed" disabled>
+                      Cancel Visit
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Card: Insurance & Billing */}
+              <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4" /> Insurance & Billing
+                </h2>
+                <div className="space-y-3.5 text-sm">
+                  <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
+                    <span className="text-slate-500 font-medium">Primary Payer</span>
+                    <span className="font-semibold text-slate-800">
+                      {insurance.primaryPolicy?.payerName ?? "Unknown payer"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
+                    <span className="text-slate-500 font-medium">Plan</span>
+                    <span className="font-semibold text-slate-800">
+                      {insurance.primaryPolicy?.planName ?? "\u2014"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
+                    <span className="text-slate-500 font-medium">Eligibility</span>
+                    {eligibility ? (
+                      <span className={`font-bold px-2.5 py-0.5 rounded-md text-xs border flex items-center gap-1 ${
+                        eligibility.displayStatus === "active"
+                          ? "text-emerald-700 bg-emerald-50 border-emerald-100"
+                          : eligibility.displayStatus === "inactive"
+                            ? "text-red-700 bg-red-50 border-red-100"
+                            : "text-amber-700 bg-amber-50 border-amber-100"
+                      }`}>
+                        <CheckCircle2 className="w-3 h-3" />
+                        {eligibility.displayStatus === "active"
+                          ? "ACTIVE"
+                          : eligibility.displayStatus === "inactive"
+                            ? "INACTIVE"
+                            : eligibility.displayStatus === "stale"
+                              ? "STALE"
+                              : eligibility.displayStatus === "unknown"
+                                ? "UNKNOWN"
+                                : "NOT CHECKED"}
+                      </span>
+                    ) : (
+                      <span className="text-slate-400">\u2014</span>
+                    )}
+                  </div>
+                  <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
+                    <span className="text-slate-500 font-medium">Copay</span>
+                    <span className="font-bold text-slate-800 flex items-center gap-1">
+                      <CreditCard className="w-4 h-4 text-slate-400" />
+                      {eligibility?.copay_amount != null ? money(eligibility.copay_amount) : "\u2014"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500 font-medium">Auth</span>
+                    <span className="font-mono text-xs font-semibold text-slate-600 bg-slate-100 px-2 py-1 rounded">
+                      {authorization?.authorizationNumber ?? "\u2014"}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* RIGHT COLUMN */}
+            <div className="flex flex-col gap-6">
+              {/* Card: Session Note */}
+              {workspaceCtx?.currentSessionNote ? (
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 flex-1 flex flex-col">
+                  <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                      <FileText className="w-4 h-4" /> Session Note
+                    </h2>
+                    <span className="text-xs font-semibold text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-100">
+                      {workspaceCtx.currentSessionNote.noteStatus?.replace(/_/g, " ").toUpperCase() ?? "IN PROGRESS"}
+                    </span>
+                  </div>
+
+                  <div className="space-y-4 text-sm flex-1">
+                    {workspaceCtx.currentSessionNote.subjective ? (
+                      <div>
+                        <h3 className="font-bold text-slate-800 mb-1.5 text-xs tracking-wide">SUBJECTIVE</h3>
+                        <div className="text-slate-700 bg-slate-50 border border-slate-100 p-3 rounded-lg leading-relaxed shadow-inner">
+                          {workspaceCtx.currentSessionNote.subjective}
+                        </div>
+                      </div>
+                    ) : null}
+                    {workspaceCtx.currentSessionNote.objective ? (
+                      <div>
+                        <h3 className="font-bold text-slate-800 mb-1.5 text-xs tracking-wide">OBJECTIVE</h3>
+                        <div className="text-slate-700 bg-slate-50 border border-slate-100 p-3 rounded-lg leading-relaxed shadow-inner">
+                          {workspaceCtx.currentSessionNote.objective}
+                        </div>
+                      </div>
+                    ) : null}
+                    {workspaceCtx.currentSessionNote.assessment ? (
+                      <div>
+                        <h3 className="font-bold text-slate-800 mb-1.5 text-xs tracking-wide">ASSESSMENT</h3>
+                        <div className="text-slate-700 bg-slate-50 border border-slate-100 p-3 rounded-lg leading-relaxed shadow-inner">
+                          {workspaceCtx.currentSessionNote.assessment}
+                        </div>
+                      </div>
+                    ) : null}
+                    {workspaceCtx.currentSessionNote.plan ? (
+                      <div>
+                        <h3 className="font-bold text-slate-800 mb-1.5 text-xs tracking-wide">PLAN</h3>
+                        <div className="text-slate-700 bg-slate-50 border border-slate-100 p-3 rounded-lg leading-relaxed shadow-inner">
+                          {workspaceCtx.currentSessionNote.plan}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 flex-1 flex flex-col items-center justify-center text-center">
+                  <FileText className="w-8 h-8 text-slate-300 mb-3" />
+                  <p className="text-sm text-slate-500 font-medium">No session note yet</p>
+                  <p className="text-xs text-slate-400 mt-1">Check in to start the encounter</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* FULL WIDTH PANELS */}
+
+          {/* Card: Active Goals */}
+          {workspaceCtx?.goals && workspaceCtx.goals.length > 0 ? (
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+              <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                <Navigation className="w-4 h-4" /> Treatment Plan Goals
+              </h2>
+              <div className="flex flex-wrap gap-2.5">
+                {workspaceCtx.goals.map((g) => (
+                  <div
+                    key={g.id}
+                    className="bg-blue-50/50 border border-blue-100 text-blue-800 px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+                  >
+                    <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+                    {g.description}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {/* Card: Charge Result */}
+          {chargeResult && mode === "preview" ? (
+            <div className="bg-[#f0fdf4] rounded-xl border border-[#bbf7d0] shadow-sm p-5 flex items-center justify-between">
+              <div>
+                <h2 className="text-base font-bold text-[#15803d] mb-1 flex items-center gap-2">
+                  <CheckCircle2 className="w-5 h-5" />
+                  {chargeResult.chargeStatus === "patient_responsibility"
+                    ? "Patient Responsibility"
+                    : chargeResult.chargeStatus === "blocked"
+                      ? "Charge Blocked"
+                      : chargeResult.chargeStatus === "ready_for_claim" || chargeResult.claimId
+                        ? "Visit Documentation Complete"
+                        : "Note Signed"}
+                </h2>
+                <p className="text-[#166534] text-sm font-medium">
+                  {chargeResult.claimId
+                    ? <>Claim <span className="font-mono bg-white/60 px-1 py-0.5 rounded">{chargeResult.claimId}</span> is ready for submission.</>
+                    : "Visit documentation complete."}
+                </p>
+              </div>
+              <div className="flex gap-3">
                 {chargeResult.claimId ? (
                   <a
                     href={`/billing/claims/${chargeResult.claimId}?organizationId=${encodeURIComponent(ORG_ID)}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className={styles.chargeResultLink}
+                    className="px-4 py-2 text-sm font-bold text-[#15803d] bg-white border border-[#bbf7d0] rounded-lg hover:bg-emerald-50 transition-colors flex items-center gap-2"
                   >
-                    View Claim →
+                    <ExternalLink className="w-4 h-4" /> View Claim
                   </a>
                 ) : null}
                 {onOpenNext ? (
                   <button
+                    className="px-5 py-2 text-sm font-bold text-white bg-[#2c6cf6] rounded-lg hover:bg-blue-700 shadow-md transition-colors flex items-center gap-2"
                     type="button"
-                    className={styles.openNextBtn}
                     onClick={onOpenNext}
                   >
-                    Open Next Appointment →
+                    Open Next <ArrowRight className="w-4 h-4" />
                   </button>
                 ) : null}
               </div>
             </div>
           ) : null}
 
-          {detail && actionMeta ? (
-            <>
-              {/* Status badge */}
-              <div className={styles.statusRow}>
-                <span className={`${styles.statusBadge} ${chipClassForStatus(detail.appointment.status)}`}>
-                  {detail.appointment.status.replace(/_/g, " ")}
-                </span>
-                {detail.encounter ? (
-                  <span className={styles.statusBadge}>
-                    Note: {detail.encounter.encounter_status}
-                  </span>
-                ) : null}
-              </div>
-
-              {/* Preview content */}
-              <div className={styles.contentGrid}>
-                {/* Details — collapsible */}
-                <section className={styles.panel}>
-                  <button
-                    type="button"
-                    className={styles.collapsibleHeader}
-                    onClick={() => setDetailsExpanded((v) => !v)}
-                    aria-expanded={detailsExpanded}
-                    aria-controls="details-panel"
-                  >
-                    <span className={styles.panelTitle}>Details</span>
-                    <span className={styles.collapsibleChevron} aria-hidden="true">
-                      {detailsExpanded ? "▲" : "▼"}
-                    </span>
-                  </button>
-                  {detailsExpanded ? (
-                    <div id="details-panel" className={styles.detailList}>
-                      <div className={styles.detailRow}>
-                        <span className={styles.detailLabel}>Client</span>
-                        <span className={styles.detailValue}>
-                          {detail.appointment.clientId ? (
-                            <Link href={`/clients/${detail.appointment.clientId}`} className={styles.link}>
-                              {detail.appointment.clientName}
-                            </Link>
-                          ) : (
-                            detail.appointment.clientName
-                          )}
-                          {detail.clientDetails?.dateOfBirth ? (
-                            <span className={styles.detailMuted}>DOB: {new Date(detail.clientDetails.dateOfBirth).toLocaleDateString()}</span>
-                          ) : null}
-                        </span>
-                      </div>
-
-                      <div className={styles.detailRow}>
-                        <span className={styles.detailLabel}>Time</span>
-                        <span className={styles.detailValue}>
-                          {fmtDateTime(detail.appointment.scheduledStartAt)} — {fmtTime(detail.appointment.scheduledEndAt)}
-                          {(() => {
-                            const ms =
-                              new Date(detail.appointment.scheduledEndAt).getTime() -
-                              new Date(detail.appointment.scheduledStartAt).getTime();
-                            const mins = Math.max(0, Math.round(ms / 60000));
-                            const h = Math.floor(mins / 60);
-                            const m = mins % 60;
-                            return (
-                              <span className={styles.detailMuted}>
-                                Duration: {h > 0 ? `${h}h ${m}m` : `${m} min`}
-                              </span>
-                            );
-                          })()}
-                        </span>
-                      </div>
-
-                      <div className={styles.detailRow}>
-                        <span className={styles.detailLabel}>Clinician</span>
-                        <span className={styles.detailValue}>
-                          {detail.appointment.providerName || "—"}
-                          {detail.appointment.serviceLocation ? (
-                            <span className={styles.detailMuted}>{detail.appointment.serviceLocation}</span>
-                          ) : null}
-                        </span>
-                      </div>
-
-                      <div className={styles.detailRow}>
-                        <span className={styles.detailLabel}>Type</span>
-                        <span className={styles.detailValue}>
-                          {apptTypeLabel(detail.appointment) ?? "—"}
-                        </span>
-                      </div>
-
-                      {detail.insurance.primaryPolicy ? (
-                        <div className={styles.detailRow}>
-                          <span className={styles.detailLabel}>Insurance</span>
-                          <span className={styles.detailValue}>
-                            {detail.insurance.primaryPolicy.payerName ?? "Unknown payer"}
-                            {detail.insurance.primaryPolicy.planName ? (
-                              <span className={styles.detailMuted}>Plan: {detail.insurance.primaryPolicy.planName}</span>
-                            ) : null}
-                            <span className={styles.detailMuted}>
-                              Member ID: {detail.insurance.primaryPolicy.policyNumber ?? "—"}
-                            </span>
-                          </span>
-                        </div>
-                      ) : (
-                        <div className={styles.detailRow}>
-                          <span className={styles.detailLabel}>Insurance</span>
-                          <span className={styles.detailMuted}>No primary policy on file.</span>
-                        </div>
-                      )}
-
-                      {detail.eligibility ? (
-                        <div className={styles.detailRow}>
-                          <span className={styles.detailLabel}>Eligibility</span>
-                          <span className={styles.detailValue}>
-                            <span className={`${styles.elBadge} ${
-                              detail.eligibility.displayStatus === "active"
-                                ? styles.elBadgeActive
-                                : detail.eligibility.displayStatus === "inactive"
-                                  ? styles.elBadgeInactive
-                                  : styles.elBadgeWarning
-                            }`}>
-                              {detail.eligibility.displayStatus === "active"
-                                ? "Active"
-                                : detail.eligibility.displayStatus === "inactive"
-                                  ? "Inactive"
-                                  : detail.eligibility.displayStatus === "stale"
-                                    ? "Stale"
-                                    : detail.eligibility.displayStatus === "unknown"
-                                      ? "Unknown"
-                                      : "Not checked"}
-                            </span>
-                            {detail.eligibility.asOf ? (
-                              <span className={styles.detailMuted}>
-                                As of {new Date(detail.eligibility.asOf).toLocaleDateString()}
-                                {detail.eligibility.copay_amount != null
-                                  ? ` · copay ${money(Number(detail.eligibility.copay_amount))}`
-                                  : ""}
-                              </span>
-                            ) : (
-                              <span className={styles.detailMuted}>No eligibility check on file.</span>
-                            )}
-                          </span>
-                        </div>
-                      ) : null}
-
-                      {detail.authorization ? (
-                        <div className={styles.detailRow}>
-                          <span className={styles.detailLabel}>Authorization</span>
-                          <span className={styles.detailValue}>
-                            <span className={`${styles.elBadge} ${
-                              detail.authorization.status === "approved"
-                                ? styles.elBadgeActive
-                                : detail.authorization.status === "denied"
-                                  ? styles.elBadgeInactive
-                                  : styles.elBadgeWarning
-                            }`}>
-                              {detail.authorization.status ?? "Not checked"}
-                            </span>
-                            {detail.authorization.authorizationNumber ? (
-                              <span className={styles.detailMuted}>Ref: {detail.authorization.authorizationNumber}</span>
-                            ) : null}
-                          </span>
-                        </div>
-                      ) : null}
-
-                      <div className={styles.detailRow}>
-                        <span className={styles.detailLabel}>Balance</span>
-                        <span className={styles.detailValue}>
-                          {money(detail.balance.openBalance)} open
-                        </span>
-                      </div>
-
-                      {detail.appointment.memo ? (
-                        <div className={styles.detailRow}>
-                          <span className={styles.detailLabel}>Memo</span>
-                          <span className={styles.detailMuted}>{detail.appointment.memo}</span>
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </section>
-
-                {/* Actions — collapsible */}
-                <section className={styles.panel}>
-                  <button
-                    type="button"
-                    className={styles.collapsibleHeader}
-                    onClick={() => setActionsExpanded((v) => !v)}
-                    aria-expanded={actionsExpanded}
-                    aria-controls="actions-panel"
-                  >
-                    <span className={styles.panelTitle}>Actions</span>
-                    <span className={styles.collapsibleChevron} aria-hidden="true">
-                      {actionsExpanded ? "▲" : "▼"}
-                    </span>
-                  </button>
-                  {actionsExpanded ? (
-                    <div id="actions-panel" className={styles.actionsList}>
-                    {/* Warnings */}
-                    {actionMeta.eligibilityWarning ? (
-                      <div className={`${styles.banner} ${styles.bannerWarning}`}>
-                        Eligibility is {detail.eligibility?.displayStatus ?? "not checked"}. Check-in allowed.
-                      </div>
-                    ) : null}
-                    {actionMeta.authWarning ? (
-                      <div className={`${styles.banner} ${styles.bannerWarning}`}>
-                        No authorization on file. Check-in allowed.
-                      </div>
-                    ) : null}
-                    {!actionMeta.hasProvider && detail.appointment.cptCode ? (
-                      <div className={`${styles.banner} ${styles.bannerWarning}`}>
-                        No provider assigned — check-in disabled for billable appointment.
-                      </div>
-                    ) : null}
-
-                    {/* Primary action */}
-                    {actionMeta.alreadyCheckedIn || actionMeta.hasEncounter ? (
-                      <button
-                        className={styles.primaryBtn}
-                        type="button"
-                        onClick={handleOpenEncounter}
-                        disabled={checkingIn}
-                      >
-                        {actionMeta.hasEncounter ? "Open Encounter" : "Open Note"}
-                      </button>
-                    ) : (
-                      <button
-                        className={styles.primaryBtn}
-                        type="button"
-                        onClick={handleCheckIn}
-                        disabled={checkingIn || !actionMeta.canCheckIn}
-                        aria-busy={checkingIn || undefined}
-                        title={
-                          !actionMeta.hasProvider && detail.appointment.cptCode
-                            ? "Assign a provider before checking in"
-                            : actionMeta.isCancelled || actionMeta.isNoShow
-                              ? "Cannot check in cancelled/no-show appointment"
-                              : undefined
-                        }
-                      >
-                        {checkingIn ? (
-                          <>
-                            <span className={styles.spinner} aria-hidden="true" />
-                            Checking in…
-                          </>
-                        ) : (
-                          "Check In / Start Encounter"
-                        )}
-                      </button>
-                    )}
-
-                    {/* Telehealth */}
-                    {workspaceCtx?.telehealth?.isVirtual ? (
-                      <button
-                        className={styles.telehealthBtn}
-                        type="button"
-                        onClick={handleTelehealth}
-                        disabled={telehealthLoading}
-                      >
-                        {telehealthLoading ? (
-                          <>
-                            <span className={styles.spinner} aria-hidden="true" />
-                            Starting…
-                          </>
-                        ) : joinUrl ? (
-                          "▶ Rejoin Telehealth"
-                        ) : (
-                          "▶ Start Telehealth"
-                        )}
-                      </button>
-                    ) : null}
-
-                    {/* Open full chart */}
-                    {detail.appointment.clientId ? (
-                      <Link
-                        href={`/clients/${detail.appointment.clientId}`}
-                        className={styles.secondaryBtn}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        Open Full Client Chart
-                      </Link>
-                    ) : null}
-
-                    {/* Cancel */}
-                    {actionMeta.canCancel && onCancel ? (
-                      <button
-                        className={styles.secondaryBtn}
-                        type="button"
-                        onClick={() => {
-                          onCancel({
-                            appointmentId: detail.appointment.id,
-                            alreadyCancelled: detail.appointment.status === "cancelled",
-                          });
-                        }}
-                      >
-                        Cancel
-                      </button>
-                    ) : null}
-
-                    {/* Reschedule */}
-                    {actionMeta.canReschedule ? (
-                      <button
-                        className={styles.secondaryBtn}
-                        type="button"
-                        onClick={() => {
-                          setBanner({ kind: "error", text: "Reschedule flow via schedule page — not yet wired" });
-                        }}
-                      >
-                        Reschedule
-                      </button>
-                    ) : null}
-
-                    {/* No-show */}
-                    {actionMeta.canCheckIn && !actionMeta.alreadyCheckedIn ? (
-                      <button
-                        className={styles.secondaryBtn}
-                        type="button"
-                        onClick={() => {
-                          setBanner({ kind: "error", text: "No-show flow via schedule page — not yet wired" });
-                        }}
-                      >
-                        Mark No-Show
-                      </button>
-                    ) : null}
-
-                    {/* Collect */}
-                    {detail.appointment.clientId && onCollect ? (
-                      <button
-                        className={styles.secondaryBtn}
-                        type="button"
-                        onClick={() => {
-                          onCollect({
-                            appointmentId: detail.appointment.id,
-                            clientId: detail.appointment.clientId,
-                            providerId: detail.appointment.providerId,
-                            openBalance: detail.balance.openBalance,
-                            clientName: detail.appointment.clientName,
-                          });
-                        }}
-                      >
-                        Collect
-                      </button>
-                    ) : null}
-                  </div>
-                ) : null}
-              </section>
+          {/* Encounter mode */}
+          {mode === "encounter" && encounterId ? (
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+              <EncounterNoteClient
+                encounterId={encounterId}
+                inlineMode
+                onInlineNavigate={(path) => {
+                  if (path.startsWith("/billing/")) {
+                    window.open(path, "_blank");
+                  }
+                }}
+                onSigned={(data) => {
+                  setChargeResult(data);
+                  setMode("preview");
+                  loadDetail(appointmentId);
+                  onRefresh?.();
+                }}
+              />
             </div>
-
-              {/* Encounter clinical note */}
-              {workspaceCtx?.currentSessionNote ? (
-                <section className={styles.panelFull}>
-                  <h3 className={styles.panelTitle}>Current Session Note</h3>
-                  <div className={styles.priorSessionMeta}>
-                    {workspaceCtx.currentSessionNote.date
-                      ? `Visit: ${new Date(workspaceCtx.currentSessionNote.date).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`
-                      : "Clinical note"}
-                    {workspaceCtx.currentSessionNote.noteStatus
-                      ? ` · ${workspaceCtx.currentSessionNote.noteStatus}`
-                      : ""}
-                  </div>
-                  {workspaceCtx.currentSessionNote.subjective ? (
-                    <div className={styles.priorSessionSection}>
-                      <span className={styles.priorSessionSectionLabel}>Subjective</span>
-                      <p className={styles.priorSessionText}>{workspaceCtx.currentSessionNote.subjective}</p>
-                    </div>
-                  ) : null}
-                  {workspaceCtx.currentSessionNote.objective ? (
-                    <div className={styles.priorSessionSection}>
-                      <span className={styles.priorSessionSectionLabel}>Objective</span>
-                      <p className={styles.priorSessionText}>{workspaceCtx.currentSessionNote.objective}</p>
-                    </div>
-                  ) : null}
-                  {workspaceCtx.currentSessionNote.assessment ? (
-                    <div className={styles.priorSessionSection}>
-                      <span className={styles.priorSessionSectionLabel}>Assessment</span>
-                      <p className={styles.priorSessionText}>{workspaceCtx.currentSessionNote.assessment}</p>
-                    </div>
-                  ) : null}
-                  {workspaceCtx.currentSessionNote.plan ? (
-                    <div className={styles.priorSessionSection}>
-                      <span className={styles.priorSessionSectionLabel}>Plan</span>
-                      <p className={styles.priorSessionText}>{workspaceCtx.currentSessionNote.plan}</p>
-                    </div>
-                  ) : null}
-                </section>
-              ) : null}
-
-              {/* Active treatment plan goals */}
-              {workspaceCtx?.goals && workspaceCtx.goals.length > 0 ? (
-                <section className={styles.panelFull}>
-                  <h3 className={styles.panelTitle}>Active Goals</h3>
-                  <ul className={styles.goalsList}>
-                    {workspaceCtx.goals.map((g) => (
-                      <li key={g.id} className={styles.goalItem}>
-                        <span className={styles.goalDot} aria-hidden="true" />
-                        <span className={styles.goalText}>{g.description}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
-
-              {/* Encounter mode */}
-              {mode === "encounter" && encounterId ? (
-                <div className={styles.encounterWrapper}>
-                  <EncounterNoteClient
-                    encounterId={encounterId}
-                    inlineMode
-                    onInlineNavigate={(path) => {
-                      if (path.startsWith("/billing/")) {
-                        window.open(path, "_blank");
-                      }
-                    }}
-                    onSigned={(data) => {
-                      setChargeResult(data);
-                      setMode("preview");
-                      loadDetail(appointmentId);
-                      onRefresh?.();
-                    }}
-                  />
-                </div>
-              ) : null}
-            </>
           ) : null}
         </div>
       </div>
