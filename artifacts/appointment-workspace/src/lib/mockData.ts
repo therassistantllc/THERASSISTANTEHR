@@ -1,0 +1,71 @@
+export const WORKSPACE_DATA = {
+  appointment: {
+    id: "appt-a1",
+    clientId: "c1",
+    clientName: "Elena Rodriguez",
+    providerId: "p1",
+    providerName: "Lena Ortiz, LPC",
+    scheduledStartAt: "2026-05-19T08:30:00Z",
+    scheduledEndAt: "2026-05-19T09:20:00Z",
+    status: "checked_in",
+    appointmentType: "Intake",
+    cptCode: "90791",
+    serviceLocation: "Office Room 3",
+    memo: "New client — referral from Dr. Mitchell",
+  },
+  insurance: {
+    primaryPolicy: {
+      id: "ins1",
+      planName: "Blue Advantage PPO",
+      policyNumber: "BC123456789",
+      priority: 1,
+      payerName: "BCBS Colorado",
+      payerCode: "BCBS-CO",
+    },
+  },
+  eligibility: {
+    id: "el1",
+    eligibility_status: "active",
+    checked_at: "2026-05-18T14:00:00Z",
+    copay_amount: 30,
+    deductible_remaining: 150,
+    displayStatus: "active",
+    asOf: "2026-05-18",
+  },
+  balance: { openBalance: 0 },
+  encounter: {
+    id: "enc1",
+    encounter_status: "in_progress",
+  },
+  clientDetails: {
+    dateOfBirth: "1989-03-14",
+  },
+  authorization: {
+    status: "approved",
+    authorizationNumber: "AUTH-2026-04521",
+  },
+  currentSessionNote: {
+    encounterId: "enc1",
+    date: "2026-05-19",
+    noteId: "cn1",
+    noteStatus: "in_progress",
+    subjective: "Client reports persistent anxiety, difficulty concentrating, and occasional panic attacks. Sleep has been disrupted. Stress related to work deadlines and family expectations.",
+    objective: "Client appeared well-groomed, maintained eye contact. Speech was rapid but coherent. Affect appropriate. Mood: mildly anxious. No SI/HI reported.",
+    assessment: "F41.1 – Generalized Anxiety Disorder. Symptoms consistent with GAD, including excessive worry, difficulty controlling worry, and associated sleep disturbance.",
+    plan: "Continue weekly CBT sessions. Introduce progressive muscle relaxation and breathing exercises. Reassess in 2 weeks. Monitor for any emergence of depressive symptoms.",
+  },
+  goals: [
+    { id: "g1", description: "Reduce anxiety episodes to less than 2 per week", status: "active" },
+    { id: "g2", description: "Improve sleep quality — consistent bedtime routine", status: "active" },
+    { id: "g3", description: "Practice CBT coping skills daily", status: "active" },
+  ],
+  telehealth: {
+    isVirtual: false,
+    existingUrl: null,
+  },
+  chargeResult: {
+    chargeStatus: "ready_for_claim",
+    claimId: "clm-2026-01234",
+  },
+  onOpenNext: true,
+};

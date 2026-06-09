@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/appointment-workspace/"
+title = "Appointment Workspace"
+version = "1.0.0"
+id = "artifacts/appointment-workspace"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/appointment-workspace/" ]
+localPort = 24672
+
+[services.development]
+run = "pnpm --filter @workspace/appointment-workspace run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/appointment-workspace", "run", "build" ]
+publicDir = "artifacts/appointment-workspace/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24672"
+BASE_PATH = "/appointment-workspace/"
