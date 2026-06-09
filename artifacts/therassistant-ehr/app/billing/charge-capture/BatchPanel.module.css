@@ -1,0 +1,273 @@
+.panel {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+
+.panelHeader {
+  padding: 12px 16px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.panelHeaderTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.panelTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.panelTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.readyBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: #dcfce7;
+  color: #166534;
+}
+
+.statusBadge {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.statusBadgeSub {
+  composes: statusBadge;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.statusBadgeGen {
+  composes: statusBadge;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.statusBadgeFail {
+  composes: statusBadge;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.statusBadgeDef {
+  composes: statusBadge;
+  background: #f8fafc;
+  color: #475569;
+}
+
+.generateBtn {
+  padding: 8px 16px;
+  border-radius: 7px;
+  border: none;
+  cursor: pointer;
+  background: #1d4ed8;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.generateBtn:disabled {
+  background: #cbd5e1;
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.workflowBox {
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+
+.workflowTitle {
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.workflowList {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.workflowList li {
+  font-size: 12px;
+  color: #475569;
+}
+
+.availityLink {
+  margin-top: 8px;
+  display: inline-block;
+  font-size: 12px;
+  color: #1d4ed8;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.availityLink:hover {
+  text-decoration: underline;
+}
+
+.error {
+  padding: 16px;
+  color: #991b1b;
+  font-size: 13px;
+}
+
+.empty {
+  padding: 24px;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.tableWrap {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.table th,
+.th {
+  padding: 8px 12px;
+  text-align: left;
+  font-weight: 700;
+  color: #475569;
+  white-space: nowrap;
+  border-bottom: 2px solid #f1f5f9;
+}
+
+.tr {
+  border-bottom: 1px solid #f8fafc;
+}
+
+.td {
+  padding: 10px 12px;
+  color: #334155;
+}
+
+.tdBold {
+  padding: 10px 12px;
+  font-weight: 700;
+  color: #0f172a;
+  white-space: nowrap;
+}
+
+.tdMono {
+  padding: 10px 12px;
+  font-family: monospace;
+  color: #475569;
+}
+
+.tdCenter {
+  padding: 10px 12px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.tdNum {
+  padding: 10px 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.tdMuted {
+  padding: 10px 12px;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.statusBadge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.actionBtn {
+  padding: 4px 10px;
+  border-radius: 5px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.actionBtnPrimary {
+  padding: 4px 10px;
+  border-radius: 5px;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.actionBtnPrimary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.actionBtnDark {
+  padding: 4px 10px;
+  border-radius: 5px;
+  border: none;
+  background: #0f2d63;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.actionBtnDark:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

@@ -6,7 +6,7 @@
  * Operational charge queue. When a clinician signs a note the charge is
  * created and routed here. Charges are auto-batched by Payer ID + TIN.
  *
- * Top section  — Batch panel: one card per batch, grouped by payer/TIN.
+ * Top section  — BatchPanel: one card per batch, grouped by payer/TIN.
  *               Actions: Download 837, Submit Batch (stub), Mark as Submitted.
  *
  * Bottom section — Dense charge queue.
@@ -27,6 +27,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 import { defaultPlaceOfService, isAllowedPlaceOfService, placeOfServiceWarning } from "@/lib/billing/placeOfService";
+import BatchPanel, { type Batch, type BatchTotals } from "./BatchPanel";
+import styles from "./ChargeCaptureClient.module.css";
+
+// ── Modal focus trap helpers ──────────────────────────────────────────────
+
+function trapFocus(container: HTMLElement, event: React.KeyboardEvent<HTMLElement>) {
+  if (event.key !== "Tab") return;
+  const focusable = container.querySelectorAll<HTMLElement>(
+    'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])',
+  );
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (!first || !last) return;
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -75,18 +96,6 @@ interface ChargeRow {
   claimId: string | null;
   payer: { id: string; name: string } | null;
   authorization: { status: string; number: string | null };
-}
-
-interface Batch {
-  id: string;
-  batchNumber: string;
-  status: string;
-  claimCount: number;
-  totalChargeAmount: number;
-  payerName: string;
-  billingProviderTaxId: string | null;
-  submittedAt: string | null;
-  generatedFileName: string | null;
 }
 
 interface ChargeDetail {
@@ -158,14 +167,9 @@ interface EditSL {
   authorizationNumber: string;
 }
 
-function slInputStyle(w: number): React.CSSProperties {
-  return { width: w, padding: "4px 6px", border: "1px solid #CBD5E1", borderRadius: 4, fontSize: 12, boxSizing: "border-box" };
-}
-
 // ── Status derivation ─────────────────────────────────────────────────────────
 
 function deriveStatus(r: ChargeRow): ChargeStatus {
-  // Server-side charge_status is authoritative when set to terminal/releasable states.
   if (r.chargeStatus === "ready_for_claim") return "Ready";
   if (r.tab === "held_charges" || r.chargeStatus === "blocked") return "Hold";
   if (!r.encounter.noteSigned) return "Unsigned";
@@ -177,33 +181,12 @@ function deriveStatus(r: ChargeRow): ChargeStatus {
   return "Ready";
 }
 
-const STATUS_STYLE: Record<ChargeStatus, { bg: string; color: string }> = {
-  "Missing DX": { bg: "#FEF2F2", color: "#991B1B" },
-  "Unsigned":   { bg: "#FFFBEB", color: "#92400E" },
-  "Ready":      { bg: "#F0FDF4", color: "#166534" },
-  "Hold":       { bg: "#FFF7ED", color: "#C2410C" },
-};
-
-// ── Batch status style ────────────────────────────────────────────────────────
-
-function batchStatusStyle(s: string): { bg: string; color: string } {
-  switch (s.toLowerCase()) {
-    case "submitted": case "accepted": return { bg: "#F0FDF4", color: "#166534" };
-    case "generated": case "ready_to_generate": return { bg: "#EFF6FF", color: "#1D4ED8" };
-    case "failed": case "rejected": return { bg: "#FEF2F2", color: "#991B1B" };
-    default: return { bg: "#F8FAFC", color: "#475569" };
-  }
-}
-
-function batchStatusLabel(s: string): string {
-  switch (s.toLowerCase()) {
-    case "ready_to_generate": return "Ready";
-    case "generated": return "Generated";
-    case "submitted": return "Submitted";
-    case "accepted": return "Accepted";
-    case "failed": return "Failed";
-    case "rejected": return "Rejected";
-    default: return s.replace(/_/g, " ");
+function statusBadgeClass(status: ChargeStatus): string {
+  switch (status) {
+    case "Missing DX": return "statusBadgeDx";
+    case "Unsigned": return "statusBadgeUnsigned";
+    case "Ready": return "statusBadgeReady";
+    case "Hold": return "statusBadgeHold";
   }
 }
 
@@ -211,12 +194,14 @@ function batchStatusLabel(s: string): string {
 
 export default function ChargeCaptureClient() {
   const orgId = useMemo(() => getOrgId(), []);
+  const modalRef = useRef<HTMLDivElement | null>(null);
+  const lastFocusedRef = useRef<HTMLElement | null>(null);
 
   // Batches
   const [batches, setBatches] = useState<Batch[]>([]);
   const [batchLoading, setBatchLoading] = useState(true);
   const [batchError, setBatchError] = useState<string | null>(null);
-  const [batchTotals, setBatchTotals] = useState({ totalUnbilledCharges: 0, pendingBatches: 0, readyToSubmit: 0 });
+  const [batchTotals, setBatchTotals] = useState<BatchTotals>({ totalUnbilledCharges: 0, pendingBatches: 0, readyToSubmit: 0 });
   const [busyBatch, setBusyBatch] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -234,8 +219,25 @@ export default function ChargeCaptureClient() {
   const [selectedReleaseIds, setSelectedReleaseIds] = useState<string[]>([]);
 
   // CMS-1500 Edit modal
-  const [editRow, setEditRow] = useState<ChargeRow | null>(null);
+  const [editRow, setEditRowRaw] = useState<ChargeRow | null>(null);
   const [editDetail, setEditDetail] = useState<ChargeDetail | null>(null);
+
+  const setEditRow = useCallback((row: ChargeRow | null) => {
+    if (row) {
+      lastFocusedRef.current = document.activeElement as HTMLElement;
+    }
+    setEditRowRaw(row);
+  }, []);
+
+  useEffect(() => {
+    if (editRow && modalRef.current) {
+      const timer = setTimeout(() => modalRef.current?.focus(), 0);
+      return () => clearTimeout(timer);
+    } else if (!editRow && lastFocusedRef.current) {
+      lastFocusedRef.current.focus();
+      lastFocusedRef.current = null;
+    }
+  }, [editRow]);
   const [editDetailLoading, setEditDetailLoading] = useState(false);
   const [editDiagnoses, setEditDiagnoses] = useState<string[]>([]);
   const [editPlaceOfService, setEditPlaceOfService] = useState("");
@@ -342,7 +344,8 @@ export default function ChargeCaptureClient() {
 
   // ── Batch actions ─────────────────────────────────────────────────────────
 
-  async function batchAction(batchId: string, action: "submit" | "mark-submitted") {    setBusyBatch(batchId);
+  async function batchAction(batchId: string, action: "submit" | "mark-submitted") {
+    setBusyBatch(batchId);
     try {
       const res = await fetch(`/api/billing/charges/batches/${encodeURIComponent(batchId)}/${action}`, {
         method: "POST",
@@ -351,7 +354,6 @@ export default function ChargeCaptureClient() {
       });
       const json = await res.json();
       if (action === "submit" && !json.success) {
-        // Submit not yet wired — show informational message, not error
         showToast("Electronic submission not yet active. Download 837 and upload to Availity, then click Mark Submitted.");
       } else if (!res.ok || !json.success) {
         throw new Error(json.error ?? `Failed to ${action}`);
@@ -638,300 +640,128 @@ export default function ChargeCaptureClient() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 20, padding: "16px 20px", maxWidth: 1400, margin: "0 auto" }}>
-
-      {/* ── Page header ── */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
+    <div className={styles.page}>
+      {/* Page header */}
+      <div className={styles.header}>
         <div>
-          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#0F172A" }}>Claim Prep</h1>
-          <p style={{ margin: "4px 0 0", fontSize: 13, color: "#64748B" }}>
-            Review signed-note charges, edit CMS-1500 claim details, then release them to automatically batch 837P files by payer / TIN.
-          </p>
+          <h1>Claim Prep</h1>
+          <p>Review signed-note charges, edit CMS-1500 claim details, then release them to automatically batch 837P files by payer / TIN.</p>
         </div>
-        <button
-          type="button"
-          onClick={() => { void loadBatches(); void loadCharges(); }}
-          style={{ padding: "7px 14px", borderRadius: 6, border: "1px solid #CBD5E1", background: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}
-        >
-          ↺ Refresh
+        <button type="button" className={styles.refreshBtn} onClick={() => { void loadBatches(); void loadCharges(); }}>
+          ↻ Refresh
         </button>
       </div>
 
-      {toast ? (
-        <div style={{ padding: "10px 14px", borderRadius: 6, background: "#F0FDF4", border: "1px solid #BBF7D0", color: "#166534", fontSize: 13 }}>
-          {toast}
-        </div>
-      ) : null}
+      {toast ? <div className={styles.toast}>{toast}</div> : null}
 
-      {/* ── Summary metrics ── */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-        {[
-          { label: "Total Unbilled", value: fmtMoney(batchTotals.totalUnbilledCharges), tone: "#0F172A" },
-          { label: "Pending Batches", value: batchTotals.pendingBatches, tone: batchTotals.pendingBatches > 0 ? "#B45309" : "#0F172A" },
-          { label: "Ready to Submit", value: batchTotals.readyToSubmit, tone: batchTotals.readyToSubmit > 0 ? "#166534" : "#0F172A" },
-        ].map((m) => (
-          <div key={m.label} style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 8, padding: "12px 16px" }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: "#64748B", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}>{m.label}</div>
-            <div style={{ fontSize: 22, fontWeight: 800, color: String(m.tone) }}>{m.value}</div>
-          </div>
-        ))}
+      {/* Summary metrics */}
+      <div className={styles.metrics}>
+        <div className={styles.metricCard}>
+          <div className={styles.metricLabel}>Total Unbilled</div>
+          <div className={styles.metricValue}>{fmtMoney(batchTotals.totalUnbilledCharges)}</div>
+        </div>
+        <div className={styles.metricCard}>
+          <div className={styles.metricLabel}>Pending Batches</div>
+          <div className={batchTotals.pendingBatches > 0 ? styles.metricValueWarn : styles.metricValue}>{batchTotals.pendingBatches}</div>
+        </div>
+        <div className={styles.metricCard}>
+          <div className={styles.metricLabel}>Ready to Submit</div>
+          <div className={batchTotals.readyToSubmit > 0 ? styles.metricValueSuccess : styles.metricValue}>{batchTotals.readyToSubmit}</div>
+        </div>
       </div>
 
-      {/* ══════════════════════════════════════════════════════════════════════
-          BATCH PANEL — Manual 837P generation by Payer + TIN
-      ══════════════════════════════════════════════════════════════════════ */}
-      <section style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 10 }}>
-        {/* Panel header with Generate button */}
-        <div style={{ padding: "12px 16px", borderBottom: "1px solid #F1F5F9" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <h2 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#0F172A" }}>837P Batches</h2>
-              {statusCounts["Ready"] > 0 && (
-                <span style={{ display: "inline-flex", alignItems: "center", padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "#DCFCE7", color: "#166534" }}>
-                  {statusCounts["Ready"]} ready
-                </span>
-              )}
-            </div>
+      {/* Batch Panel */}
+      <BatchPanel
+        batches={batches}
+        loading={batchLoading}
+        error={batchError}
+        generating={generating}
+        readyCount={statusCounts["Ready"]}
+        canGenerate={canGenerateBatches}
+        busyBatchId={busyBatch}
+        orgId={orgId}
+        onGenerate={generateBatches}
+        onMarkSubmitted={(id) => void batchAction(id, "mark-submitted")}
+        onSubmit={(id) => void batchAction(id, "submit")}
+      />
+
+      {/* Charge Queue */}
+      <section className={styles.queueSection}>
+        <div className={styles.queueHeader}>
+          <h2 className={styles.queueTitle}>
+            Charge Queue
+            {!queueLoading && <span className={styles.queueCount}>{visibleCharges.length} of {charges.length}</span>}
+          </h2>
+          <div className={styles.queueToolbar}>
+            {(["all", "Missing DX", "Unsigned", "Ready", "Hold"] as const).map((s) => {
+              const isActive = statusFilter === s;
+              const count = s === "all" ? charges.length : statusCounts[s] ?? 0;
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setStatusFilter(s)}
+                  className={isActive ? styles.chipActive : styles.chip}
+                >
+                  {s === "all" ? "All" : s} <span className={styles.chipCount}>{count}</span>
+                </button>
+              );
+            })}
+            <input
+              type="search"
+              placeholder="Patient, clinician, CPT…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className={styles.search}
+            />
             <button
               type="button"
-              disabled={generating || !canGenerateBatches}
-              onClick={() => void generateBatches()}
-              style={{
-                padding: "8px 16px", borderRadius: 7, border: "none", cursor: generating || !canGenerateBatches ? "not-allowed" : "pointer",
-                background: generating || !canGenerateBatches ? "#CBD5E1" : "#1D4ED8",
-                color: generating || !canGenerateBatches ? "#94A3B8" : "#fff",
-                fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", gap: 6,
-              }}
+              onClick={toggleSelectAllReleasableVisible}
+              disabled={releasableVisibleIds.length === 0 || actionBusy === "bulk-release"}
+              className={styles.selectBtn}
             >
-              {generating ? "Generating…" : "⬡ Generate 837P Batches"}
+              {allReleasableVisibleSelected ? "Clear Selected" : "Select All Ready"}
             </button>
-          </div>
-
-          {/* Availity upload workflow steps */}
-          <div style={{ marginTop: 12, padding: "10px 14px", background: "#F8FAFC", borderRadius: 8, border: "1px solid #E2E8F0" }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "#475569", marginBottom: 6, textTransform: "uppercase", letterSpacing: ".05em" }}>Availity Upload Workflow</div>
-            <ol style={{ margin: 0, paddingLeft: 20, display: "flex", flexDirection: "column", gap: 4 }}>
-              {[
-                { n: 1, text: "Click \"Generate 837P Batches\" to group all ready charges by payer / TIN into downloadable batches." },
-                { n: 2, text: "Click \"↓ Download 837\" on each batch to save the X12 EDI file." },
-                { n: 3, text: "Log into Availity → Claims → EDI Upload and submit the file. Availity will validate and forward to the payer." },
-                { n: 4, text: "Once you confirm the submission in Availity, click \"✓ Mark Submitted\" to update the batch status here." },
-              ].map((s) => (
-                <li key={s.n} style={{ fontSize: 12, color: "#475569" }}>{s.text}</li>
-              ))}
-            </ol>
-            <a
-              href="https://apps.availity.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ marginTop: 8, display: "inline-block", fontSize: 12, color: "#1D4ED8", fontWeight: 600 }}
+            <button
+              type="button"
+              onClick={() => void releaseSelectedForBatching()}
+              disabled={selectedReleasableCount === 0 || actionBusy === "bulk-release"}
+              className={styles.releaseBtn}
             >
-              Open Availity Portal →
-            </a>
-          </div>
-        </div>
-
-        {batchError ? (
-          <div style={{ padding: 16, color: "#991B1B", fontSize: 13 }}>{batchError}</div>
-        ) : batchLoading ? (
-          <div style={{ padding: 24, textAlign: "center", color: "#94A3B8", fontSize: 13 }}>Loading batches…</div>
-        ) : batches.length === 0 ? (
-          <div style={{ padding: 24, textAlign: "center", color: "#94A3B8", fontSize: 13 }}>
-            {statusCounts["Ready"] > 0
-              ? `${statusCounts["Ready"]} charge${statusCounts["Ready"] === 1 ? "" : "s"} ready to batch — click "Generate 837P Batches" above.`
-              : "No batches yet. Release charges first, then click \"Generate 837P Batches\" to create downloadable 837P files."}
-          </div>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ borderBottom: "2px solid #F1F5F9" }}>
-                  {["Batch #", "Payer", "TIN", "Claims", "Total Charge", "Status", "Submitted", "Actions"].map((h) => (
-                    <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontWeight: 700, color: "#475569", whiteSpace: "nowrap" }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {batches.map((b) => {
-                  const ss = batchStatusStyle(b.status);
-                  const isBusy = busyBatch === b.id;
-                  const downloadUrl = `/api/billing/charges/batches/${encodeURIComponent(b.id)}/download?organizationId=${encodeURIComponent(orgId)}`;
-                  const isSubmitted = ["submitted", "accepted"].includes(b.status.toLowerCase());
-                  return (
-                    <tr key={b.id} style={{ borderBottom: "1px solid #F8FAFC" }}>
-                      <td style={{ padding: "10px 12px", fontWeight: 700, color: "#0F172A", whiteSpace: "nowrap" }}>{b.batchNumber}</td>
-                      <td style={{ padding: "10px 12px", color: "#334155" }}>{b.payerName}</td>
-                      <td style={{ padding: "10px 12px", fontFamily: "monospace", color: "#475569" }}>{b.billingProviderTaxId || "—"}</td>
-                      <td style={{ padding: "10px 12px", textAlign: "center", fontWeight: 600 }}>{b.claimCount}</td>
-                      <td style={{ padding: "10px 12px", fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>{fmtMoney(b.totalChargeAmount)}</td>
-                      <td style={{ padding: "10px 12px" }}>
-                        <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: ss.bg, color: ss.color }}>
-                          {batchStatusLabel(b.status)}
-                        </span>
-                      </td>
-                      <td style={{ padding: "10px 12px", color: "#64748B", whiteSpace: "nowrap" }}>{b.submittedAt ? fmtDate(b.submittedAt) : "—"}</td>
-                      <td style={{ padding: "10px 12px" }}>
-                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                          {/* Download 837 */}
-                          <a
-                            href={downloadUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{ padding: "4px 10px", borderRadius: 5, border: "1px solid #CBD5E1", background: "#F8FAFC", color: "#334155", fontSize: 12, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}
-                          >
-                            ↓ Download 837
-                          </a>
-
-                          {/* Submit Batch */}
-                          {!isSubmitted ? (
-                            <button
-                              type="button"
-                              disabled={isBusy}
-                              onClick={() => void batchAction(b.id, "submit")}
-                              style={{ padding: "4px 10px", borderRadius: 5, border: "1px solid #BFDBFE", background: "#EFF6FF", color: "#1D4ED8", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
-                            >
-                              {isBusy ? "…" : "Submit Batch"}
-                            </button>
-                          ) : null}
-
-                          {/* Mark as Submitted */}
-                          {!isSubmitted ? (
-                            <button
-                              type="button"
-                              disabled={isBusy}
-                              onClick={() => void batchAction(b.id, "mark-submitted")}
-                              style={{ padding: "4px 10px", borderRadius: 5, border: "none", background: "#0F2D63", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
-                            >
-                              {isBusy ? "…" : "✓ Mark Submitted"}
-                            </button>
-                          ) : null}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      {/* ══════════════════════════════════════════════════════════════════════
-          CHARGE QUEUE — Dense operational view
-      ══════════════════════════════════════════════════════════════════════ */}
-      <section style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 10 }}>
-        <div style={{ padding: "12px 16px", borderBottom: "1px solid #F1F5F9" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-            <h2 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#0F172A" }}>
-              Charge Queue
-              {!queueLoading && <span style={{ marginLeft: 8, fontSize: 13, fontWeight: 400, color: "#94A3B8" }}>{visibleCharges.length} of {charges.length}</span>}
-            </h2>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              {/* Status filter chips */}
-              {(["all", "Missing DX", "Unsigned", "Ready", "Hold"] as const).map((s) => {
-                const isActive = statusFilter === s;
-                const count = s === "all" ? charges.length : statusCounts[s] ?? 0;
-                return (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => setStatusFilter(s)}
-                    style={{
-                      padding: "4px 10px",
-                      borderRadius: 999,
-                      border: "1px solid",
-                      borderColor: isActive ? "#0F2D63" : "#E2E8F0",
-                      background: isActive ? "#0F2D63" : "#fff",
-                      color: isActive ? "#fff" : "#475569",
-                      fontSize: 12,
-                      fontWeight: 600,
-                      cursor: "pointer",
-                    }}
-                  >
-                    {s === "all" ? "All" : s} <span style={{ opacity: .7 }}>{count}</span>
-                  </button>
-                );
-              })}
-              {/* Search */}
-              <input
-                type="search"
-                placeholder="Patient, clinician, CPT…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #CBD5E1", fontSize: 13, width: 200 }}
-              />
-
-              <button
-                type="button"
-                onClick={toggleSelectAllReleasableVisible}
-                disabled={releasableVisibleIds.length === 0 || actionBusy === "bulk-release"}
-                style={{
-                  padding: "5px 10px",
-                  borderRadius: 6,
-                  border: "1px solid #CBD5E1",
-                  background: "#fff",
-                  color: "#334155",
-                  fontSize: 12,
-                  fontWeight: 600,
-                  cursor: releasableVisibleIds.length === 0 ? "not-allowed" : "pointer",
-                }}
-              >
-                {allReleasableVisibleSelected ? "Clear Selected" : "Select All Ready"}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => void releaseSelectedForBatching()}
-                disabled={selectedReleasableCount === 0 || actionBusy === "bulk-release"}
-                style={{
-                  padding: "5px 10px",
-                  borderRadius: 6,
-                  border: "none",
-                  background: selectedReleasableCount === 0 ? "#CBD5E1" : "#0F2D63",
-                  color: "#fff",
-                  fontSize: 12,
-                  fontWeight: 700,
-                  cursor: selectedReleasableCount === 0 ? "not-allowed" : "pointer",
-                }}
-              >
-                {actionBusy === "bulk-release"
-                  ? "Releasing…"
-                  : `Release Selected (${selectedReleasableCount})`}
-              </button>
-            </div>
+              {actionBusy === "bulk-release" ? "Releasing…" : `Release Selected (${selectedReleasableCount})`}
+            </button>
           </div>
         </div>
 
         {queueError ? (
-          <div style={{ padding: 16, color: "#991B1B", fontSize: 13 }}>{queueError}</div>
+          <div className={styles.queueError}>{queueError}</div>
         ) : queueLoading ? (
-          <div style={{ padding: 24, textAlign: "center", color: "#94A3B8", fontSize: 13 }}>Loading charges…</div>
+          <div className={styles.queueLoading}>Loading charges…</div>
         ) : visibleCharges.length === 0 ? (
-          <div style={{ padding: 40, textAlign: "center", color: "#94A3B8", fontSize: 14 }}>
+          <div className={styles.queueEmpty}>
             {charges.length === 0 ? "No charges pending. Charges appear here when clinicians sign notes." : "No charges match this filter."}
           </div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <div className={styles.queueTableWrap}>
+            <table className={styles.queueTable}>
               <thead>
-                <tr style={{ borderBottom: "2px solid #F1F5F9" }}>
+                <tr>
                   {["Select", "Patient", "DOS", "CPT", "Provider", "Status", "Actions"].map((h) => (
-                    <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontWeight: 700, color: "#475569", whiteSpace: "nowrap" }}>{h}</th>
+                    <th key={h}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {visibleCharges.map((r) => {
                   const status = deriveStatus(r);
-                  const ss = STATUS_STYLE[status];
                   const cpt = r.providerSelectedCode ?? r.systemSuggestedCode ?? "—";
                   const encounterId = r.encounter.id;
                   const isReleased = r.tab === "released_to_claims";
                   const isReleasable = status === "Ready" && !isReleased;
                   return (
-                    <tr key={r.id} style={{ borderBottom: "1px solid #F8FAFC" }}>
+                    <tr key={r.id}>
                       {/* Select */}
-                      <td style={{ padding: "9px 12px" }}>
+                      <td>
                         {isReleasable ? (
                           <input
                             type="checkbox"
@@ -940,94 +770,76 @@ export default function ChargeCaptureClient() {
                             aria-label={`Select ${r.client.name} for release`}
                           />
                         ) : (
-                          <span style={{ color: "#CBD5E1" }}>—</span>
+                          <span className={styles.mutedDash}>—</span>
                         )}
                       </td>
 
                       {/* Patient */}
-                      <td style={{ padding: "9px 12px" }}>
-                        <span style={{ fontWeight: 600, color: "#0F172A" }}>{r.client.name}</span>
+                      <td>
+                        <span className={styles.patientName}>{r.client.name}</span>
                         {r.client.dob ? (
-                          <span style={{ display: "block", fontSize: 11, color: "#94A3B8" }}>DOB {fmtDate(r.client.dob)}</span>
+                          <span className={styles.patientDob}>DOB {fmtDate(r.client.dob)}</span>
                         ) : null}
                       </td>
 
                       {/* DOS */}
-                      <td style={{ padding: "9px 12px", color: "#334155", whiteSpace: "nowrap" }}>{fmtDate(r.dateOfService)}</td>
+                      <td className={styles.dosCell}>{fmtDate(r.dateOfService)}</td>
 
                       {/* CPT */}
-                      <td style={{ padding: "9px 12px", fontFamily: "ui-monospace, monospace", fontWeight: 600, color: "#0F172A" }}>{cpt}</td>
+                      <td className={styles.cptCode}>{cpt}</td>
 
                       {/* Provider */}
-                      <td style={{ padding: "9px 12px", color: "#334155" }}>{r.clinician}</td>
+                      <td className={styles.providerCell}>{r.clinician}</td>
 
                       {/* Status */}
-                      <td style={{ padding: "9px 12px" }}>
-                        <span style={{ display: "inline-block", padding: "3px 9px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: ss.bg, color: ss.color, whiteSpace: "nowrap" }}>
+                      <td>
+                        <span className={styles[statusBadgeClass(status)]}>
                           {status}
                         </span>
                       </td>
 
                       {/* Actions */}
-                      <td style={{ padding: "9px 12px" }}>
-                        <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-
-                          {/* Edit charge */}
+                      <td>
+                        <div className={styles.rowActions}>
                           {!isReleased ? (
-                            <button
-                              type="button"
-                              onClick={() => void openEditModal(r)}
-                              style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid #E2E8F0", background: "#fff", color: "#334155", fontSize: 11, cursor: "pointer", whiteSpace: "nowrap" }}
-                            >
+                            <button type="button" className={styles.rowBtn} onClick={() => void openEditModal(r)}>
                               Edit
                             </button>
                           ) : null}
 
-                          {/* Attach diagnosis */}
                           {(status === "Missing DX" || status === "Unsigned") ? (
-                            <button
-                              type="button"
-                              onClick={() => void openEditModal(r)}
-                              style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid #FCA5A5", background: "#FEF2F2", color: "#991B1B", fontSize: 11, cursor: "pointer", whiteSpace: "nowrap" }}
-                            >
+                            <button type="button" className={styles.rowBtnWarn} onClick={() => void openEditModal(r)}>
                               Attach DX
                             </button>
                           ) : null}
 
-                          {/* Review authorization */}
                           {r.authorization?.status === "required" || r.tab === "eligibility_auth_issue" ? (
-                            <a
-                              href={encounterId ? `/encounters/${encounterId}` : `/clients/${r.client.id}`}
-                              style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid #BFDBFE", background: "#EFF6FF", color: "#1D4ED8", fontSize: 11, textDecoration: "none", whiteSpace: "nowrap" }}
-                            >
+                            <a href={encounterId ? `/encounters/${encounterId}` : `/clients/${r.client.id}`} className={styles.rowBtnAuth}>
                               Auth
                             </a>
                           ) : null}
 
-                          {/* Release to billing */}
                           {status === "Ready" && !isReleased ? (
                             <button
                               type="button"
                               disabled={actionBusy === r.id + "release"}
+                              className={styles.rowBtnPrimary}
                               onClick={() => void chargeAction(r.id, "release")}
-                              style={{ padding: "3px 8px", borderRadius: 4, border: "none", background: "#0F2D63", color: "#fff", fontSize: 11, cursor: "pointer", whiteSpace: "nowrap" }}
                             >
                               {actionBusy === r.id + "release" ? "…" : "Release"}
                             </button>
                           ) : null}
 
-                          {/* Hold */}
                           {status !== "Hold" && !isReleased ? (
                             <button
                               type="button"
                               disabled={actionBusy === r.id + "hold"}
+                              className={styles.rowBtnHold}
                               onClick={() => void chargeAction(r.id, "hold")}
-                              style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid #FED7AA", background: "#FFF7ED", color: "#C2410C", fontSize: 11, cursor: "pointer", whiteSpace: "nowrap" }}
                             >
                               {actionBusy === r.id + "hold" ? "…" : "Hold"}
                             </button>
                           ) : null}
-
                         </div>
                       </td>
                     </tr>
@@ -1039,38 +851,42 @@ export default function ChargeCaptureClient() {
         )}
       </section>
 
-      {/* ── CMS-1500 Edit Modal ── */}
+      {/* CMS-1500 Edit Modal */}
       {editRow ? (
         <div
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.52)", zIndex: 9000, display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: "24px 16px" }}
+          ref={modalRef}
+          className={styles.modalOverlay}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modal-title"
           onClick={() => setEditRow(null)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") { e.preventDefault(); setEditRow(null); }
+            else if (modalRef.current) { trapFocus(modalRef.current, e); }
+          }}
+          tabIndex={-1}
         >
-          <div
-            style={{ background: "#fff", borderRadius: 10, width: "100%", maxWidth: 900, boxShadow: "0 12px 60px rgba(0,0,0,.22)", marginBottom: 24 }}
-            onClick={(e) => e.stopPropagation()}
-          >
+          <div className={styles.modalCard} onClick={(e) => e.stopPropagation()}>
             {/* Modal header */}
-            <div style={{ background: "#1E293B", color: "#fff", padding: "12px 20px", borderRadius: "10px 10px 0 0", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div className={styles.modalHeader}>
               <div>
-                <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase" }}>CMS-1500 Health Insurance Claim Form</div>
-                <div style={{ fontSize: 11, opacity: .7, marginTop: 2 }}>{editRow.client.name} · {editRow.payer?.name ?? "Unknown Payer"}</div>
+                <div id="modal-title" className={styles.modalHeaderTitle}>CMS-1500 Health Insurance Claim Form</div>
+                <div className={styles.modalHeaderSubtitle}>{editRow.client.name} · {editRow.payer?.name ?? "Unknown Payer"}</div>
               </div>
-              <button type="button" onClick={() => setEditRow(null)} style={{ background: "none", border: "none", color: "#fff", fontSize: 24, cursor: "pointer", lineHeight: 1 }}>×</button>
+              <button type="button" className={styles.modalCloseBtn} onClick={() => setEditRow(null)} aria-label="Close">×</button>
             </div>
 
             {editDetailLoading ? (
-              <div style={{ padding: 40, textAlign: "center", color: "#94A3B8", fontSize: 14 }}>Loading charge details…</div>
+              <div className={styles.queueEmpty}>Loading charge details…</div>
             ) : editError && !editDetail ? (
-              <div style={{ padding: 24, color: "#991B1B", fontSize: 13 }}>{editError}</div>
+              <div className={styles.queueError}>{editError}</div>
             ) : editDetail ? (
-              <div style={{ padding: "20px 24px 0" }}>
+              <div className={styles.modalBody}>
 
-                {editError ? (
-                  <div style={{ padding: "9px 12px", background: "#FEF2F2", color: "#991B1B", borderRadius: 6, marginBottom: 14, fontSize: 13 }}>{editError}</div>
-                ) : null}
+                {editError ? <div className={styles.modalError}>{editError}</div> : null}
 
-                {/* ── Section A: Patient & Insured Info ── */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+                {/* Section A: Patient & Insured Info */}
+                <div className={styles.modalGrid2}>
                   <FieldBox label="2. Patient's Name">
                     <ReadonlyVal>{editDetail.client?.displayName ?? "—"}</ReadonlyVal>
                   </FieldBox>
@@ -1094,8 +910,8 @@ export default function ChargeCaptureClient() {
                   </FieldBox>
                 </div>
 
-                {/* ── Patient address & relationship ── */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+                {/* Patient address & relationship */}
+                <div className={styles.modalGrid2}>
                   <FieldBox label="5. Patient's Address">
                     <ReadonlyVal>
                       {editDetail.clientAddress?.line1
@@ -1108,15 +924,15 @@ export default function ChargeCaptureClient() {
                   </FieldBox>
                 </div>
 
-                {/* ── Section B: Physician / Supplier ── */}
+                {/* Section B: Physician / Supplier */}
                 <SectionHeader>Physician / Supplier Information</SectionHeader>
 
                 {/* Box 21 — Diagnoses */}
                 <FieldBox label="21. Diagnosis Codes (ICD-10-CM)" fullWidth>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  <div className={styles.diagWrap}>
                     {(editDiagnoses.length > 0 ? editDiagnoses : Array(4).fill("")).map((code, i) => (
-                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                        <span style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", width: 14, textAlign: "right" }}>{String.fromCharCode(65 + i)}.</span>
+                      <div key={i} className={styles.diagRow}>
+                        <span className={styles.diagLabel}>{String.fromCharCode(65 + i)}.</span>
                         <input
                           type="text"
                           value={code}
@@ -1126,7 +942,7 @@ export default function ChargeCaptureClient() {
                             setEditDiagnoses(next);
                           }}
                           placeholder="ICD-10"
-                          style={{ width: 86, padding: "4px 6px", border: "1px solid #CBD5E1", borderRadius: 4, fontSize: 12, textTransform: "uppercase" }}
+                          className={styles.modalInputUpper}
                         />
                       </div>
                     ))}
@@ -1134,22 +950,22 @@ export default function ChargeCaptureClient() {
                 </FieldBox>
 
                 {/* Box 23 — Prior Auth */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 10 }}>
+                <div className={styles.modalGrid2}>
                   <FieldBox label="23. Prior Authorization #">
                     <input
                       type="text"
                       value={editPriorAuth}
                       onChange={(e) => setEditPriorAuth(e.target.value)}
                       placeholder="Authorization number…"
-                      style={{ width: "100%", padding: "5px 8px", border: "1px solid #CBD5E1", borderRadius: 4, fontSize: 13 }}
+                      className={styles.modalInputFull}
                     />
                   </FieldBox>
                   <FieldBox label="24B. Default Place of Service">
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div className={styles.diagRow}>
                       <select
                         value={editPlaceOfService}
                         onChange={(e) => setEditPlaceOfService(e.target.value)}
-                        style={{ width: 90, padding: "5px 8px", border: "1px solid #CBD5E1", borderRadius: 4, fontSize: 13 }}
+                        className={styles.modalSelect}
                       >
                         {!isAllowedPlaceOfService(editPlaceOfService) && editPlaceOfService ? (
                           <option value={editPlaceOfService}>{editPlaceOfService} (invalid)</option>
@@ -1157,7 +973,7 @@ export default function ChargeCaptureClient() {
                         <option value="11">11 · Office</option>
                         <option value="02">02 · Telehealth</option>
                       </select>
-                      <span style={{ fontSize: 11, color: "#94A3B8" }}>Select only 11 or 02.</span>
+                      <span className={styles.modalHint}>Select only 11 or 02.</span>
                     </div>
                   </FieldBox>
                   <FieldBox label="33a. Billing Provider NPI">
@@ -1177,34 +993,34 @@ export default function ChargeCaptureClient() {
                   </FieldBox>
                 </div>
 
-                {/* ── Section C: Service Lines (Box 24) ── */}
-                <SectionHeader style={{ marginTop: 16 }}>Box 24 — Service Line Items</SectionHeader>
+                {/* Section C: Service Lines (Box 24) */}
+                <SectionHeader className={styles.sectionHeaderWithMargin}>Box 24 — Service Line Items</SectionHeader>
                 {(placeOfServiceWarning(editPlaceOfService) || editServiceLines.some((sl) => placeOfServiceWarning(sl.placeOfService))) ? (
-                  <div style={{ marginBottom: 10, padding: "10px 12px", borderRadius: 6, background: "#FEF2F2", border: "1px solid #FECACA", color: "#991B1B", fontSize: 13 }}>
+                  <div className={styles.posWarn}>
                     {placeOfServiceWarning(editPlaceOfService) ?? placeOfServiceWarning(editServiceLines.find((sl) => placeOfServiceWarning(sl.placeOfService))?.placeOfService) ?? "POS is not allowed. Use 11 (office) or 02 (telehealth)."}
                   </div>
                 ) : null}
-                <div style={{ overflowX: "auto", marginBottom: 8 }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <div className={styles.slWrap}>
+                  <table className={styles.slTable}>
                     <thead>
-                      <tr style={{ background: "#F1F5F9" }}>
+                      <tr>
                         {["#", "24A DOS From", "24A DOS To", "24B POS", "24D CPT / Procedure", "24D Modifiers", "24E Dx Ptr", "24G Units", "24F Charge ($)", "24J Rendering NPI", "Auth #"].map((h) => (
-                          <th key={h} style={{ padding: "6px 7px", textAlign: "left", fontWeight: 700, color: "#475569", fontSize: 11, whiteSpace: "nowrap", border: "1px solid #E2E8F0" }}>{h}</th>
+                          <th key={h}>{h}</th>
                         ))}
-                        <th style={{ padding: "6px 7px", border: "1px solid #E2E8F0" }}></th>
+                        <th></th>
                       </tr>
                     </thead>
                     <tbody>
                       {editServiceLines.map((sl, idx) => (
-                        <tr key={idx} style={{ borderBottom: "1px solid #F1F5F9" }}>
-                          <td style={{ padding: "5px 7px", border: "1px solid #E2E8F0", fontWeight: 700, color: "#94A3B8", textAlign: "center" }}>{idx + 1}</td>
-                          <td style={{ padding: 4, border: "1px solid #E2E8F0" }}><input type="date" value={sl.serviceDateFrom} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], serviceDateFrom:e.target.value}; setEditServiceLines(n); }} style={slInputStyle(120)} /></td>
-                          <td style={{ padding: 4, border: "1px solid #E2E8F0" }}><input type="date" value={sl.serviceDateTo} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], serviceDateTo:e.target.value}; setEditServiceLines(n); }} style={slInputStyle(120)} /></td>
-                          <td style={{ padding: 4, border: "1px solid #E2E8F0" }}>
+                        <tr key={idx} className={styles.slRow}>
+                          <td className={styles.slRowNum}>{idx + 1}</td>
+                          <td className={styles.slCell}><input type="date" value={sl.serviceDateFrom} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], serviceDateFrom:e.target.value}; setEditServiceLines(n); }} className={`${styles.slInput} ${styles.slWidth120}`} /></td>
+                          <td className={styles.slCell}><input type="date" value={sl.serviceDateTo} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], serviceDateTo:e.target.value}; setEditServiceLines(n); }} className={`${styles.slInput} ${styles.slWidth120}`} /></td>
+                          <td className={styles.slCell}>
                             <select
                               value={sl.placeOfService}
                               onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], placeOfService:e.target.value}; setEditServiceLines(n); }}
-                              style={slInputStyle(90)}
+                              className={styles.slSelect}
                             >
                               {!isAllowedPlaceOfService(sl.placeOfService) && sl.placeOfService ? (
                                 <option value={sl.placeOfService}>{sl.placeOfService} (invalid)</option>
@@ -1213,15 +1029,15 @@ export default function ChargeCaptureClient() {
                               <option value="02">02 · Telehealth</option>
                             </select>
                           </td>
-                          <td style={{ padding: 4, border: "1px solid #E2E8F0" }}><input type="text" value={sl.procedureCode} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], procedureCode:e.target.value.toUpperCase()}; setEditServiceLines(n); }} placeholder="90837" style={slInputStyle(72)} /></td>
-                          <td style={{ padding: 4, border: "1px solid #E2E8F0" }}><input type="text" value={sl.modifiers} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], modifiers:e.target.value}; setEditServiceLines(n); }} placeholder="GT, 95" style={slInputStyle(80)} /></td>
-                          <td style={{ padding: 4, border: "1px solid #E2E8F0" }}><input type="text" value={sl.diagnosisPointers} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], diagnosisPointers:e.target.value}; setEditServiceLines(n); }} placeholder="A, B" style={slInputStyle(60)} /></td>
-                          <td style={{ padding: 4, border: "1px solid #E2E8F0" }}><input type="number" min="1" value={sl.units} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], units:e.target.value}; setEditServiceLines(n); }} style={slInputStyle(50)} /></td>
-                          <td style={{ padding: 4, border: "1px solid #E2E8F0" }}><input type="number" min="0" step="0.01" value={sl.chargeAmount} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], chargeAmount:e.target.value}; setEditServiceLines(n); }} style={slInputStyle(88)} /></td>
-                          <td style={{ padding: 4, border: "1px solid #E2E8F0" }}><input type="text" value={sl.renderingProviderNpi} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], renderingProviderNpi:e.target.value}; setEditServiceLines(n); }} placeholder="NPI" style={slInputStyle(100)} /></td>
-                          <td style={{ padding: 4, border: "1px solid #E2E8F0" }}><input type="text" value={sl.authorizationNumber} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], authorizationNumber:e.target.value}; setEditServiceLines(n); }} placeholder="Auth #" style={slInputStyle(90)} /></td>
-                          <td style={{ padding: 4, border: "1px solid #E2E8F0", textAlign: "center" }}>
-                            <button type="button" onClick={() => setEditServiceLines((s) => s.filter((_, i) => i !== idx))} style={{ background: "none", border: "none", color: "#64748B", cursor: "pointer", fontSize: 16, lineHeight: 1 }} title="Remove line">×</button>
+                          <td className={styles.slCell}><input type="text" value={sl.procedureCode} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], procedureCode:e.target.value.toUpperCase()}; setEditServiceLines(n); }} placeholder="90837" className={`${styles.slInput} ${styles.slWidth72}`} /></td>
+                          <td className={styles.slCell}><input type="text" value={sl.modifiers} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], modifiers:e.target.value}; setEditServiceLines(n); }} placeholder="GT, 95" className={`${styles.slInput} ${styles.slWidth80}`} /></td>
+                          <td className={styles.slCell}><input type="text" value={sl.diagnosisPointers} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], diagnosisPointers:e.target.value}; setEditServiceLines(n); }} placeholder="A, B" className={`${styles.slInput} ${styles.slWidth60}`} /></td>
+                          <td className={styles.slCell}><input type="number" min="1" value={sl.units} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], units:e.target.value}; setEditServiceLines(n); }} className={`${styles.slInput} ${styles.slWidth50}`} /></td>
+                          <td className={styles.slCell}><input type="number" min="0" step="0.01" value={sl.chargeAmount} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], chargeAmount:e.target.value}; setEditServiceLines(n); }} className={`${styles.slInput} ${styles.slWidth88}`} /></td>
+                          <td className={styles.slCell}><input type="text" value={sl.renderingProviderNpi} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], renderingProviderNpi:e.target.value}; setEditServiceLines(n); }} placeholder="NPI" className={`${styles.slInput} ${styles.slWidth100}`} /></td>
+                          <td className={styles.slCell}><input type="text" value={sl.authorizationNumber} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], authorizationNumber:e.target.value}; setEditServiceLines(n); }} placeholder="Auth #" className={`${styles.slInput} ${styles.slWidth90}`} /></td>
+                          <td className={`${styles.slCell} ${styles.slCellCenter}`}>
+                            <button type="button" className={styles.removeBtn} onClick={() => setEditServiceLines((s) => s.filter((_, i) => i !== idx))} title="Remove line">×</button>
                           </td>
                         </tr>
                       ))}
@@ -1235,33 +1051,29 @@ export default function ChargeCaptureClient() {
                     modifiers: "", diagnosisPointers: "A", units: "1", chargeAmount: "0",
                     placeOfService: editPlaceOfService, renderingProviderNpi: editDetail.provider?.npi ?? "", authorizationNumber: editPriorAuth,
                   }])}
-                  style={{ padding: "5px 12px", borderRadius: 5, border: "1px dashed #CBD5E1", background: "#F8FAFC", color: "#475569", fontSize: 12, cursor: "pointer", marginBottom: 16 }}
+                  className={styles.addBtn}
                 >
                   + Add Service Line
                 </button>
 
-                {/* ── Totals row ── */}
-                <div style={{ display: "flex", gap: 16, fontSize: 12, color: "#475569", borderTop: "1px solid #E2E8F0", paddingTop: 10, marginBottom: 18 }}>
-                  <span><strong style={{ color: "#0F172A" }}>28. Total Charge:</strong> {fmtMoney(editServiceLines.reduce((sum, sl) => sum + (parseFloat(sl.chargeAmount) || 0), 0))}</span>
-                  <span><strong style={{ color: "#0F172A" }}>29. Amount Paid:</strong> {fmtMoney(0)}</span>
-                  <span><strong style={{ color: "#0F172A" }}>30. Balance Due:</strong> {fmtMoney(editServiceLines.reduce((sum, sl) => sum + (parseFloat(sl.chargeAmount) || 0), 0))}</span>
-                  <span><strong style={{ color: "#0F172A" }}>Lines:</strong> {editServiceLines.length}</span>
+                {/* Totals row */}
+                <div className={styles.totals}>
+                  <span><strong>28. Total Charge:</strong> {fmtMoney(editServiceLines.reduce((sum, sl) => sum + (parseFloat(sl.chargeAmount) || 0), 0))}</span>
+                  <span><strong>29. Amount Paid:</strong> {fmtMoney(0)}</span>
+                  <span><strong>30. Balance Due:</strong> {fmtMoney(editServiceLines.reduce((sum, sl) => sum + (parseFloat(sl.chargeAmount) || 0), 0))}</span>
+                  <span><strong>Lines:</strong> {editServiceLines.length}</span>
                 </div>
 
-                {/* ── Action footer ── */}
-                <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, padding: "14px 0 20px", borderTop: "1px solid #F1F5F9" }}>
-                  <button
-                    type="button"
-                    onClick={() => setEditRow(null)}
-                    style={{ padding: "8px 18px", borderRadius: 6, border: "1px solid #CBD5E1", background: "#fff", fontWeight: 600, fontSize: 14, cursor: "pointer" }}
-                  >
+                {/* Action footer */}
+                <div className={styles.modalFooter}>
+                  <button type="button" className={styles.modalBtn} onClick={() => setEditRow(null)}>
                     Cancel
                   </button>
                   <button
                     type="button"
                     disabled={editSaving}
+                    className={styles.modalBtnPrimary}
                     onClick={() => void saveEdit()}
-                    style={{ padding: "8px 22px", borderRadius: 6, border: "none", background: "#1E293B", color: "#fff", fontWeight: 700, fontSize: 14, cursor: editSaving ? "not-allowed" : "pointer" }}
                   >
                     {editSaving ? "Saving…" : "Save Charge"}
                   </button>
@@ -1271,16 +1083,15 @@ export default function ChargeCaptureClient() {
           </div>
         </div>
       ) : null}
-
     </div>
   );
 }
 
 // ── Small presentational helpers ────────────────────────────────────────────
 
-function SectionHeader({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+function SectionHeader({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <div style={{ padding: "6px 10px", background: "#F1F5F9", borderRadius: 4, fontSize: 10, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10, ...style }}>
+    <div className={className ?? styles.sectionHeader}>
       {children}
     </div>
   );
@@ -1288,13 +1099,13 @@ function SectionHeader({ children, style }: { children: React.ReactNode; style?:
 
 function FieldBox({ label, children, fullWidth }: { label: string; children: React.ReactNode; fullWidth?: boolean }) {
   return (
-    <div style={{ gridColumn: fullWidth ? "1 / -1" : undefined }}>
-      <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 4 }}>{label}</div>
-      <div style={{ padding: "7px 10px", border: "1px solid #E2E8F0", borderRadius: 5, background: "#FAFBFC", minHeight: 34 }}>{children}</div>
+    <div className={fullWidth ? `${styles.fieldBox} ${styles.fieldBoxFullWidth}` : styles.fieldBox}>
+      <div className={styles.fieldBoxLabel}>{label}</div>
+      <div className={styles.fieldBoxValue}>{children}</div>
     </div>
   );
 }
 
 function ReadonlyVal({ children }: { children: React.ReactNode }) {
-  return <span style={{ fontSize: 13, color: children ? "#0F172A" : "#94A3B8" }}>{children || "—"}</span>;
+  return <span className={children ? styles.readonlyVal : styles.readonlyValEmpty}>{children || "—"}</span>;
 }
