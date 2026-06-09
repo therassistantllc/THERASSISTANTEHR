@@ -141,6 +141,26 @@
   gap: 10px;
 }
 
+.collapsibleHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  width: 100%;
+}
+
+.collapsibleChevron {
+  font-size: 12px;
+  color: #8a93a6;
+}
+
+.collapsibleHeader:hover .collapsibleChevron {
+  color: #2c6cf6;
+}
+
 .panelTitle {
   margin: 0;
   font-size: 14px;

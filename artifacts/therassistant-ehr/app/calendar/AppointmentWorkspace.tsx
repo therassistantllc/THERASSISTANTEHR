@@ -173,6 +173,8 @@ export default function AppointmentWorkspace({
   const [chargeResult, setChargeResult] = useState<{ chargeStatus: string | null; claimId: string | null } | null>(null);
   const [telehealthLoading, setTelehealthLoading] = useState(false);
   const [joinUrl, setJoinUrl] = useState<string | null>(null);
+  const [detailsExpanded, setDetailsExpanded] = useState(false);
+  const [actionsExpanded, setActionsExpanded] = useState(false);
 
   // Load appointment details
   const loadDetail = useCallback(async (id: string) => {
@@ -483,157 +485,183 @@ export default function AppointmentWorkspace({
 
               {/* Preview content */}
               <div className={styles.contentGrid}>
+                {/* Details — collapsible */}
                 <section className={styles.panel}>
-                  <h3 className={styles.panelTitle}>Details</h3>
-                  <div className={styles.detailList}>
-                    <div className={styles.detailRow}>
-                      <span className={styles.detailLabel}>Client</span>
-                      <span className={styles.detailValue}>
-                        {detail.appointment.clientId ? (
-                          <Link href={`/clients/${detail.appointment.clientId}`} className={styles.link}>
-                            {detail.appointment.clientName}
-                          </Link>
-                        ) : (
-                          detail.appointment.clientName
-                        )}
-                        {detail.clientDetails?.dateOfBirth ? (
-                          <span className={styles.detailMuted}>DOB: {new Date(detail.clientDetails.dateOfBirth).toLocaleDateString()}</span>
-                        ) : null}
-                      </span>
-                    </div>
-
-                    <div className={styles.detailRow}>
-                      <span className={styles.detailLabel}>Time</span>
-                      <span className={styles.detailValue}>
-                        {fmtDateTime(detail.appointment.scheduledStartAt)} — {fmtTime(detail.appointment.scheduledEndAt)}
-                        {(() => {
-                          const ms =
-                            new Date(detail.appointment.scheduledEndAt).getTime() -
-                            new Date(detail.appointment.scheduledStartAt).getTime();
-                          const mins = Math.max(0, Math.round(ms / 60000));
-                          const h = Math.floor(mins / 60);
-                          const m = mins % 60;
-                          return (
-                            <span className={styles.detailMuted}>
-                              Duration: {h > 0 ? `${h}h ${m}m` : `${m} min`}
-                            </span>
-                          );
-                        })()}
-                      </span>
-                    </div>
-
-                    <div className={styles.detailRow}>
-                      <span className={styles.detailLabel}>Clinician</span>
-                      <span className={styles.detailValue}>
-                        {detail.appointment.providerName || "—"}
-                        {detail.appointment.serviceLocation ? (
-                          <span className={styles.detailMuted}>{detail.appointment.serviceLocation}</span>
-                        ) : null}
-                      </span>
-                    </div>
-
-                    <div className={styles.detailRow}>
-                      <span className={styles.detailLabel}>Type</span>
-                      <span className={styles.detailValue}>
-                        {apptTypeLabel(detail.appointment) ?? "—"}
-                      </span>
-                    </div>
-
-                    {detail.insurance.primaryPolicy ? (
+                  <button
+                    type="button"
+                    className={styles.collapsibleHeader}
+                    onClick={() => setDetailsExpanded((v) => !v)}
+                    aria-expanded={detailsExpanded}
+                    aria-controls="details-panel"
+                  >
+                    <span className={styles.panelTitle}>Details</span>
+                    <span className={styles.collapsibleChevron} aria-hidden="true">
+                      {detailsExpanded ? "▲" : "▼"}
+                    </span>
+                  </button>
+                  {detailsExpanded ? (
+                    <div id="details-panel" className={styles.detailList}>
                       <div className={styles.detailRow}>
-                        <span className={styles.detailLabel}>Insurance</span>
+                        <span className={styles.detailLabel}>Client</span>
                         <span className={styles.detailValue}>
-                          {detail.insurance.primaryPolicy.payerName ?? "Unknown payer"}
-                          {detail.insurance.primaryPolicy.planName ? (
-                            <span className={styles.detailMuted}>Plan: {detail.insurance.primaryPolicy.planName}</span>
-                          ) : null}
-                          <span className={styles.detailMuted}>
-                            Member ID: {detail.insurance.primaryPolicy.policyNumber ?? "—"}
-                          </span>
-                        </span>
-                      </div>
-                    ) : (
-                      <div className={styles.detailRow}>
-                        <span className={styles.detailLabel}>Insurance</span>
-                        <span className={styles.detailMuted}>No primary policy on file.</span>
-                      </div>
-                    )}
-
-                    {detail.eligibility ? (
-                      <div className={styles.detailRow}>
-                        <span className={styles.detailLabel}>Eligibility</span>
-                        <span className={styles.detailValue}>
-                          <span className={`${styles.elBadge} ${
-                            detail.eligibility.displayStatus === "active"
-                              ? styles.elBadgeActive
-                              : detail.eligibility.displayStatus === "inactive"
-                                ? styles.elBadgeInactive
-                                : styles.elBadgeWarning
-                          }`}>
-                            {detail.eligibility.displayStatus === "active"
-                              ? "Active"
-                              : detail.eligibility.displayStatus === "inactive"
-                                ? "Inactive"
-                                : detail.eligibility.displayStatus === "stale"
-                                  ? "Stale"
-                                  : detail.eligibility.displayStatus === "unknown"
-                                    ? "Unknown"
-                                    : "Not checked"}
-                          </span>
-                          {detail.eligibility.asOf ? (
-                            <span className={styles.detailMuted}>
-                              As of {new Date(detail.eligibility.asOf).toLocaleDateString()}
-                              {detail.eligibility.copay_amount != null
-                                ? ` · copay ${money(Number(detail.eligibility.copay_amount))}`
-                                : ""}
-                            </span>
+                          {detail.appointment.clientId ? (
+                            <Link href={`/clients/${detail.appointment.clientId}`} className={styles.link}>
+                              {detail.appointment.clientName}
+                            </Link>
                           ) : (
-                            <span className={styles.detailMuted}>No eligibility check on file.</span>
+                            detail.appointment.clientName
                           )}
-                        </span>
-                      </div>
-                    ) : null}
-
-                    {detail.authorization ? (
-                      <div className={styles.detailRow}>
-                        <span className={styles.detailLabel}>Authorization</span>
-                        <span className={styles.detailValue}>
-                          <span className={`${styles.elBadge} ${
-                            detail.authorization.status === "approved"
-                              ? styles.elBadgeActive
-                              : detail.authorization.status === "denied"
-                                ? styles.elBadgeInactive
-                                : styles.elBadgeWarning
-                          }`}>
-                            {detail.authorization.status ?? "Not checked"}
-                          </span>
-                          {detail.authorization.authorizationNumber ? (
-                            <span className={styles.detailMuted}>Ref: {detail.authorization.authorizationNumber}</span>
+                          {detail.clientDetails?.dateOfBirth ? (
+                            <span className={styles.detailMuted}>DOB: {new Date(detail.clientDetails.dateOfBirth).toLocaleDateString()}</span>
                           ) : null}
                         </span>
                       </div>
-                    ) : null}
 
-                    <div className={styles.detailRow}>
-                      <span className={styles.detailLabel}>Balance</span>
-                      <span className={styles.detailValue}>
-                        {money(detail.balance.openBalance)} open
-                      </span>
-                    </div>
-
-                    {detail.appointment.memo ? (
                       <div className={styles.detailRow}>
-                        <span className={styles.detailLabel}>Memo</span>
-                        <span className={styles.detailMuted}>{detail.appointment.memo}</span>
+                        <span className={styles.detailLabel}>Time</span>
+                        <span className={styles.detailValue}>
+                          {fmtDateTime(detail.appointment.scheduledStartAt)} — {fmtTime(detail.appointment.scheduledEndAt)}
+                          {(() => {
+                            const ms =
+                              new Date(detail.appointment.scheduledEndAt).getTime() -
+                              new Date(detail.appointment.scheduledStartAt).getTime();
+                            const mins = Math.max(0, Math.round(ms / 60000));
+                            const h = Math.floor(mins / 60);
+                            const m = mins % 60;
+                            return (
+                              <span className={styles.detailMuted}>
+                                Duration: {h > 0 ? `${h}h ${m}m` : `${m} min`}
+                              </span>
+                            );
+                          })()}
+                        </span>
                       </div>
-                    ) : null}
-                  </div>
+
+                      <div className={styles.detailRow}>
+                        <span className={styles.detailLabel}>Clinician</span>
+                        <span className={styles.detailValue}>
+                          {detail.appointment.providerName || "—"}
+                          {detail.appointment.serviceLocation ? (
+                            <span className={styles.detailMuted}>{detail.appointment.serviceLocation}</span>
+                          ) : null}
+                        </span>
+                      </div>
+
+                      <div className={styles.detailRow}>
+                        <span className={styles.detailLabel}>Type</span>
+                        <span className={styles.detailValue}>
+                          {apptTypeLabel(detail.appointment) ?? "—"}
+                        </span>
+                      </div>
+
+                      {detail.insurance.primaryPolicy ? (
+                        <div className={styles.detailRow}>
+                          <span className={styles.detailLabel}>Insurance</span>
+                          <span className={styles.detailValue}>
+                            {detail.insurance.primaryPolicy.payerName ?? "Unknown payer"}
+                            {detail.insurance.primaryPolicy.planName ? (
+                              <span className={styles.detailMuted}>Plan: {detail.insurance.primaryPolicy.planName}</span>
+                            ) : null}
+                            <span className={styles.detailMuted}>
+                              Member ID: {detail.insurance.primaryPolicy.policyNumber ?? "—"}
+                            </span>
+                          </span>
+                        </div>
+                      ) : (
+                        <div className={styles.detailRow}>
+                          <span className={styles.detailLabel}>Insurance</span>
+                          <span className={styles.detailMuted}>No primary policy on file.</span>
+                        </div>
+                      )}
+
+                      {detail.eligibility ? (
+                        <div className={styles.detailRow}>
+                          <span className={styles.detailLabel}>Eligibility</span>
+                          <span className={styles.detailValue}>
+                            <span className={`${styles.elBadge} ${
+                              detail.eligibility.displayStatus === "active"
+                                ? styles.elBadgeActive
+                                : detail.eligibility.displayStatus === "inactive"
+                                  ? styles.elBadgeInactive
+                                  : styles.elBadgeWarning
+                            }`}>
+                              {detail.eligibility.displayStatus === "active"
+                                ? "Active"
+                                : detail.eligibility.displayStatus === "inactive"
+                                  ? "Inactive"
+                                  : detail.eligibility.displayStatus === "stale"
+                                    ? "Stale"
+                                    : detail.eligibility.displayStatus === "unknown"
+                                      ? "Unknown"
+                                      : "Not checked"}
+                            </span>
+                            {detail.eligibility.asOf ? (
+                              <span className={styles.detailMuted}>
+                                As of {new Date(detail.eligibility.asOf).toLocaleDateString()}
+                                {detail.eligibility.copay_amount != null
+                                  ? ` · copay ${money(Number(detail.eligibility.copay_amount))}`
+                                  : ""}
+                              </span>
+                            ) : (
+                              <span className={styles.detailMuted}>No eligibility check on file.</span>
+                            )}
+                          </span>
+                        </div>
+                      ) : null}
+
+                      {detail.authorization ? (
+                        <div className={styles.detailRow}>
+                          <span className={styles.detailLabel}>Authorization</span>
+                          <span className={styles.detailValue}>
+                            <span className={`${styles.elBadge} ${
+                              detail.authorization.status === "approved"
+                                ? styles.elBadgeActive
+                                : detail.authorization.status === "denied"
+                                  ? styles.elBadgeInactive
+                                  : styles.elBadgeWarning
+                            }`}>
+                              {detail.authorization.status ?? "Not checked"}
+                            </span>
+                            {detail.authorization.authorizationNumber ? (
+                              <span className={styles.detailMuted}>Ref: {detail.authorization.authorizationNumber}</span>
+                            ) : null}
+                          </span>
+                        </div>
+                      ) : null}
+
+                      <div className={styles.detailRow}>
+                        <span className={styles.detailLabel}>Balance</span>
+                        <span className={styles.detailValue}>
+                          {money(detail.balance.openBalance)} open
+                        </span>
+                      </div>
+
+                      {detail.appointment.memo ? (
+                        <div className={styles.detailRow}>
+                          <span className={styles.detailLabel}>Memo</span>
+                          <span className={styles.detailMuted}>{detail.appointment.memo}</span>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </section>
 
-                {/* Actions */}
+                {/* Actions — collapsible */}
                 <section className={styles.panel}>
-                  <h3 className={styles.panelTitle}>Actions</h3>
-                  <div className={styles.actionsList}>
+                  <button
+                    type="button"
+                    className={styles.collapsibleHeader}
+                    onClick={() => setActionsExpanded((v) => !v)}
+                    aria-expanded={actionsExpanded}
+                    aria-controls="actions-panel"
+                  >
+                    <span className={styles.panelTitle}>Actions</span>
+                    <span className={styles.collapsibleChevron} aria-hidden="true">
+                      {actionsExpanded ? "▲" : "▼"}
+                    </span>
+                  </button>
+                  {actionsExpanded ? (
+                    <div id="actions-panel" className={styles.actionsList}>
                     {/* Warnings */}
                     {actionMeta.eligibilityWarning ? (
                       <div className={`${styles.banner} ${styles.bannerWarning}`}>
@@ -781,8 +809,9 @@ export default function AppointmentWorkspace({
                       </button>
                     ) : null}
                   </div>
-                </section>
-              </div>
+                ) : null}
+              </section>
+            </div>
 
               {/* Encounter clinical note */}
               {workspaceCtx?.currentSessionNote ? (
