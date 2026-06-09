@@ -172,7 +172,15 @@ function encounterIsTelehealth(summary: EncounterSummary | null): boolean {
   return Boolean(summary?.appointment?.telehealth_url || summary?.appointment?.service_location === "telehealth");
 }
 
-export default function EncounterNoteClient({ encounterId }: { encounterId: string }) {
+export default function EncounterNoteClient({
+  encounterId,
+  inlineMode,
+  onInlineNavigate,
+}: {
+  encounterId: string;
+  inlineMode?: boolean;
+  onInlineNavigate?: (path: string) => void;
+}) {
   const router = useRouter();
   const organizationId = useMemo(() => getOrganizationId(), []);
   const [summary, setSummary] = useState<EncounterSummary | null>(null);
@@ -589,14 +597,22 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
       setShowSignModal(false);
 
       const claimId = signResult.claimDraft?.claimId;
-      if (claimId) {
-        router.push(`/billing/claims/${claimId}?organizationId=${encodeURIComponent(organizationId)}&sourceEncounterId=${encodeURIComponent(encounterId)}`);
-        return;
-      }
-
+      const billingPath = claimId
+        ? `/billing/claims/${claimId}?organizationId=${encodeURIComponent(organizationId)}&sourceEncounterId=${encodeURIComponent(encounterId)}`
+        : null;
       const chargeStatus = signResult.chargeCapture?.status;
-      if (chargeStatus === "patient_responsibility") {
-        router.push(`/billing/patient-responsibility?organizationId=${encodeURIComponent(organizationId)}&encounterId=${encodeURIComponent(encounterId)}`);
+      const prPath = chargeStatus === "patient_responsibility"
+        ? `/billing/patient-responsibility?organizationId=${encodeURIComponent(organizationId)}&encounterId=${encodeURIComponent(encounterId)}`
+        : null;
+      const ccPath = `/billing/charge-capture?organizationId=${encodeURIComponent(organizationId)}&encounterId=${encodeURIComponent(encounterId)}`;
+
+      const target = billingPath || prPath;
+      if (target) {
+        if (inlineMode && onInlineNavigate) {
+          onInlineNavigate(target);
+        } else {
+          router.push(target);
+        }
         return;
       }
 
@@ -614,7 +630,11 @@ export default function EncounterNoteClient({ encounterId }: { encounterId: stri
       }
 
       setMessage("Note signed. Review charge capture for next billing steps.");
-      router.push(`/billing/charge-capture?organizationId=${encodeURIComponent(organizationId)}&encounterId=${encodeURIComponent(encounterId)}`);
+      if (inlineMode && onInlineNavigate) {
+        onInlineNavigate(ccPath);
+      } else {
+        router.push(ccPath);
+      }
     } catch (signError) {
       setError(signError instanceof Error ? signError.message : "Failed to sign note");
     } finally {

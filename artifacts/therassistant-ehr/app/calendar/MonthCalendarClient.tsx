@@ -1,10 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import styles from "./monthCalendar.module.css";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 import { supabase } from "@/lib/supabase/client";
+import AppointmentWorkspace from "./AppointmentWorkspace";
 
 const ORG_ID =
   (typeof process !== "undefined" &&
@@ -54,44 +54,6 @@ type ListAppointment = {
   appointmentType: string | null;
   serviceLocation: string | null;
   cptCode: string | null;
-};
-
-type AppointmentDetail = {
-  appointment: {
-    id: string;
-    clientId: string | null;
-    clientName: string;
-    providerId: string | null;
-    providerName: string;
-    scheduledStartAt: string;
-    scheduledEndAt: string;
-    status: string;
-    appointmentType: string | null;
-    serviceLocation: string | null;
-    cptCode: string | null;
-    memo: string;
-  };
-  insurance: {
-    primaryPolicy: {
-      id: string;
-      planName: string | null;
-      policyNumber: string | null;
-      priority: number | null;
-      payerId: string | null;
-      payerName: string | null;
-      payerCode: string | null;
-    } | null;
-  };
-  eligibility: {
-    id?: string;
-    eligibility_status?: string;
-    checked_at?: string | null;
-    copay_amount?: number | null;
-    displayStatus: "active" | "inactive" | "unknown" | "stale" | "not_checked";
-    asOf: string | null;
-  } | null;
-  balance: { openBalance: number };
-  encounter: { id: string; encounter_status?: string } | null;
 };
 
 type ClientLite = { id: string; name: string };
@@ -203,24 +165,13 @@ export default function MonthCalendarClient() {
   });
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<AppointmentDetail | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState<string | null>(null);
-  const [drawerBanner, setDrawerBanner] = useState<
-    { kind: "success" | "error"; text: string } | null
-  >(null);
-
-  const [memoDraft, setMemoDraft] = useState("");
-  const [cptDraft, setCptDraft] = useState<string>("90837");
-  const [cptFallback, setCptFallback] = useState<string | null>(null);
-  const [savingDetail, setSavingDetail] = useState(false);
-  const [checkingIn, setCheckingIn] = useState(false);
-  const checkingInRef = useRef(false);
 
   const [calendarView, setCalendarView] = useState<"month" | "agenda">("month");
   const [collectOpen, setCollectOpen] = useState(false);
   const [collectPrefill, setCollectPrefill] = useState<{ amount: number; note: string; title: string } | null>(null);
+  const [collectData, setCollectData] = useState<{ clientId: string; appointmentId: string; providerId: string | null; openBalance: number } | null>(null);
   const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelData, setCancelData] = useState<{ appointmentId: string; alreadyCancelled: boolean } | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [createInitialDate, setCreateInitialDate] = useState<string | null>(null);
 
@@ -362,46 +313,7 @@ export default function MonthCalendarClient() {
     return appointments.filter((a) => a.providerId === providerFilter);
   }, [appointments, providerFilter]);
 
-  const loadDetail = useCallback(async (id: string) => {
-    setDetailLoading(true);
-    setDetailError(null);
-    setDetail(null);
-    try {
-      const params = new URLSearchParams({ organizationId: ORG_ID });
-      const res = await fetch(
-        `/api/scheduling/appointments/${id}/detail?${params}`,
-      );
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        throw new Error(json.error ?? "Failed to load appointment");
-      }
-      setDetail(json as AppointmentDetail);
-      setMemoDraft(json.appointment.memo ?? "");
-      // CPT dropdown: if the stored value matches a known psychotherapy code
-      // use it directly; otherwise preserve it as a fallback option so we
-      // don't silently overwrite a non-standard CPT/HCPCS code on save.
-      const stored = json.appointment.cptCode ?? null;
-      const knownValues = CPT_OPTIONS.map((o) => o.value);
-      if (stored && knownValues.includes(stored)) {
-        setCptDraft(stored);
-        setCptFallback(null);
-      } else if (stored) {
-        setCptDraft(stored);
-        setCptFallback(stored);
-      } else {
-        setCptDraft("90837");
-        setCptFallback(null);
-      }
-    } catch (e) {
-      setDetailError(e instanceof Error ? e.message : "Failed");
-    } finally {
-      setDetailLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (selectedId) loadDetail(selectedId);
-  }, [selectedId, loadDetail]);
+  // The appointment workspace manages its own detail loading via the appointment detail API.
 
   const dayBuckets = useMemo(() => {
     const map = new Map<string, ListAppointment[]>();
@@ -433,118 +345,11 @@ export default function MonthCalendarClient() {
 
   function closeDrawer() {
     setSelectedId(null);
-    setDetail(null);
-    setDetailError(null);
-    setDrawerBanner(null);
     setCollectOpen(false);
     setCollectPrefill(null);
+    setCollectData(null);
     setCancelOpen(false);
-  }
-
-  async function saveDetailChanges() {
-    if (!detail) return;
-    setSavingDetail(true);
-    setDrawerBanner(null);
-    try {
-      const res = await fetch(
-        `/api/scheduling/appointments/${detail.appointment.id}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            scope: "single",
-            updates: { cpt_code: cptDraft, memo: memoDraft },
-          }),
-        },
-      );
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        throw new Error(json.error ?? "Save failed");
-      }
-      await loadAppointments();
-      closeDrawer();
-      return;
-    } catch (e) {
-      setDrawerBanner({
-        kind: "error",
-        text: e instanceof Error ? e.message : "Save failed",
-      });
-    } finally {
-      setSavingDetail(false);
-    }
-  }
-
-  async function handleStartNote() {
-    if (!detail) return;
-    setDrawerBanner(null);
-    try {
-      const res = await fetch(`/api/encounters/create-from-appointment`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          organizationId: ORG_ID,
-          appointmentId: detail.appointment.id,
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        throw new Error(json.error ?? "Could not start note");
-      }
-      if (json.encounterId) {
-        window.location.href = `/encounters/${json.encounterId}`;
-      } else {
-        setDrawerBanner({ kind: "success", text: "Note ready." });
-        await loadDetail(detail.appointment.id);
-      }
-    } catch (e) {
-      setDrawerBanner({
-        kind: "error",
-        text: e instanceof Error ? e.message : "Could not start note",
-      });
-    }
-  }
-
-  async function handleCheckIn() {
-    if (!detail) return;
-    if (checkingInRef.current) return;
-    checkingInRef.current = true;
-    setDrawerBanner(null);
-    setCheckingIn(true);
-    try {
-      const res = await fetch(`/api/check-ins/appointment/start-note`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          organizationId: ORG_ID,
-          appointmentId: detail.appointment.id,
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        throw new Error(json.error ?? "Check-in failed");
-      }
-      // Refresh list so the status pill reflects checked_in before navigation.
-      await loadAppointments();
-      const target = typeof json.noteUrl === "string" && json.noteUrl
-        ? json.noteUrl
-        : json.encounterId
-          ? `/encounters/${json.encounterId}`
-          : null;
-      if (target) {
-        window.location.href = target;
-      } else {
-        setDrawerBanner({ kind: "success", text: "Checked in." });
-        await loadDetail(detail.appointment.id);
-      }
-    } catch (e) {
-      setDrawerBanner({
-        kind: "error",
-        text: e instanceof Error ? e.message : "Check-in failed",
-      });
-    } finally {
-      checkingInRef.current = false;
-      setCheckingIn(false);
-    }
+    setCancelData(null);
   }
 
   return (
@@ -749,333 +554,74 @@ export default function MonthCalendarClient() {
       </div>
 
       {selectedId ? (
-        <div className={styles.drawerOverlay} onClick={closeDrawer}>
-          <aside className={styles.drawer} onClick={(e) => e.stopPropagation()}>
-            <div className={styles.drawerHeader}>
-              <h2 className={styles.drawerTitle}>Appointment</h2>
-              <button className={styles.closeBtn} onClick={closeDrawer}>
-                ×
-              </button>
-            </div>
-            <div className={styles.drawerBody}>
-              {detailLoading ? <div>Loading…</div> : null}
-              {detailError ? (
-                <div className={`${styles.banner} ${styles.bannerError}`}>
-                  {detailError}
-                </div>
-              ) : null}
-              {drawerBanner ? (
-                <div
-                  className={`${styles.banner} ${drawerBanner.kind === "success" ? styles.bannerSuccess : styles.bannerError}`}
-                >
-                  {drawerBanner.text}
-                </div>
-              ) : null}
-              {detail ? (
-                <>
-                  <div className={styles.section}>
-                    <div className={styles.sectionLabel}>Client</div>
-                    <div className={styles.sectionValue}>
-                      {detail.appointment.clientId ? (
-                        <Link
-                          className={styles.link}
-                          href={`/patients/${detail.appointment.clientId}`}
-                        >
-                          {detail.appointment.clientName}
-                        </Link>
-                      ) : (
-                        detail.appointment.clientName
-                      )}
-                    </div>
-                  </div>
-
-                  <div className={styles.section}>
-                    <div className={styles.sectionLabel}>When</div>
-                    <div className={styles.sectionValue}>
-                      {fmtDateTime(detail.appointment.scheduledStartAt)} –{" "}
-                      {fmtTime(detail.appointment.scheduledEndAt)}
-                    </div>
-                    {(() => {
-                      const ms =
-                        new Date(detail.appointment.scheduledEndAt).getTime() -
-                        new Date(detail.appointment.scheduledStartAt).getTime();
-                      const mins = Math.max(0, Math.round(ms / 60000));
-                      const h = Math.floor(mins / 60);
-                      const m = mins % 60;
-                      const label =
-                        h > 0
-                          ? `${h}h${m ? ` ${m}m` : ""}`
-                          : `${m} min`;
-                      return (
-                        <div className={styles.sectionMuted}>
-                          Duration: {label}
-                        </div>
-                      );
-                    })()}
-                  </div>
-
-                  <div className={styles.section}>
-                    <div className={styles.sectionLabel}>Clinician</div>
-                    <div className={styles.sectionValue}>
-                      {detail.appointment.providerName}
-                    </div>
-                    {detail.appointment.serviceLocation ? (
-                      <div className={styles.sectionMuted}>
-                        {detail.appointment.serviceLocation}
-                      </div>
-                    ) : null}
-                  </div>
-
-                  <div className={styles.row}>
-                    <div className={styles.section}>
-                      <div className={styles.sectionLabel}>Appointment type</div>
-                      {(() => {
-                        const typeLabel = apptTypeLabel(detail.appointment);
-                        return (
-                          <div className={styles.sectionValue}>
-                            {typeLabel ?? "—"}
-                          </div>
-                        );
-                      })()}
-                    </div>
-                    <div className={styles.section}>
-                      <div className={styles.sectionLabel}>CPT code</div>
-                      <select
-                        className={styles.select}
-                        value={cptDraft}
-                        onChange={(e) => setCptDraft(e.target.value)}
-                      >
-                        {CPT_OPTIONS.map((opt) => (
-                          <option key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </option>
-                        ))}
-                        {cptFallback &&
-                        !CPT_OPTIONS.some((o) => o.value === cptFallback) ? (
-                          <option value={cptFallback}>
-                            {cptFallback} — existing
-                          </option>
-                        ) : null}
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className={styles.section}>
-                    <div className={styles.sectionLabel}>Internal memo</div>
-                    <textarea
-                      className={styles.textarea}
-                      value={memoDraft}
-                      onChange={(e) => setMemoDraft(e.target.value)}
-                      placeholder="Add a private note for this appointment…"
-                    />
-                  </div>
-
-                  <div className={styles.section}>
-                    <div className={styles.sectionLabel}>Insurance</div>
-                    {detail.insurance.primaryPolicy ? (
-                      <>
-                        <div className={styles.sectionValue}>
-                          {detail.insurance.primaryPolicy.payerName ??
-                            "Unknown payer"}
-                        </div>
-                        {detail.insurance.primaryPolicy.planName ? (
-                          <div className={styles.sectionMuted}>
-                            Plan: {detail.insurance.primaryPolicy.planName}
-                          </div>
-                        ) : null}
-                        <div className={styles.sectionMuted}>
-                          Member ID:{" "}
-                          {detail.insurance.primaryPolicy.policyNumber ?? "—"}
-                        </div>
-                      </>
-                    ) : (
-                      <div className={styles.sectionMuted}>
-                        No primary policy on file.
-                      </div>
-                    )}
-                  </div>
-
-                  <div className={styles.section}>
-                    <div className={styles.sectionLabel}>Eligibility</div>
-                    {(() => {
-                      const e = detail.eligibility;
-                      const ds = e?.displayStatus ?? "not_checked";
-                      const label =
-                        ds === "active"
-                          ? "Active"
-                          : ds === "inactive"
-                            ? "Inactive"
-                            : ds === "stale"
-                              ? "Stale"
-                              : ds === "unknown"
-                                ? "Unknown"
-                                : "Not checked";
-                      const badgeCls =
-                        ds === "active"
-                          ? styles.badgeActive
-                          : ds === "inactive"
-                            ? styles.badgeInactive
-                            : styles.badgeUnknown;
-                      const asOf = e?.asOf ?? null;
-                      return (
-                        <>
-                          <div>
-                            <span className={`${styles.badge} ${badgeCls}`}>
-                              {label}
-                            </span>
-                          </div>
-                          {asOf ? (
-                            <div className={styles.sectionMuted}>
-                              As of {new Date(asOf).toLocaleDateString()}
-                              {e?.copay_amount != null
-                                ? ` · copay ${money(Number(e.copay_amount))}`
-                                : ""}
-                            </div>
-                          ) : (
-                            <div className={styles.sectionMuted}>
-                              No eligibility check on file for this policy.
-                            </div>
-                          )}
-                          {detail.appointment.clientId ? (
-                            <div className={styles.sectionMuted}>
-                              <Link
-                                className={styles.link}
-                                href={`/clients/${detail.appointment.clientId}/eligibility`}
-                              >
-                                {asOf
-                                  ? "Open eligibility history"
-                                  : "Check eligibility"}
-                              </Link>
-                            </div>
-                          ) : null}
-                        </>
-                      );
-                    })()}
-                  </div>
-
-                  <div className={styles.section}>
-                    <div className={styles.sectionLabel}>Client balance</div>
-                    <div className={styles.sectionValue}>
-                      {money(detail.balance.openBalance)} open
-                    </div>
-                  </div>
-
-                  <div className={styles.section}>
-                    <div className={styles.sectionLabel}>Progress note</div>
-                    {detail.encounter ? (
-                      <Link
-                        className={styles.link}
-                        href={`/encounters/${detail.encounter.id}`}
-                      >
-                        Open note ({detail.encounter.encounter_status ?? "draft"})
-                      </Link>
-                    ) : (
-                      <div className={styles.sectionMuted}>
-                        No encounter yet.
-                      </div>
-                    )}
-                  </div>
-
-                  <div className={styles.actions}>
-                    {(() => {
-                      const status = detail.appointment.status;
-                      const alreadyCheckedIn = status === "checked_in" || status === "in_progress" || status === "completed";
-                      const disabled = checkingIn || !detail.appointment.clientId;
-                      return (
-                        <button
-                          className={styles.primaryBtn}
-                          onClick={handleCheckIn}
-                          disabled={disabled}
-                          aria-busy={checkingIn || undefined}
-                          title={!detail.appointment.clientId ? "Assign a client before checking in" : undefined}
-                        >
-                          {checkingIn ? (
-                            <>
-                              <span className={styles.btnSpinner} aria-hidden="true" />
-                              Checking in…
-                            </>
-                          ) : alreadyCheckedIn ? (
-                            "Open note"
-                          ) : (
-                            "Check in"
-                          )}
-                        </button>
-                      );
-                    })()}
-                    <button
-                      className={styles.secondaryBtn}
-                      onClick={saveDetailChanges}
-                      disabled={savingDetail}
-                    >
-                      {savingDetail ? "Saving…" : "Save changes"}
-                    </button>
-                    {detail.encounter ? (
-                      <button
-                        className={styles.secondaryBtn}
-                        onClick={() => setCancelOpen(true)}
-                        disabled={detail.appointment.status === "cancelled"}
-                      >
-                        {detail.appointment.status === "cancelled" ? "Cancelled" : "Cancel"}
-                      </button>
-                    ) : (
-                      <button
-                        className={styles.secondaryBtn}
-                        onClick={handleStartNote}
-                      >
-                        Start note
-                      </button>
-                    )}
-                    {detail.appointment.clientId ? (
-                      <button
-                        className={styles.secondaryBtn}
-                        onClick={() => setCollectOpen(true)}
-                      >
-                        Collect
-                      </button>
-                    ) : null}
-                  </div>
-                </>
-              ) : null}
-            </div>
-          </aside>
-        </div>
-      ) : null}
-
-      {collectOpen && detail && detail.appointment.clientId ? (
-        <CollectModal
-          organizationId={ORG_ID}
-          clientId={detail.appointment.clientId}
-          appointmentId={detail.appointment.id}
-          providerId={detail.appointment.providerId}
-          openBalance={detail.balance.openBalance}
-          initialAmount={collectPrefill?.amount ?? null}
-          initialNote={collectPrefill?.note ?? null}
-          title={collectPrefill?.title ?? "Collect copay"}
-          onClose={() => { setCollectOpen(false); setCollectPrefill(null); }}
-          onCollected={async () => {
-            setCollectOpen(false);
-            setCollectPrefill(null);
-            setDrawerBanner({ kind: "success", text: "Payment posted." });
-            if (detail) await loadDetail(detail.appointment.id);
+        <AppointmentWorkspace
+          appointmentId={selectedId}
+          onClose={closeDrawer}
+          onRefresh={loadAppointments}
+          onCollect={(data) => {
+            setCollectPrefill({
+              amount: 0,
+              note: "",
+              title: `Collect — ${data.clientName}`,
+            });
+            setCollectData({
+              clientId: data.clientId ?? "",
+              appointmentId: data.appointmentId,
+              providerId: data.providerId,
+              openBalance: data.openBalance,
+            });
+            setCollectOpen(true);
+          }}
+          onCancel={(data) => {
+            setCancelData({
+              appointmentId: data.appointmentId,
+              alreadyCancelled: data.alreadyCancelled,
+            });
+            setCancelOpen(true);
           }}
         />
       ) : null}
 
-      {cancelOpen && detail ? (
+      {collectOpen ? (
+        <CollectModal
+          organizationId={ORG_ID}
+          clientId={collectData?.clientId ?? ""}
+          appointmentId={collectData?.appointmentId ?? ""}
+          providerId={collectData?.providerId ?? null}
+          openBalance={collectData?.openBalance ?? 0}
+          initialAmount={collectPrefill?.amount ?? null}
+          initialNote={collectPrefill?.note ?? null}
+          title={collectPrefill?.title ?? "Collect copay"}
+          onClose={() => { setCollectOpen(false); setCollectPrefill(null); setCollectData(null); }}
+          onCollected={async () => {
+            setCollectOpen(false);
+            setCollectPrefill(null);
+            setCollectData(null);
+            await loadAppointments();
+          }}
+        />
+      ) : null}
+
+      {cancelOpen ? (
         <CancelAppointmentModal
-          appointmentId={detail.appointment.id}
-          alreadyCancelled={detail.appointment.status === "cancelled"}
-          onClose={() => setCancelOpen(false)}
+          appointmentId={cancelData?.appointmentId ?? ""}
+          alreadyCancelled={cancelData?.alreadyCancelled ?? false}
+          onClose={() => { setCancelOpen(false); setCancelData(null); }}
           onCancelled={async ({ fee, reason }) => {
             setCancelOpen(false);
-            setDrawerBanner({ kind: "success", text: "Appointment cancelled." });
-            if (detail) await loadDetail(detail.appointment.id);
+            setCancelData(null);
             await loadAppointments();
-            if (fee && fee > 0 && detail.appointment.clientId) {
+            if (fee && fee > 0) {
               setCollectPrefill({
                 amount: fee,
                 note: reason ? `Cancellation fee — ${reason}` : "Cancellation fee",
                 title: "Charge cancellation fee",
+              });
+              setCollectData({
+                clientId: cancelData?.appointmentId ?? "",
+                appointmentId: cancelData?.appointmentId ?? "",
+                providerId: null,
+                openBalance: 0,
               });
               setCollectOpen(true);
             }
