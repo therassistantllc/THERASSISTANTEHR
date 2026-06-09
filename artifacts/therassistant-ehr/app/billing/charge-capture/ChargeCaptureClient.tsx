@@ -197,14 +197,6 @@ export default function ChargeCaptureClient() {
   const modalRef = useRef<HTMLDivElement | null>(null);
   const lastFocusedRef = useRef<HTMLElement | null>(null);
 
-  // Batches
-  const [batches, setBatches] = useState<Batch[]>([]);
-  const [batchLoading, setBatchLoading] = useState(true);
-  const [batchError, setBatchError] = useState<string | null>(null);
-  const [batchTotals, setBatchTotals] = useState<BatchTotals>({ totalUnbilledCharges: 0, pendingBatches: 0, readyToSubmit: 0 });
-  const [busyBatch, setBusyBatch] = useState<string | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
-
   // Generate batches
   const [generating, setGenerating] = useState(false);
   const [generateResult, setGenerateResult] = useState<{ batchesCreated: number; claimsQueued: number; message?: string } | null>(null);
@@ -295,7 +287,8 @@ export default function ChargeCaptureClient() {
     }
   }, [orgId]);
 
-  useEffect(() => { void loadBatches(); void loadCharges(); }, [loadBatches, loadCharges]);
+useEffect(() => { void loadCharges(); }, [loadCharges]);
+
 
   // ── Generate 837P batches from ready charges ─────────────────────────────
 
