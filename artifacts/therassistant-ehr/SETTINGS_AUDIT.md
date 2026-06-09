@@ -23,8 +23,8 @@ what is in the running database and code as of this audit.
 | Patient portal | `/settings/portal` (**placeholder**) | portal routes | `system_settings` keys `patient_portal.*` (booleans), `portal.defaults` (object), `organization.portal_settings` (object) | portal pages, `lib/portal/portalSettings.ts` (`DEFAULT_PORTAL_SETTINGS`) | Yes — `DEFAULT_PORTAL_SETTINGS` (reasonable code defaults) | `system_settings['organization.portal_settings']` | **Overlap**: three portal-related key namespaces; consolidate and build portal UI |
 | Staff notification prefs | n/a | `/api/billing/notification-preferences` GET/POST | `staff_notification_preferences` (defaults `true`) | eligibility routing alerts | DB defaults `true` | that table | OK |
 | Org-scoped defaults bucket | various placeholders | none | `system_settings` keys: `billing.defaults`, `claims.defaults`, `eligibility.defaults`, `mailroom.defaults`, `security.defaults`, `telehealth.defaults`, `chat.defaults`, `vcc.defaults`, `clearinghouse.defaults`, `medicaid_telehealth_checkin.defaults`, `billing.rejections_277ca_autoroute`, `eligibility_service_type_code` | respective feature flows | code defaults where keys missing | `system_settings` (canonical store) | OK — this is the intended settings store |
-| ~~Orphaned: `custom_billing_settings`~~ | none | none | ~~`custom_billing_settings`~~ — **not present in current schema.sql** | nothing (had zero code refs) | n/a | `system_settings['billing.defaults']` | No migration needed for schema.sql; **defensive idempotent migration added** (`20260609201218_drop_orphaned_custom_settings_tables.sql`) for environments with legacy drift |
-| ~~Orphaned: `custom_note_settings`~~ | none | none | ~~`custom_note_settings`~~ — **not present in current schema.sql** | nothing (had zero code refs) | n/a | a `system_settings` note key | No migration needed for schema.sql; **defensive idempotent migration added** for environments with legacy drift |
+| ~~Orphaned: `custom_billing_settings`~~ | none | none | ~~`custom_billing_settings`~~ — **not present in current schema.sql** | nothing (had zero code refs) | n/a | `system_settings['billing.defaults']` | Not present in schema.sql or any migration file; no migration needed |
+| ~~Orphaned: `custom_note_settings`~~ | none | none | ~~`custom_note_settings`~~ — **not present in current schema.sql** | nothing (had zero code refs) | n/a | a `system_settings` note key | Not present in schema.sql or any migration file; no migration needed |
 
 ---
 
@@ -35,10 +35,8 @@ what is in the running database and code as of this audit.
 The app has **one canonical settings store** — `system_settings` (org-scoped JSONB key/value,
 19 live keys). Two **legacy structured tables** (`custom_billing_settings`,
 `custom_note_settings`) were referenced in a prior audit document but are **not present**
-in the current schema.sql. They may have existed in a pre-v0 schema and were already
-removed before this codebase snapshot. To cover any environment where they still exist
-from legacy drift, a **defensive idempotent migration** (`20260609201218_drop_orphaned_custom_settings_tables.sql`)
-was added to safely drop them.
+in the current schema.sql or any migration file — they may have existed in a pre-v0
+schema and were already removed before this codebase snapshot.
 
 There is also **portal-setting fragmentation** inside `system_settings` itself: discrete booleans
 (`patient_portal.enabled`, `patient_portal.allow_*`), an object (`portal.defaults`), and another
