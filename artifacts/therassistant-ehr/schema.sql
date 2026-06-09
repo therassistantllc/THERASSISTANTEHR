@@ -1995,29 +1995,6 @@ CREATE TABLE IF NOT EXISTS "public"."custom_billing_service" (
 ALTER TABLE "public"."custom_billing_service" OWNER TO "postgres";
 
 
-CREATE TABLE IF NOT EXISTS "public"."custom_billing_settings" (
-    "billing_settings_id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
-    "organization_name" character varying(255),
-    "billing_enabled" boolean DEFAULT true NOT NULL,
-    "default_currency" character varying(10) DEFAULT 'USD'::character varying NOT NULL,
-    "default_tax_rate" numeric(8,4) DEFAULT 0 NOT NULL,
-    "invoice_prefix" character varying(50) DEFAULT 'INV'::character varying NOT NULL,
-    "next_invoice_number" bigint DEFAULT 1000 NOT NULL,
-    "payment_due_days" integer DEFAULT 30 NOT NULL,
-    "allow_partial_payments" boolean DEFAULT true NOT NULL,
-    "auto_generate_invoice" boolean DEFAULT false NOT NULL,
-    "require_payment_before_service" boolean DEFAULT false NOT NULL,
-    "billing_contact_name" character varying(255),
-    "billing_contact_email" character varying(255),
-    "billing_contact_phone" character varying(50),
-    "date_created" timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    "date_changed" timestamp without time zone
-);
-
-
-ALTER TABLE "public"."custom_billing_settings" OWNER TO "postgres";
-
-
 CREATE TABLE IF NOT EXISTS "public"."custom_billing_workqueue_comment" (
     "comment_id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "claim_id" "uuid",
@@ -2193,25 +2170,6 @@ CREATE TABLE IF NOT EXISTS "public"."custom_lookup_value" (
 
 
 ALTER TABLE "public"."custom_lookup_value" OWNER TO "postgres";
-
-
-CREATE TABLE IF NOT EXISTS "public"."custom_note_settings" (
-    "note_settings_id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
-    "notes_enabled" boolean DEFAULT true NOT NULL,
-    "require_note_type" boolean DEFAULT true NOT NULL,
-    "require_author" boolean DEFAULT true NOT NULL,
-    "allow_private_notes" boolean DEFAULT true NOT NULL,
-    "allow_note_editing" boolean DEFAULT true NOT NULL,
-    "allow_note_deleting" boolean DEFAULT false NOT NULL,
-    "max_note_length" integer DEFAULT 10000 NOT NULL,
-    "default_note_visibility" character varying(50) DEFAULT 'INTERNAL'::character varying NOT NULL,
-    "default_note_status" character varying(50) DEFAULT 'ACTIVE'::character varying NOT NULL,
-    "date_created" timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    "date_changed" timestamp without time zone
-);
-
-
-ALTER TABLE "public"."custom_note_settings" OWNER TO "postgres";
 
 
 CREATE TABLE IF NOT EXISTS "public"."custom_note_type" (
@@ -5052,10 +5010,6 @@ ALTER TABLE ONLY "public"."custom_billing_service"
 
 
 
-ALTER TABLE ONLY "public"."custom_billing_settings"
-    ADD CONSTRAINT "custom_billing_settings_pkey" PRIMARY KEY ("billing_settings_id");
-
-
 
 ALTER TABLE ONLY "public"."custom_billing_workqueue_comment"
     ADD CONSTRAINT "custom_billing_workqueue_comment_pkey" PRIMARY KEY ("comment_id");
@@ -5100,10 +5054,6 @@ ALTER TABLE ONLY "public"."custom_invoice"
 ALTER TABLE ONLY "public"."custom_lookup_value"
     ADD CONSTRAINT "custom_lookup_value_pkey" PRIMARY KEY ("lookup_id");
 
-
-
-ALTER TABLE ONLY "public"."custom_note_settings"
-    ADD CONSTRAINT "custom_note_settings_pkey" PRIMARY KEY ("note_settings_id");
 
 
 
@@ -8865,9 +8815,6 @@ ALTER TABLE "public"."custom_audit_event" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."custom_billing_service" ENABLE ROW LEVEL SECURITY;
 
 
-ALTER TABLE "public"."custom_billing_settings" ENABLE ROW LEVEL SECURITY;
-
-
 ALTER TABLE "public"."custom_billing_workqueue_comment" ENABLE ROW LEVEL SECURITY;
 
 
@@ -8893,9 +8840,6 @@ ALTER TABLE "public"."custom_invoice_line_item" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."custom_lookup_value" ENABLE ROW LEVEL SECURITY;
-
-
-ALTER TABLE "public"."custom_note_settings" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."custom_note_type" ENABLE ROW LEVEL SECURITY;
@@ -9826,11 +9770,6 @@ GRANT ALL ON TABLE "public"."custom_billing_service" TO "service_role";
 
 
 
-GRANT ALL ON TABLE "public"."custom_billing_settings" TO "anon";
-GRANT ALL ON TABLE "public"."custom_billing_settings" TO "authenticated";
-GRANT ALL ON TABLE "public"."custom_billing_settings" TO "service_role";
-
-
 
 GRANT ALL ON TABLE "public"."custom_billing_workqueue_comment" TO "anon";
 GRANT ALL ON TABLE "public"."custom_billing_workqueue_comment" TO "authenticated";
@@ -9884,11 +9823,6 @@ GRANT ALL ON TABLE "public"."custom_lookup_value" TO "anon";
 GRANT ALL ON TABLE "public"."custom_lookup_value" TO "authenticated";
 GRANT ALL ON TABLE "public"."custom_lookup_value" TO "service_role";
 
-
-
-GRANT ALL ON TABLE "public"."custom_note_settings" TO "anon";
-GRANT ALL ON TABLE "public"."custom_note_settings" TO "authenticated";
-GRANT ALL ON TABLE "public"."custom_note_settings" TO "service_role";
 
 
 

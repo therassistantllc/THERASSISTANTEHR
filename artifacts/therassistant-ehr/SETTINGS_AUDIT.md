@@ -23,8 +23,8 @@ what is in the running database and code as of this audit.
 | Patient portal | `/settings/portal` (**placeholder**) | portal routes | `system_settings` keys `patient_portal.*` (booleans), `portal.defaults` (object), `organization.portal_settings` (object) | portal pages, `lib/portal/portalSettings.ts` (`DEFAULT_PORTAL_SETTINGS`) | Yes — `DEFAULT_PORTAL_SETTINGS` (reasonable code defaults) | `system_settings['organization.portal_settings']` | **Overlap**: three portal-related key namespaces; consolidate (§2) and build portal UI |
 | Staff notification prefs | n/a | `/api/billing/notification-preferences` GET/POST | `staff_notification_preferences` (defaults `true`) | eligibility routing alerts | DB defaults `true` | that table | OK |
 | Org-scoped defaults bucket | various placeholders | none | `system_settings` keys: `billing.defaults`, `claims.defaults`, `eligibility.defaults`, `mailroom.defaults`, `security.defaults`, `telehealth.defaults`, `chat.defaults`, `vcc.defaults`, `clearinghouse.defaults`, `medicaid_telehealth_checkin.defaults`, `billing.rejections_277ca_autoroute`, `eligibility_service_type_code` | respective feature flows | code defaults where keys missing | `system_settings` (canonical store) | OK — this is the intended settings store |
-| **Orphaned: `custom_billing_settings`** | none | none | `custom_billing_settings` (structured cols, keyed by `organization_name` varchar) — **1 row** | **nothing** (zero code refs; only in `schema.sql`) | n/a | should be `system_settings['billing.defaults']` | **Overlap — recommend drop/migrate** (§4, destructive) |
-| **Orphaned: `custom_note_settings`** | none | none | `custom_note_settings` (structured cols) — **1 row** | **nothing** (zero code refs; only in `schema.sql`) | n/a | should be a `system_settings` note key | **Overlap — recommend drop/migrate** (§4, destructive) |
+| ~~Orphaned: `custom_billing_settings`~~ | none | none | ~~`custom_billing_settings`~~ — **DROPPED** | nothing (had zero code refs) | n/a | `system_settings['billing.defaults']` | ✅ **Done — table dropped** (was 1 legacy "Default Organization" row, all v0 defaults; nothing read it) |
+| ~~Orphaned: `custom_note_settings`~~ | none | none | ~~`custom_note_settings`~~ — **DROPPED** | nothing (had zero code refs) | n/a | a `system_settings` note key | ✅ **Done — table dropped** (was 1 legacy row, all v0 defaults; nothing read it) |
 
 ---
 
@@ -77,18 +77,22 @@ Consolidated all real POS fallbacks onto the canonical module and fixed the inva
 
 ---
 
-## 4. Recommended follow-ups (not done — need approval / testing)
+## 4. Follow-ups
 
-1. **Drop or migrate the orphaned tables** `custom_billing_settings` and `custom_note_settings`
-   (1 row each, zero code refs). This is a **destructive DB change** — recommend a reviewed
-   migration that first copies any real values into the matching `system_settings` keys.
-2. **De-hardcode the EDI ISA/GS header** in `lib/claims/edi837pBatchService.ts` — read
+### Done in this task
+- **Dropped the orphaned/duplicate tables** `custom_billing_settings` and `custom_note_settings`
+  (user-approved). Each held a single legacy v0 row of pure defaults (no real org-specific values),
+  had zero code references, and no inbound foreign keys. Their definitions were also removed from
+  `schema.sql` so they will not be reintroduced. Canonical settings remain in `system_settings`.
+
+### Remaining (need testing / per-org decisions — not done)
+1. **De-hardcode the EDI ISA/GS header** in `lib/claims/edi837pBatchService.ts` — read
    `gs_receiver_code`, `claims_x12_version`, `receiver_qualifier`, and `receiver_id` from the
    `clearinghouse_connections` row instead of literals. Deferred because it changes generated X12
    and needs a clearinghouse round-trip test.
-3. **Move `organizations.submitter_id` default off the schema** — `'1082546'` is a real submitter
+2. **Move `organizations.submitter_id` default off the schema** — `'1082546'` is a real submitter
    ID baked as a column default; it should be set per organization, not defaulted.
-4. **Consolidate portal settings** into a single `organization.portal_settings` object and migrate
+3. **Consolidate portal settings** into a single `organization.portal_settings` object and migrate
    the discrete `patient_portal.*` / `portal.defaults` keys.
-5. **Implement the placeholder settings UIs** so these values are editable in-app rather than
+4. **Implement the placeholder settings UIs** so these values are editable in-app rather than
    seeded directly into the database.
