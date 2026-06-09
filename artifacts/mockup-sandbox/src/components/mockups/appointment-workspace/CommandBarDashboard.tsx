@@ -37,9 +37,7 @@ export function CommandBarDashboard() {
         fontFamily: "'Inter', sans-serif",
       }}
     >
-      <style dangerouslySetInnerHTML={{ __html: \`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-      \` }} />
+      <style dangerouslySetInnerHTML={{ __html: "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');" }} />
       
       {/* Drawer Container */}
       <div className="w-[720px] bg-[#f9fafc] rounded-xl shadow-2xl overflow-hidden flex flex-col border border-gray-200" style={{ height: "1400px" }}>

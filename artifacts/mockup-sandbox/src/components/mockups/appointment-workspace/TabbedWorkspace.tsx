@@ -20,7 +20,7 @@ export function TabbedWorkspace() {
   const [activeTab, setActiveTab] = useState<"patient" | "actions" | "note" | "goals">("patient");
   const data = WORKSPACE_DATA;
 
-  const getTabIcon = (tab: string) => {
+  const getTabIcon = (tab: "patient" | "actions" | "note" | "goals") => {
     switch (tab) {
       case "patient": return <User className="w-5 h-5" />;
       case "actions": return <Activity className="w-5 h-5" />;
@@ -38,10 +38,7 @@ export function TabbedWorkspace() {
 
   return (
     <div className="w-[720px] h-[1400px] bg-white shadow-[-4px_0_24px_rgba(0,0,0,0.15)] flex flex-col font-sans text-slate-900 border-l border-slate-200">
-      <style dangerouslySetInnerHTML={{__html: `
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-        .font-sans { font-family: 'Inter', sans-serif; }
-      `}} />
+      <style dangerouslySetInnerHTML={{__html: "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap'); .font-sans { font-family: 'Inter', sans-serif; }"}} />
 
       {/* Header */}
       <div className="flex-none px-6 py-4 border-b border-slate-200 flex justify-between items-start bg-white z-10">
