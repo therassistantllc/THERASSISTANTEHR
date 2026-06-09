@@ -1,4 +1,5 @@
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
+import { DEFAULT_OFFICE_PLACE_OF_SERVICE } from "@/lib/billing/placeOfService";
 
 export interface Generate837PBatchInput {
   organizationId: string;
@@ -117,12 +118,12 @@ function buildStructured837PPlaceholder(params: {
   for (const entry of params.claims) {
     const claim = entry.claim;
     const snapshot = entry.snapshot;
-    segments.push(`CLM*${sanitize(claim.patient_account_number ?? claim.claim_number ?? claim.id)}*${claim.total_charge}***${sanitize(claim.place_of_service ?? "10")}:B:1*Y*A*Y*Y~`);
+    segments.push(`CLM*${sanitize(claim.patient_account_number ?? claim.claim_number ?? claim.id)}*${claim.total_charge}***${sanitize(claim.place_of_service ?? DEFAULT_OFFICE_PLACE_OF_SERVICE)}:B:1*Y*A*Y*Y~`);
     segments.push(`NM1*IL*1*${sanitize(snapshot.subscriber_last_name)}*${sanitize(snapshot.subscriber_first_name)}****MI*${sanitize(snapshot.subscriber_member_id)}~`);
     segments.push(`NM1*PR*2*${sanitize(snapshot.payer_name)}*****PI*${sanitize(snapshot.payer_id)}~`);
     for (const line of entry.lines) {
       segments.push(`LX*${line.line_number}~`);
-      segments.push(`SV1*HC:${sanitize(line.procedure_code)}*${line.charge_amount}*UN*${line.units ?? 1}*${sanitize(line.place_of_service ?? claim.place_of_service ?? "10")}****Y~`);
+      segments.push(`SV1*HC:${sanitize(line.procedure_code)}*${line.charge_amount}*UN*${line.units ?? 1}*${sanitize(line.place_of_service ?? claim.place_of_service ?? DEFAULT_OFFICE_PLACE_OF_SERVICE)}****Y~`);
       segments.push(`DTP*472*D8*${String(line.service_date_from).replaceAll("-", "")}~`);
     }
   }

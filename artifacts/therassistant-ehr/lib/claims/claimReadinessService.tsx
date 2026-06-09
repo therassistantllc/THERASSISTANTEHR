@@ -46,7 +46,6 @@ export interface CreateClaimDraftInput {
   providerCredentialingProfileId?: string | null;
   patientAccountNumber?: string | null;
   claimNumber?: string | null;
-  providerCredentialingProfileId?: string | null;
 }
 
 export interface CreateClaimDraftResult {

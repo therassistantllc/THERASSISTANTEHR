@@ -7,6 +7,7 @@ import type {
   WorkqueueItem,
 } from "./types";
 import { CURRENT_USER_ID, ORG_ID } from "./seed";
+import { DEFAULT_TELEHEALTH_PLACE_OF_SERVICE } from "@/lib/billing/placeOfService";
 
 function makeId(prefix: string): ID {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`;
@@ -62,7 +63,7 @@ export function startEncounterFromAppointment(state: CanonicalEhrState, appointm
     start_time: appointment.scheduled_start,
     end_time: appointment.scheduled_end,
     duration_minutes: Math.max(1, Math.round((new Date(appointment.scheduled_end).getTime() - new Date(appointment.scheduled_start).getTime()) / 60000)),
-    place_of_service_code: "10",
+    place_of_service_code: DEFAULT_TELEHEALTH_PLACE_OF_SERVICE,
     service_location: "Telehealth; client located in Colorado",
     encounter_status: "draft",
     documentation_status: "in_progress",

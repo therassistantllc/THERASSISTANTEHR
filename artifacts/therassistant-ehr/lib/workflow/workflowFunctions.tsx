@@ -9,6 +9,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { mapLegacyClaimInputToProfessionalClaim } from "@/lib/claims/createProfessionalClaimFromLegacyInput";
+import { DEFAULT_OFFICE_PLACE_OF_SERVICE } from "@/lib/billing/placeOfService";
 
 export interface WorkflowContext {
   organizationId: string;
@@ -103,7 +104,7 @@ async function createServiceLine(
     cpt_hcpcs_code: "90834",
     units: 1,
     charge_amount: "150.00",
-    place_of_service_code: "11",
+    place_of_service_code: DEFAULT_OFFICE_PLACE_OF_SERVICE,
     rendering_provider_id: ctx.providerId,
   };
 
@@ -176,7 +177,7 @@ export async function createClaim(
       charge_amount: "150.00",
       units: 1,
       diagnosis_pointers: ["1"],
-      place_of_service: "11",
+      place_of_service: DEFAULT_OFFICE_PLACE_OF_SERVICE,
       rendering_provider_npi: null,
       authorization_number: null,
     });

@@ -1,6 +1,7 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { PipelineResult } from "./types";
 import { mapLegacyClaimInputToProfessionalClaim } from "../claims/createProfessionalClaimFromLegacyInput";
+import { DEFAULT_OFFICE_PLACE_OF_SERVICE } from "@/lib/billing/placeOfService";
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -109,7 +110,7 @@ export async function startEncounterFromAppointment(
     cpt_hcpcs_code: appointment.default_procedure_code ?? "90837",
     units: 1,
     charge_amount: appointment.default_charge_amount ?? 165,
-    place_of_service_code: "11",
+    place_of_service_code: DEFAULT_OFFICE_PLACE_OF_SERVICE,
     rendering_provider_id: encounter.provider_id,
     created_at: nowIso(),
     updated_at: nowIso(),
@@ -573,7 +574,7 @@ export async function createClaimFromEncounter(
       charge_amount: line.charge_amount,
       units: line.units,
       diagnosis_pointers: ["1"],
-      place_of_service: line.place_of_service_code ?? "11",
+      place_of_service: line.place_of_service_code ?? DEFAULT_OFFICE_PLACE_OF_SERVICE,
       rendering_provider_npi: null,
       authorization_number: null,
     });
@@ -620,7 +621,7 @@ export async function createClaimFromEncounter(
         procedureCode: line.cpt_hcpcs_code,
         units: line.units,
         chargeAmount: line.charge_amount,
-        placeOfService: line.place_of_service_code ?? "11",
+        placeOfService: line.place_of_service_code ?? DEFAULT_OFFICE_PLACE_OF_SERVICE,
       }));
       await supabase.from("charge_capture_items").insert({
         organization_id: encounter.organization_id,
@@ -636,7 +637,7 @@ export async function createClaimFromEncounter(
         diagnosis_codes: [],
         service_lines: serviceLines,
         total_charge: total,
-        place_of_service: serviceLines[0]?.placeOfService ?? "11",
+        place_of_service: serviceLines[0]?.placeOfService ?? DEFAULT_OFFICE_PLACE_OF_SERVICE,
         claim_id: claim.id,
         blocker_reasons: [],
         claim_created_at: nowIso(),

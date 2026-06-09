@@ -2,6 +2,12 @@ export const ALLOWED_PLACE_OF_SERVICE_CODES = ["11", "02"] as const;
 
 export type AllowedPlaceOfServiceCode = (typeof ALLOWED_PLACE_OF_SERVICE_CODES)[number];
 
+// Canonical default Place of Service codes. Use these instead of inline string
+// literals so every claim-building path falls back to a value the app actually
+// allows. (POS "10" is explicitly NOT allowed — see placeOfServiceWarning.)
+export const DEFAULT_OFFICE_PLACE_OF_SERVICE: AllowedPlaceOfServiceCode = "11";
+export const DEFAULT_TELEHEALTH_PLACE_OF_SERVICE: AllowedPlaceOfServiceCode = "02";
+
 export function normalizePlaceOfService(value: unknown): string {
   return String(value ?? "").trim().toUpperCase();
 }
@@ -17,7 +23,7 @@ export function isBlockedPlaceOfService(value: unknown): boolean {
 }
 
 export function defaultPlaceOfService(isTelehealth: boolean): AllowedPlaceOfServiceCode {
-  return isTelehealth ? "02" : "11";
+  return isTelehealth ? DEFAULT_TELEHEALTH_PLACE_OF_SERVICE : DEFAULT_OFFICE_PLACE_OF_SERVICE;
 }
 
 export function placeOfServiceWarning(code: unknown): string | null {

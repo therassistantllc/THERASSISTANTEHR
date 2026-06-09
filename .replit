@@ -1,4 +1,4 @@
-modules = ["nodejs-24", "python-3.11"]
+modules = ["nodejs-24", "python-3.11", "postgresql-16"]
 
 [deployment]
 router = "application"
@@ -41,3 +41,6 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOi
 [userenv.development]
 ALLOW_DEV_AUTH_BYPASS = "true"
 DEV_AUTH_USER_ID = "274ea877-88ef-40b0-b4aa-ee9feb1fd498"
+
+[nix]
+channel = "stable-25_05"

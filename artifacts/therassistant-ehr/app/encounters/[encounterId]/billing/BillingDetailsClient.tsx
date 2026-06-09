@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { DEFAULT_ORG_ID } from "@/lib/config";
+import { DEFAULT_OFFICE_PLACE_OF_SERVICE } from "@/lib/billing/placeOfService";
 import ClaimSubmissionReadinessPanel from "@/components/claim/ClaimSubmissionReadinessPanel";
 
 type DiagnosisRow = {
@@ -60,7 +61,7 @@ function blankServiceLine(serviceDate = today()): ServiceLineRow {
     modifier4: "",
     units: 1,
     chargeAmount: 0,
-    placeOfServiceCode: "10",
+    placeOfServiceCode: DEFAULT_OFFICE_PLACE_OF_SERVICE,
   };
 }
 
@@ -102,7 +103,7 @@ export default function BillingDetailsClient({ encounterId }: { encounterId: str
         modifier4: text(row.modifier_4),
         units: Number(row.units ?? 1) || 1,
         chargeAmount: Number(row.charge_amount ?? 0) || 0,
-        placeOfServiceCode: text(row.place_of_service_code) || "10",
+        placeOfServiceCode: text(row.place_of_service_code) || DEFAULT_OFFICE_PLACE_OF_SERVICE,
       }));
 
       setDiagnoses(loadedDiagnoses.length ? loadedDiagnoses : [blankDiagnosis()]);
