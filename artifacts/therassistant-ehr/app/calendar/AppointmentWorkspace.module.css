@@ -386,20 +386,7 @@
   color: #374151;
   line-height: 1.55;
   white-space: pre-wrap;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 5;
-  -webkit-box-orient: vertical;
 }
-.priorSessionLink {
-  font-size: 12px;
-  color: #2c6cf6;
-  text-decoration: none;
-  font-weight: 500;
-  margin-top: 2px;
-}
-.priorSessionLink:hover { text-decoration: underline; }
-
 /* Active goals */
 .goalsList {
   list-style: none;

@@ -800,16 +800,6 @@ export default function AppointmentWorkspace({
                       <p className={styles.priorSessionText}>{workspaceCtx.priorSession.plan}</p>
                     </div>
                   ) : null}
-                  {workspaceCtx.priorSession.encounterId ? (
-                    <Link
-                      href={`/encounters/${workspaceCtx.priorSession.encounterId}`}
-                      className={styles.priorSessionLink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      View full note →
-                    </Link>
-                  ) : null}
                 </section>
               ) : null}
 

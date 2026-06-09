@@ -72,8 +72,8 @@ export async function GET(
             .is("archived_at", null)
             .maybeSingle();
           const noteRow = note as Row | null;
-          const planRaw = text(noteRow?.plan).slice(0, 600);
-          const assessRaw = text(noteRow?.assessment).slice(0, 400);
+          const planRaw = text(noteRow?.plan);
+          const assessRaw = text(noteRow?.assessment);
           priorSession = {
             encounterId: text(lastEnc.id),
             date: (lastEnc.service_date as string | null) ?? null,
