@@ -1,0 +1,29 @@
+“Change Schedule page behavior so clinicians can work from the calendar without navigating away. When a clinician clicks an appointment, open an in-page slide-over/modal appointment workspace on top of the calendar. Do not use a browser pop-out window.
+
+The workspace should first show appointment details from the existing appointment detail API: client, DOB, provider, time, appointment type, status, insurance, eligibility, authorization/referral if available, balance alert if available, and existing encounter status.
+
+Add primary actions:
+
+Check In / Start Encounter
+Open Existing Encounter
+Open Full Client Chart in new tab
+Cancel / No-show / Reschedule if permissions allow
+
+When Check In is clicked, call the existing app/api/encounters/create-from-appointment/route.ts endpoint. Do not create a new encounter flow. Use the existing idempotent findOrCreateEncounter behavior. If an encounter already exists, open that encounter in the workspace instead of creating a duplicate.
+
+After check-in, replace the appointment preview panel with a visit workspace tied to the returned encounterId. The visit workspace should use the existing encounter/documentation components where possible. For appointment-created encounters, use the existing encounter_clinical_notes path. Do not write to duplicate note tables.
+
+Keep the calendar visible in the background. Closing the workspace returns the clinician to the same calendar date/view without reload. Refresh the appointment card/status after check-in.
+
+Do not redesign the full calendar UI. Do not create duplicate appointment, encounter, chart, or note tables. Do not route this through billing. This is a Schedule page workflow change only.
+
+Important behavior:
+
+The appointment workspace must use the same appointment record the calendar displays.
+Check-in must be disabled or blocked for cancelled/no-show appointments unless a separate no-show fee workflow exists.
+If the appointment has no provider and is billable, do not allow check-in.
+If eligibility/auth is missing or stale, show a warning but do not block check-in unless settings require it.
+Full chart should remain available, but not required for normal check-in.
+The clinician should be able to start and document the visit from the calendar page.”
+
+That is a good product change. It reduces clicks and keeps the schedule as the clinician’s command center without turning the calendar into a bloated chart screen.
