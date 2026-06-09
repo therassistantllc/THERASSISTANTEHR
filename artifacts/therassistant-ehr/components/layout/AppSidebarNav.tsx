@@ -123,7 +123,7 @@ function active(pathname: string, prefixes: string[], exact = false): boolean {
 }
 
 const DASHBOARD_PREFIXES = ["/billing/my-inbox", "/billing/executive-priority"];
-const CLAIM_PREP_PREFIXES = ["/billing/ready-to-generate", "/billing/claim-readiness", "/billing/claim-build-errors"];
+const CLAIM_PREP_PREFIXES = ["/billing/charge-capture", "/billing/ready-to-generate", "/billing/claim-readiness", "/billing/claim-build-errors"];
 const BATCHES_837P_PREFIXES = ["/billing/batches", "/billing/837p-batches", "/billing/orphaned-batches"];
 const CLAIMS_PREFIXES = ["/billing/claims", "/billing/documentation-pending", "/billing/no-response", "/billing/resubmissions", "/billing/corrected-claims", "/billing/submitted-claims", "/billing/payer-received", "/billing/appeals", "/billing/cob-issues", "/billing/secondary-billing", "/billing/transmission-failures", "/billing/claim-hold", "/billing/adjustments-review", "/billing/audit-queue", "/billing/compliance-audit", "/billing/compliance-holds", "/billing/blocked-claims"];
 const REJECTIONS_PREFIXES = ["/billing/rejections", "/billing/rejections-999", "/billing/rejections-277ca", "/billing/payer-rejections", "/billing/authorization-required", "/billing/provider-enrollment-issues"];
@@ -167,7 +167,7 @@ export default function AppSidebarNav() {
       {billingExpanded ? (
         <div className={styles.subnav}>
           <SubNavLinkIcon href="/billing/my-inbox" icon={<TasksIcon />} label="Dashboard" prefixes={DASHBOARD_PREFIXES} pathname={pathname} badge={<MyInboxBadge />} />
-          <SubNavLinkIcon href="/billing/ready-to-generate" icon={<ClipboardIcon />} label="Charges" prefixes={CLAIM_PREP_PREFIXES} pathname={pathname} />
+          <SubNavLinkIcon href="/billing/charge-capture" icon={<ClipboardIcon />} label="Charges" prefixes={CLAIM_PREP_PREFIXES} pathname={pathname} />
           <SubNavLinkIcon href="/billing/batches" icon={<ClipboardIcon />} label="837P Batches" prefixes={BATCHES_837P_PREFIXES} pathname={pathname} />
           <SubNavLinkIcon href="/billing/eligibility-batches" icon={<ShieldIcon />} label="Eligibility" prefixes={["/billing/eligibility-batches", "/billing/eligibility-issues"]} pathname={pathname} />
           <SubNavLinkIcon href="/billing/claims" icon={<ClipboardIcon />} label="Claims" prefixes={CLAIMS_PREFIXES} pathname={pathname} />
