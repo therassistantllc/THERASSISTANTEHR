@@ -56,7 +56,20 @@
   to { transform: rotate(360deg); }
 }
 
-.body { flex: 1; padding: 16px 24px; }
+.body {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.calendarArea {
+  flex: 1;
+  padding: 16px 24px;
+  overflow-y: auto;
+  min-width: 0;
+}
 
 .weekHeader {
   display: grid;

@@ -125,6 +125,7 @@ export default function AppointmentWorkspace({
   onRefresh,
   onCollect,
   onCancel,
+  onOpenNext,
 }: {
   appointmentId: string;
   onClose: () => void;
@@ -140,6 +141,7 @@ export default function AppointmentWorkspace({
     appointmentId: string;
     alreadyCancelled: boolean;
   }) => void;
+  onOpenNext?: () => void;
 }) {
   const [detail, setDetail] = useState<AppointmentDetail | null>(null);
   const [loading, setLoading] = useState(false);
@@ -151,6 +153,21 @@ export default function AppointmentWorkspace({
   const workspaceRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const checkingInRef = useRef(false);
+
+  type WorkspaceCtx = {
+    priorSession: {
+      encounterId: string;
+      date: string | null;
+      plan: string | null;
+      assessment: string | null;
+    } | null;
+    goals: Array<{ id: string; description: string; status: string }>;
+    telehealth: { isVirtual: boolean; existingUrl: string | null };
+  };
+  const [workspaceCtx, setWorkspaceCtx] = useState<WorkspaceCtx | null>(null);
+  const [chargeResult, setChargeResult] = useState<{ chargeStatus: string | null; claimId: string | null } | null>(null);
+  const [telehealthLoading, setTelehealthLoading] = useState(false);
+  const [joinUrl, setJoinUrl] = useState<string | null>(null);
 
   // Load appointment details
   const loadDetail = useCallback(async (id: string) => {
@@ -178,6 +195,30 @@ export default function AppointmentWorkspace({
   useEffect(() => {
     if (appointmentId) loadDetail(appointmentId);
   }, [appointmentId, loadDetail]);
+
+  // Load workspace context (prior session, goals, telehealth)
+  const loadWorkspaceCtx = useCallback(async (id: string) => {
+    try {
+      const params = new URLSearchParams({ organizationId: ORG_ID });
+      const res = await fetch(`/api/scheduling/appointments/${id}/workspace-context?${params}`);
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success) setWorkspaceCtx(json as WorkspaceCtx);
+      }
+    } catch {
+      // non-critical
+    }
+  }, []);
+
+  useEffect(() => {
+    if (appointmentId) loadWorkspaceCtx(appointmentId);
+  }, [appointmentId, loadWorkspaceCtx]);
+
+  // Reset chargeResult when appointment changes
+  useEffect(() => {
+    setChargeResult(null);
+    setJoinUrl(null);
+  }, [appointmentId]);
 
   // Focus management
   useEffect(() => {
@@ -274,6 +315,40 @@ export default function AppointmentWorkspace({
     }
   }, [detail]);
 
+  // Telehealth — generate/open join link
+  const handleTelehealth = useCallback(async () => {
+    if (!detail) return;
+    if (joinUrl) {
+      window.open(joinUrl, "_blank");
+      return;
+    }
+    setTelehealthLoading(true);
+    setBanner(null);
+    try {
+      const res = await fetch(`/api/telehealth/appointments/${detail.appointment.id}/join`, {
+        method: "POST",
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        const url: string | null = json.hostUrl || json.joinUrl || null;
+        if (url) {
+          setJoinUrl(url);
+          window.open(url, "_blank");
+          try { await navigator.clipboard.writeText(url); } catch { /* ignore */ }
+          setBanner({ kind: "success", text: "Telehealth session started — link copied to clipboard." });
+        } else {
+          setBanner({ kind: "error", text: "Session created but no link returned." });
+        }
+      } else {
+        setBanner({ kind: "error", text: json.error ?? "Could not start telehealth session" });
+      }
+    } catch (e) {
+      setBanner({ kind: "error", text: e instanceof Error ? e.message : "Telehealth unavailable" });
+    } finally {
+      setTelehealthLoading(false);
+    }
+  }, [detail, joinUrl]);
+
   // Action availability
   const actionMeta = useMemo(() => {
     if (!detail) return null;
@@ -345,6 +420,45 @@ export default function AppointmentWorkspace({
               }`}
             >
               {banner.text}
+            </div>
+          ) : null}
+
+          {/* Charge capture result after signing */}
+          {chargeResult && mode === "preview" ? (
+            <div className={styles.chargeResultPanel}>
+              <div className={styles.chargeResultHeader}>
+                {chargeResult.chargeStatus === "patient_responsibility" ? (
+                  <span className={styles.chargeResultBadge} data-status="pr">💳 Patient Responsibility</span>
+                ) : chargeResult.chargeStatus === "blocked" ? (
+                  <span className={styles.chargeResultBadge} data-status="blocked">⚠️ Charge Blocked</span>
+                ) : chargeResult.chargeStatus === "ready_for_claim" || chargeResult.claimId ? (
+                  <span className={styles.chargeResultBadge} data-status="ready">✓ Claim Ready</span>
+                ) : (
+                  <span className={styles.chargeResultBadge} data-status="ready">✓ Note Signed</span>
+                )}
+                <span className={styles.chargeResultNote}>Visit documentation complete.</span>
+              </div>
+              <div className={styles.chargeResultActions}>
+                {chargeResult.claimId ? (
+                  <a
+                    href={`/billing/claims/${chargeResult.claimId}?organizationId=${encodeURIComponent(ORG_ID)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={styles.chargeResultLink}
+                  >
+                    View Claim →
+                  </a>
+                ) : null}
+                {onOpenNext ? (
+                  <button
+                    type="button"
+                    className={styles.openNextBtn}
+                    onClick={onOpenNext}
+                  >
+                    Open Next Appointment →
+                  </button>
+                ) : null}
+              </div>
             </div>
           ) : null}
 
@@ -568,6 +682,27 @@ export default function AppointmentWorkspace({
                       </button>
                     )}
 
+                    {/* Telehealth */}
+                    {workspaceCtx?.telehealth?.isVirtual ? (
+                      <button
+                        className={styles.telehealthBtn}
+                        type="button"
+                        onClick={handleTelehealth}
+                        disabled={telehealthLoading}
+                      >
+                        {telehealthLoading ? (
+                          <>
+                            <span className={styles.spinner} aria-hidden="true" />
+                            Starting…
+                          </>
+                        ) : joinUrl ? (
+                          "▶ Rejoin Telehealth"
+                        ) : (
+                          "▶ Start Telehealth"
+                        )}
+                      </button>
+                    ) : null}
+
                     {/* Open full chart */}
                     {detail.appointment.clientId ? (
                       <Link
@@ -644,6 +779,55 @@ export default function AppointmentWorkspace({
                 </section>
               </div>
 
+              {/* Prior session summary */}
+              {workspaceCtx?.priorSession ? (
+                <section className={styles.panelFull}>
+                  <h3 className={styles.panelTitle}>Prior Session</h3>
+                  <div className={styles.priorSessionMeta}>
+                    {workspaceCtx.priorSession.date
+                      ? `Last visit: ${new Date(workspaceCtx.priorSession.date).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`
+                      : "Last signed session"}
+                  </div>
+                  {workspaceCtx.priorSession.assessment ? (
+                    <div className={styles.priorSessionSection}>
+                      <span className={styles.priorSessionSectionLabel}>Assessment</span>
+                      <p className={styles.priorSessionText}>{workspaceCtx.priorSession.assessment}</p>
+                    </div>
+                  ) : null}
+                  {workspaceCtx.priorSession.plan ? (
+                    <div className={styles.priorSessionSection}>
+                      <span className={styles.priorSessionSectionLabel}>Plan</span>
+                      <p className={styles.priorSessionText}>{workspaceCtx.priorSession.plan}</p>
+                    </div>
+                  ) : null}
+                  {workspaceCtx.priorSession.encounterId ? (
+                    <Link
+                      href={`/encounters/${workspaceCtx.priorSession.encounterId}`}
+                      className={styles.priorSessionLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      View full note →
+                    </Link>
+                  ) : null}
+                </section>
+              ) : null}
+
+              {/* Active treatment plan goals */}
+              {workspaceCtx?.goals && workspaceCtx.goals.length > 0 ? (
+                <section className={styles.panelFull}>
+                  <h3 className={styles.panelTitle}>Active Goals</h3>
+                  <ul className={styles.goalsList}>
+                    {workspaceCtx.goals.map((g) => (
+                      <li key={g.id} className={styles.goalItem}>
+                        <span className={styles.goalDot} aria-hidden="true" />
+                        <span className={styles.goalText}>{g.description}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
+
               {/* Encounter mode */}
               {mode === "encounter" && encounterId ? (
                 <div className={styles.encounterWrapper}>
@@ -651,10 +835,15 @@ export default function AppointmentWorkspace({
                     encounterId={encounterId}
                     inlineMode
                     onInlineNavigate={(path) => {
-                      // In workspace mode, we redirect to full page for billing paths
                       if (path.startsWith("/billing/")) {
                         window.open(path, "_blank");
                       }
+                    }}
+                    onSigned={(data) => {
+                      setChargeResult(data);
+                      setMode("preview");
+                      loadDetail(appointmentId);
+                      onRefresh?.();
                     }}
                   />
                 </div>

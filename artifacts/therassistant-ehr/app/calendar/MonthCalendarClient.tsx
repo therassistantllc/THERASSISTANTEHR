@@ -5,6 +5,7 @@ import styles from "./monthCalendar.module.css";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 import { supabase } from "@/lib/supabase/client";
 import AppointmentWorkspace from "./AppointmentWorkspace";
+import TodayVisitsSidebar from "./TodayVisitsSidebar";
 
 const ORG_ID =
   (typeof process !== "undefined" &&
@@ -352,6 +353,22 @@ export default function MonthCalendarClient() {
     setCancelData(null);
   }
 
+  // Sign & Open Next — find the next unstarted appointment for today
+  const handleOpenNext = useCallback(() => {
+    if (!today) return;
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    const todayUpcoming = appointments
+      .filter((a) => {
+        if (a.scheduledStartAt.slice(0, 10) !== todayStr) return false;
+        const s = a.status;
+        return s === "scheduled" || s === "confirmed" || s === "pending" || s === "";
+      })
+      .sort((a, b) => a.scheduledStartAt.localeCompare(b.scheduledStartAt));
+    const currentIdx = todayUpcoming.findIndex((a) => a.id === selectedId);
+    const next = currentIdx >= 0 ? todayUpcoming[currentIdx + 1] ?? todayUpcoming[0] : todayUpcoming[0];
+    if (next) setSelectedId(next.id);
+  }, [today, appointments, selectedId]);
+
   return (
     <div className={styles.page}>
       <header className={styles.header}>
@@ -452,6 +469,13 @@ export default function MonthCalendarClient() {
       </header>
 
       <div className={styles.body}>
+        <TodayVisitsSidebar
+          appointments={appointments}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+          today={today}
+        />
+        <div className={styles.calendarArea}>
         {loadError ? (
           <div className={`${styles.banner} ${styles.bannerError}`}>
             {loadError}
@@ -551,13 +575,15 @@ export default function MonthCalendarClient() {
         </div>
         </>
         )}
-      </div>
+        </div> {/* calendarArea */}
+      </div> {/* body */}
 
       {selectedId ? (
         <AppointmentWorkspace
           appointmentId={selectedId}
           onClose={closeDrawer}
           onRefresh={loadAppointments}
+          onOpenNext={handleOpenNext}
           onCollect={(data) => {
             setCollectPrefill({
               amount: 0,

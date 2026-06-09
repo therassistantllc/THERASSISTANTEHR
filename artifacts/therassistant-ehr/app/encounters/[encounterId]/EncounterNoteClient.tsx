@@ -176,10 +176,12 @@ export default function EncounterNoteClient({
   encounterId,
   inlineMode,
   onInlineNavigate,
+  onSigned,
 }: {
   encounterId: string;
   inlineMode?: boolean;
   onInlineNavigate?: (path: string) => void;
+  onSigned?: (data: { chargeStatus: string | null; claimId: string | null }) => void;
 }) {
   const router = useRouter();
   const organizationId = useMemo(() => getOrganizationId(), []);
@@ -605,6 +607,8 @@ export default function EncounterNoteClient({
         ? `/billing/patient-responsibility?organizationId=${encodeURIComponent(organizationId)}&encounterId=${encodeURIComponent(encounterId)}`
         : null;
       const ccPath = `/billing/charge-capture?organizationId=${encodeURIComponent(organizationId)}&encounterId=${encodeURIComponent(encounterId)}`;
+
+      onSigned?.({ chargeStatus: chargeStatus ?? null, claimId: claimId ?? null });
 
       const target = billingPath || prPath;
       if (target) {
