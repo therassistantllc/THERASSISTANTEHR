@@ -158,8 +158,12 @@ export default function AppointmentWorkspace({
     currentSessionNote: {
       encounterId: string;
       date: string | null;
-      plan: string | null;
+      noteId: string | null;
+      noteStatus: string | null;
+      subjective: string | null;
+      objective: string | null;
       assessment: string | null;
+      plan: string | null;
       status: string | null;
     } | null;
     goals: Array<{ id: string; description: string; status: string }>;
@@ -788,10 +792,22 @@ export default function AppointmentWorkspace({
                     {workspaceCtx.currentSessionNote.date
                       ? `Visit: ${new Date(workspaceCtx.currentSessionNote.date).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`
                       : "Clinical note"}
-                    {workspaceCtx.currentSessionNote.status
-                      ? ` · ${workspaceCtx.currentSessionNote.status}`
+                    {workspaceCtx.currentSessionNote.noteStatus
+                      ? ` · ${workspaceCtx.currentSessionNote.noteStatus}`
                       : ""}
                   </div>
+                  {workspaceCtx.currentSessionNote.subjective ? (
+                    <div className={styles.priorSessionSection}>
+                      <span className={styles.priorSessionSectionLabel}>Subjective</span>
+                      <p className={styles.priorSessionText}>{workspaceCtx.currentSessionNote.subjective}</p>
+                    </div>
+                  ) : null}
+                  {workspaceCtx.currentSessionNote.objective ? (
+                    <div className={styles.priorSessionSection}>
+                      <span className={styles.priorSessionSectionLabel}>Objective</span>
+                      <p className={styles.priorSessionText}>{workspaceCtx.currentSessionNote.objective}</p>
+                    </div>
+                  ) : null}
                   {workspaceCtx.currentSessionNote.assessment ? (
                     <div className={styles.priorSessionSection}>
                       <span className={styles.priorSessionSectionLabel}>Assessment</span>

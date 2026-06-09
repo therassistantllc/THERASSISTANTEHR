@@ -34,8 +34,12 @@ export async function GET(
     let currentSessionNote: {
       encounterId: string;
       date: string | null;
-      plan: string | null;
+      noteId: string | null;
+      noteStatus: string | null;
+      subjective: string | null;
+      objective: string | null;
       assessment: string | null;
+      plan: string | null;
       status: string | null;
     } | null = null;
 
@@ -65,19 +69,21 @@ export async function GET(
         if (enc) {
           const { data: note } = await supabase
             .from("encounter_clinical_notes")
-            .select("plan, assessment")
+            .select("id, note_status, subjective, objective, assessment, plan")
             .eq("organization_id", organizationId)
             .eq("encounter_id", text(enc.id))
             .is("archived_at", null)
             .maybeSingle();
           const noteRow = note as Row | null;
-          const planRaw = text(noteRow?.plan);
-          const assessRaw = text(noteRow?.assessment);
           currentSessionNote = {
             encounterId: text(enc.id),
             date: (enc.service_date as string | null) ?? null,
-            plan: planRaw || null,
-            assessment: assessRaw || null,
+            noteId: text(noteRow?.id) || null,
+            noteStatus: text(noteRow?.note_status) || null,
+            subjective: text(noteRow?.subjective) || null,
+            objective: text(noteRow?.objective) || null,
+            assessment: text(noteRow?.assessment) || null,
+            plan: text(noteRow?.plan) || null,
             status: text(enc.encounter_status) || null,
           };
         }
