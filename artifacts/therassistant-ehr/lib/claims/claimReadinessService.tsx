@@ -1,4 +1,4 @@
-import { isAllowedPlaceOfService, normalizePlaceOfService } from "@/lib/billing/placeOfService";
+import { DEFAULT_OFFICE_PLACE_OF_SERVICE, isAllowedPlaceOfService, normalizePlaceOfService } from "@/lib/billing/placeOfService";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 
 type ClaimReadinessStatus = "ready" | "not_ready";
@@ -351,7 +351,7 @@ export async function createProfessionalClaimDraft(
   });
 
   const totalCharge = money(input.serviceLines.reduce((sum, line) => sum + line.chargeAmount * (line.units ?? 1), 0));
-  const placeOfService = normalizeNullable(input.placeOfService) ?? "11";
+  const placeOfService = normalizeNullable(input.placeOfService) ?? DEFAULT_OFFICE_PLACE_OF_SERVICE;
   const patientAccountNumber = normalizeNullable(input.patientAccountNumber) ?? `PC-${Date.now()}`;
   const claimNumber = normalizeNullable(input.claimNumber) ?? `CLM-${Date.now()}`;
 

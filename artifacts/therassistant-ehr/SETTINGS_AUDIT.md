@@ -67,7 +67,10 @@ write capability). The index page at `app/settings/page.tsx` lists 16 setting ar
 | **25. Security supervision rules** | `/settings/security` | claim generation | `system_settings['security.supervision.rules']` | `837p` generation | none | `system_settings` | OK |
 | **26. Service locations** | `/settings/service-locations` | none | `service_locations` | encounter booking, POS | `11` (DB default) | `service_locations` | OK |
 | **27. Provider credentialing** | `/settings/users` | claim generation | `providers` + `credentialing_profiles` | claim rendering provider | code defaults | `providers` | Needs audit |
-| **28. Orphaned tables** | none | none | `custom_billing_settings`, `custom_note_settings` | nothing | n/a | n/a | **Not present** in schema or migrations |
+| **28. Custom app config** | none | none | `custom_app_config` | No TypeScript references found | n/a | n/a | **Orphaned** — table exists in schema but no app code references it |
+| **29. Integration connections** | `/settings/edi` | `/api/integrations/connections` | `integration_connections` | Telehealth, fax, email, Availity | `clearinghouse_connections` | `integration_connections` | Active; used by telehealth/oauth |
+| **30. Payer configurations** | `/settings/payers` | eligibility routes | `payer_configurations` | Eligibility preparation | DB defaults | `payer_configurations` | Active; used for payer-specific configs |
+| **31. Orphaned tables** | none | none | `custom_billing_settings`, `custom_note_settings` | nothing | n/a | n/a | **Not present** in schema or any migration file |
 
 ---
 
