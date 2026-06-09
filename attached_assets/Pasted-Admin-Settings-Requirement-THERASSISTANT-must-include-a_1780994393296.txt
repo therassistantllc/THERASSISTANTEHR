@@ -1,0 +1,300 @@
+Admin Settings Requirement
+
+THERASSISTANT must include a complete Admin Settings module because the RCM workflow depends on configurable organization, payer, EDI, provider, billing, posting, security, and audit rules. Admin settings are not cosmetic. They are operational controls for claim generation, eligibility, ERA matching, payment posting, reconciliation, reporting, and compliance.
+
+Required Admin Settings Areas
+1. Organization Settings
+
+Admin must manage each billing organization:
+
+Legal organization name
+DBA, if applicable
+TIN / EIN
+Type 2 NPI
+Phone
+Billing address
+Pay-to address, if different
+Contact email
+Active/inactive status
+Default billing provider identity
+Default rendering provider rule
+Organization-specific Availity submitter ID
+Organization-specific SFTP mailbox configuration
+Environment: QA or Production
+
+For MVP, organization settings must support at least:
+
+Conscious Counseling PLLC
+Kindly Kiera LLC
+
+The system must support organization-level claim generation and not assume every claim belongs to the same billing entity.
+
+2. Provider / Clinician Settings
+
+Admin must manage clinicians and provider identities:
+
+Clinician name
+Credentials
+Individual NPI
+Email
+Parent organization
+Active/inactive status
+Internal service clinician
+EDI rendering clinician
+Default rendering provider assignment
+Provider taxonomy, if needed later
+Sensitive credentialing fields stored securely only if required
+
+The system must distinguish between the clinician attached to the appointment/session internally and the rendering provider emitted on the 837P.
+
+For Conscious Counseling PLLC, admin settings must enforce:
+
+Billing provider: Conscious Counseling PLLC
+Billing NPI: 1982355160
+Billing TIN: 861384084
+EDI rendering provider: Lyndsey Klemme
+Rendering NPI: 1629632542
+
+For Kindly Kiera LLC, admin settings must enforce:
+
+Billing provider: Kindly Kiera LLC
+Billing NPI: 1770242786
+Billing TIN: 851383748
+EDI rendering provider: Kiera Rommel
+Rendering NPI: 1922499581
+3. Payer Settings
+
+Admin must manage payer records used by eligibility, claims, ERA matching, and reports:
+
+Payer name
+Payer ID
+Availity-enabled flag
+Supports 837P
+Supports 270
+Supports 276
+Requires enrollment
+Claim filing limit, if known
+Payer-specific companion rules
+Payer-specific service type code override
+Payer-specific rendering provider override, if ever needed
+Payer-specific billing rules
+Active/inactive status
+
+Claim generation, eligibility, status inquiry, and ERA matching must use payer IDs from the canonical payer table, not hardcoded values.
+
+4. EDI / Availity Settings
+
+Admin must manage EDI transport and envelope configuration:
+
+Availity submitter ID by organization
+SFTP host
+SFTP port
+Upload folder: SendFiles
+Download folder: ReceiveFiles
+Username
+Encrypted password or key reference
+QA/Production mode
+ISA/GS control number sequence
+Batch size limits
+File naming pattern
+Upload retry settings
+Download polling settings
+Raw file retention policy
+Duplicate detection behavior
+Manual reprocess permissions
+
+MVP must support:
+
+837P outbound
+270 outbound
+276 outbound
+835 inbound
+271 inbound
+277 inbound
+999 inbound
+
+MVP must not build 837I or 837D.
+
+5. Charge / Claim Settings
+
+Admin must control claim readiness and charge behavior:
+
+Required fields for charge release
+Required fields for 837P generation
+Allowed charge statuses
+Allowed claim statuses
+Default place of service
+Default diagnosis behavior
+CPT/HCPCS validation rules
+Unit validation rules
+Fee schedule defaults
+Claim control number generation rules
+Patient control number generation rules
+Batch grouping rules
+
+Batch grouping must use:
+
+Organization
+Payer
+Environment
+
+Generated claims must persist to the same canonical claim tables used by claim search, ERA matching, AR, patient profile, payment posting, and reports.
+
+6. ERA / Posting Settings
+
+Admin must control ERA review and posting behavior:
+
+Auto-match rules
+Manual-match requirements
+ERA review statuses
+Required fields before posting
+Whether 835 files auto-post or require review
+Adjustment posting rules
+Contractual write-off rules
+Patient responsibility transfer rules
+Denial creation rules
+Partial payment behavior
+Duplicate payment detection
+Overpayment handling
+Reversal/correction behavior
+
+For MVP:
+
+835 ERA files may be parsed and matched automatically.
+835 ERA files must not auto-post financially until reviewed/approved by a user.
+Posting must create real payment, adjustment, service-line posting, and balance records.
+If posting is blocked, the UI must state exactly what is missing.
+7. Patient Payment / Credit / Refund Settings
+
+Admin must control:
+
+Accepted patient payment methods
+Default payment location/source
+Overpayment handling
+Credit creation rules
+Refund approval rules
+Refund status workflow
+Balance allocation order
+Whether unapplied credits are allowed
+Whether patient payments can be posted without an open balance
+Reconciliation behavior for patient payments
+
+Patient payments must apply to canonical patient balance records and appear in payment history and billing reports.
+
+8. Denial / AR Settings
+
+Admin must manage:
+
+Denial reason categories
+CARC/RARC mapping
+Write-off categories
+AR follow-up statuses
+No-response tracking thresholds
+Follow-up due date rules
+Appeal/reconsideration/corrected claim categories
+Credentialing/contract denial handling
+Workqueue assignment rules
+
+Credentialing/contract-related denials should follow THERASSISTANT policy and not be worked unless explicitly configured otherwise.
+
+9. Billing Navigation Settings
+
+Admin must control or at least validate active billing navigation:
+
+Each billing nav item must point to an existing route.
+Legacy routes must redirect or be removed.
+/billing/payments/posted must either exist or every reference to it must be updated.
+Every billing page must have a defined role in the workflow.
+Navigation must not expose dead pages, duplicate pages, or disconnected legacy modules.
+10. User Roles and Permissions
+
+Admin must support role-based access:
+
+Owner/Admin
+Billing Admin
+Billing User
+Read Only
+Provider/Clinician, if needed
+Client organization user, if needed later
+
+Permission-controlled actions should include:
+
+Manage organizations
+Manage providers
+Manage payers
+Manage EDI/SFTP settings
+Generate claims
+Upload batches
+Download inbound files
+Reprocess files
+Match ERA rows
+Approve ERA posting
+Post insurance payments
+Post patient payments
+Issue refunds
+Write off balances
+Modify reports
+View audit trail
+11. Audit Trail Settings
+
+Admin settings must control and display audit behavior for:
+
+Claim creation
+Charge release
+Batch creation
+837P generation
+SFTP upload
+Inbound file download
+File parsing
+ERA match
+ERA approval
+Payment posting
+Adjustment posting
+Patient balance change
+Credit creation
+Refund creation
+Write-off
+Denial creation
+AR follow-up update
+Admin setting changes
+
+Every financially meaningful action must write an audit event.
+
+12. Reporting Settings
+
+Admin must manage report behavior:
+
+Report date basis: DOS, claim date, payment date, posting date
+Organization filter
+Provider filter
+Payer filter
+AR aging buckets
+Denial categories
+Adjustment categories
+Write-off categories
+Payment source categories
+Export permissions
+
+Reports must read from canonical claim, payment, adjustment, balance, denial, refund, credit, and reconciliation tables.
+
+Also add this to the deliverables:
+
+List every Admin Settings page created or modified.
+List every setting that directly affects claim generation, ERA matching, posting, reconciliation, or reports.
+Confirm that admin-configured organization/provider/payer/EDI rules are used by the workflow instead of hardcoded values.
+Confirm that changing an admin setting affects future workflow behavior without breaking historical records.
+
+And add this to the test plan:
+
+Create or verify organization settings for Conscious Counseling PLLC.
+Create or verify organization settings for Kindly Kiera LLC.
+Confirm default rendering provider rule works for Conscious Counseling.
+Confirm default rendering provider rule works for Kindly Kiera.
+Confirm payer settings feed 837P, 270, 276, and ERA matching.
+Confirm Availity settings feed ISA/GS/SFTP behavior.
+Confirm disabled/inactive payer cannot be used for new claim generation.
+Confirm billing navigation settings contain no 404 routes.
+Confirm user without permission cannot approve ERA posting.
+Confirm all admin setting changes write audit events.
+
+The key point: Admin Settings should be the control center for the RCM ledger. Hardcoded billing identity, payer IDs, rendering providers, posting behavior, and EDI settings will keep breaking the system.
