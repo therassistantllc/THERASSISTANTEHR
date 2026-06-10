@@ -182,9 +182,11 @@ export default function AppointmentWorkspace({
   } | null>(null);
   const [checkingIn, setCheckingIn] = useState(false);
 
-  // This is the temporary new encounter created from this appointment.
-  // It allows documentation inside the appointment workspace.
-  // Existing saved/completed notes are never rendered here.
+  /*
+   * This ID is only set when this appointment workspace creates the encounter.
+   * If it is set, the provider should document right here using EncounterNoteClient.
+   * Existing encounters/notes that were already present before check-in should not be rendered here.
+   */
   const [activeEncounterId, setActiveEncounterId] = useState<string | null>(null);
 
   const [chargeResult, setChargeResult] = useState<{
@@ -335,10 +337,15 @@ export default function AppointmentWorkspace({
       }
 
       if (json.encounterId) {
+        /*
+         * Critical: set activeEncounterId BEFORE reloading appointment details.
+         * The reload will make detail.encounter exist, but this is still the brand-new
+         * encounter created by this workspace, so the note form must stay mounted here.
+         */
         setActiveEncounterId(json.encounterId);
         setBanner({
           kind: "success",
-          text: "Encounter created. Document the visit below.",
+          text: "Encounter created. Complete the clinical note below.",
         });
 
         await loadDetail(detail.appointment.id);
@@ -546,14 +553,19 @@ export default function AppointmentWorkspace({
   } = detail;
 
   const meta = actionMeta;
+
+  /*
+   * Existing note rules:
+   * - If activeEncounterId is set, this workspace just created that encounter, so mount EncounterNoteClient here.
+   * - If there is an encounter/note but activeEncounterId is not set, it existed before this workspace session.
+   *   Do not render saved content; require chart edit.
+   */
   const existingNoteEncounterId =
     workspaceCtx?.currentSessionNote?.encounterId ?? encounter?.id ?? null;
   const existingNoteStatus =
     workspaceCtx?.currentSessionNote?.noteStatus ?? encounter?.encounter_status ?? null;
-  const hasExistingEncounterOrNote = !!existingNoteEncounterId;
-
-  const shouldShowInlineDocumentationForm =
-    !!activeEncounterId && !hasExistingEncounterOrNote;
+  const hasExistingEncounterOrNote = !!existingNoteEncounterId && !activeEncounterId;
+  const shouldShowClinicalNoteModal = !!activeEncounterId;
 
   return (
     <div
@@ -567,7 +579,7 @@ export default function AppointmentWorkspace({
     >
       <div
         ref={workspaceRef}
-        className="w-full max-w-[900px] h-full bg-[#f9fafc] text-slate-800 font-sans flex flex-col overflow-hidden shadow-2xl"
+        className="w-full max-w-[1100px] h-full bg-[#f9fafc] text-slate-800 font-sans flex flex-col overflow-hidden shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex justify-between items-start p-6 bg-white border-b border-slate-200 shrink-0">
@@ -945,19 +957,19 @@ export default function AppointmentWorkspace({
             </div>
 
             <div className="flex flex-col gap-6">
-              <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 flex-1 flex flex-col min-h-[520px]">
+              <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 flex-1 flex flex-col min-h-[640px]">
                 <div className="flex justify-between items-center mb-4">
                   <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
                     <FileText className="w-4 h-4" /> Clinical Note
                   </h2>
 
-                  {existingNoteStatus ? (
-                    <span className="text-xs font-semibold text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-100">
-                      {existingNoteStatus.replace(/_/g, " ").toUpperCase()}
-                    </span>
-                  ) : activeEncounterId ? (
+                  {shouldShowClinicalNoteModal ? (
                     <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">
                       DOCUMENTING
+                    </span>
+                  ) : existingNoteStatus ? (
+                    <span className="text-xs font-semibold text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-100">
+                      {existingNoteStatus.replace(/_/g, " ").toUpperCase()}
                     </span>
                   ) : (
                     <span className="text-xs font-semibold text-slate-500 bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
@@ -966,7 +978,26 @@ export default function AppointmentWorkspace({
                   )}
                 </div>
 
-                {hasExistingEncounterOrNote ? (
+                {shouldShowClinicalNoteModal && activeEncounterId ? (
+                  <div className="flex-1 min-h-0 overflow-y-auto rounded-xl border border-slate-200 bg-white">
+                    <EncounterNoteClient
+                      encounterId={activeEncounterId}
+                      inlineMode
+                      onInlineNavigate={(path) => {
+                        if (path.startsWith("/billing/")) {
+                          window.open(path, "_blank");
+                        }
+                      }}
+                      onSigned={(data) => {
+                        setChargeResult(data);
+                        setActiveEncounterId(null);
+                        void loadDetail(appointmentId);
+                        void loadWorkspaceCtx(appointmentId);
+                        onRefresh?.();
+                      }}
+                    />
+                  </div>
+                ) : hasExistingEncounterOrNote ? (
                   <div className="flex-1 flex flex-col items-center justify-center text-center border border-dashed border-slate-200 rounded-xl bg-slate-50 p-6">
                     <FileText className="w-8 h-8 text-slate-300 mb-3" />
                     <p className="text-sm font-semibold text-slate-700">
@@ -988,109 +1019,22 @@ export default function AppointmentWorkspace({
                       </button>
                     ) : null}
                   </div>
-                ) : shouldShowInlineDocumentationForm && activeEncounterId ? (
-                  <div className="flex-1 min-h-0 overflow-y-auto rounded-xl border border-slate-200">
-                    <EncounterNoteClient
-                      encounterId={activeEncounterId}
-                      inlineMode
-                      onInlineNavigate={(path) => {
-                        if (path.startsWith("/billing/")) {
-                          window.open(path, "_blank");
-                        }
-                      }}
-                      onSigned={(data) => {
-                        setChargeResult(data);
-                        setActiveEncounterId(null);
-                        void loadDetail(appointmentId);
-                        void loadWorkspaceCtx(appointmentId);
-                        onRefresh?.();
-                      }}
-                    />
-                  </div>
                 ) : (
-                  <form
-                    className="flex-1 flex flex-col gap-4"
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      void handleCheckIn();
-                    }}
-                  >
-                    <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-4">
-                      <p className="text-sm font-semibold text-slate-800">
-                        Start documentation for this appointment
-                      </p>
-                      <p className="text-xs text-slate-500 mt-1">
-                        This creates the encounter for this appointment. Once created, the
-                        clinical note form opens here.
-                      </p>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-3">
-                      <label className="flex flex-col gap-1.5">
-                        <span className="text-xs font-bold uppercase tracking-widest text-slate-400">
-                          Client
-                        </span>
-                        <input
-                          value={appointment.clientName}
-                          readOnly
-                          className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700"
-                        />
-                      </label>
-
-                      <label className="flex flex-col gap-1.5">
-                        <span className="text-xs font-bold uppercase tracking-widest text-slate-400">
-                          Clinician
-                        </span>
-                        <input
-                          value={appointment.providerName || ""}
-                          readOnly
-                          className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700"
-                        />
-                      </label>
-
-                      <label className="flex flex-col gap-1.5">
-                        <span className="text-xs font-bold uppercase tracking-widest text-slate-400">
-                          Date of Service
-                        </span>
-                        <input
-                          value={fmtDate(appointment.scheduledStartAt)}
-                          readOnly
-                          className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700"
-                        />
-                      </label>
-
-                      <label className="flex flex-col gap-1.5">
-                        <span className="text-xs font-bold uppercase tracking-widest text-slate-400">
-                          Time
-                        </span>
-                        <input
-                          value={fmtTimeRange(
-                            appointment.scheduledStartAt,
-                            appointment.scheduledEndAt,
-                          )}
-                          readOnly
-                          className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700"
-                        />
-                      </label>
-
-                      <label className="flex flex-col gap-1.5">
-                        <span className="text-xs font-bold uppercase tracking-widest text-slate-400">
-                          Visit Type / CPT
-                        </span>
-                        <input
-                          value={`${appointment.appointmentType ?? "Visit"}${
-                            appointment.cptCode ? ` (${appointment.cptCode})` : ""
-                          }`}
-                          readOnly
-                          className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700"
-                        />
-                      </label>
-                    </div>
+                  <div className="flex-1 flex flex-col items-center justify-center text-center border border-dashed border-slate-200 rounded-xl bg-slate-50 p-6">
+                    <FileText className="w-8 h-8 text-slate-300 mb-3" />
+                    <p className="text-sm font-semibold text-slate-700">
+                      Ready to document
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1 max-w-sm">
+                      Click Check In / Start Encounter to open the existing clinical note form
+                      directly in this appointment workspace.
+                    </p>
 
                     <button
-                      type="submit"
+                      type="button"
+                      onClick={() => void handleCheckIn()}
                       disabled={checkingIn || !meta?.canCheckIn}
-                      className="mt-auto rounded-lg bg-[#2c6cf6] px-4 py-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                      className="mt-4 inline-flex items-center justify-center gap-2 rounded-lg bg-[#2c6cf6] px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {checkingIn ? (
                         <>
@@ -1100,11 +1044,11 @@ export default function AppointmentWorkspace({
                       ) : (
                         <>
                           <Edit3 className="w-4 h-4" />
-                          Create Encounter & Open Clinical Note Form
+                          Check In / Start Encounter
                         </>
                       )}
                     </button>
-                  </form>
+                  </div>
                 )}
               </div>
             </div>
