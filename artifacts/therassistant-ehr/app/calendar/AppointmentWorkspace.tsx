@@ -448,7 +448,7 @@ export default function AppointmentWorkspace({
       >
         <div
           ref={workspaceRef}
-          className="w-full max-w-[720px] h-full bg-[#f9fafc] flex flex-col animate-pulse"
+          className="w-full max-w-[1120px] h-full bg-[#f9fafc] flex flex-col animate-pulse"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="flex justify-between items-start p-6 bg-white border-b border-slate-200">
@@ -497,7 +497,7 @@ export default function AppointmentWorkspace({
       >
         <div
           ref={workspaceRef}
-          className="w-full max-w-[720px] h-full bg-[#f9fafc] flex flex-col"
+          className="w-full max-w-[1120px] h-full bg-[#f9fafc] flex flex-col"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="flex justify-between items-center p-6 bg-white border-b border-slate-200">
@@ -557,7 +557,7 @@ export default function AppointmentWorkspace({
     >
       <div
         ref={workspaceRef}
-        className="w-full max-w-[720px] h-full bg-[#f9fafc] text-slate-800 font-sans flex flex-col overflow-hidden shadow-2xl"
+        className="w-full max-w-[1120px] h-full bg-[#f9fafc] text-slate-800 font-sans flex flex-col overflow-hidden shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex justify-between items-start p-6 bg-white border-b border-slate-200 shrink-0">
@@ -641,7 +641,7 @@ export default function AppointmentWorkspace({
           ) : null}
 
           {showClinicalNote && noteEncounterId ? (
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3 min-h-[620px]">
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3 min-h-[620px] w-full">
               <EncounterNoteClient
                 encounterId={noteEncounterId}
                 inlineMode
@@ -660,7 +660,7 @@ export default function AppointmentWorkspace({
               />
             </div>
           ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 xl:grid-cols-[minmax(320px,420px)_minmax(0,1fr)] gap-6">
               <div className="flex flex-col gap-6">
                 <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
                   <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
