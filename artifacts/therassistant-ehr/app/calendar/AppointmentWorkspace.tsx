@@ -541,8 +541,9 @@ export default function AppointmentWorkspace({
   const meta = actionMeta;
   const existingNoteEncounterId = workspaceCtx?.currentSessionNote?.encounterId ?? encounter?.id ?? null;
   const existingNoteStatus = workspaceCtx?.currentSessionNote?.noteStatus ?? encounter?.encounter_status ?? null;
+  const noteEncounterId = activeEncounterId ?? existingNoteEncounterId;
   const hasExistingEncounterOrNote = !!existingNoteEncounterId && !activeEncounterId;
-  const showClinicalNote = !!activeEncounterId;
+  const showClinicalNote = !!noteEncounterId;
 
   return (
     <div
@@ -639,10 +640,10 @@ export default function AppointmentWorkspace({
             </div>
           ) : null}
 
-          {showClinicalNote && activeEncounterId ? (
+          {showClinicalNote && noteEncounterId ? (
             <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3 min-h-[620px]">
               <EncounterNoteClient
-                encounterId={activeEncounterId}
+                encounterId={noteEncounterId}
                 inlineMode
                 onInlineNavigate={(path) => {
                   if (path.startsWith("/billing/")) {
@@ -731,11 +732,11 @@ export default function AppointmentWorkspace({
                       <button
                         className="col-span-2 py-2.5 bg-[#2c6cf6] text-white rounded-lg text-sm font-semibold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
                         type="button"
-                        onClick={handleOpenChart}
-                        disabled={!appointment.clientId}
+                        onClick={() => setActiveEncounterId(existingNoteEncounterId)}
+                        disabled={!existingNoteEncounterId}
                       >
-                        <ExternalLink className="w-4 h-4" />
-                        Open Chart to Edit Existing Note
+                        <Edit3 className="w-4 h-4" />
+                        Open Existing Note
                       </button>
                     ) : (
                       <button
