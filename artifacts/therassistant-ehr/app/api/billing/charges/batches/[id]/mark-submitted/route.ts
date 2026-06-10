@@ -39,8 +39,6 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       .maybeSingle();
 
     if (lookupError && isMissingColumnError(lookupError)) {
-      // Backward-compatible fallback for environments where batch_source
-      // has not been added yet.
       const fallback = await supabase
         .from("claim_837p_batches")
         .select("id, batch_status")
@@ -79,22 +77,54 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       );
     }
 
-    const { data: links } = await supabase
+    const { data: links, error: linksError } = await supabase
       .from("claim_837p_batch_claims")
       .select("professional_claim_id")
       .eq("organization_id", guard.organizationId)
       .eq("batch_id", id)
       .is("archived_at", null);
 
+    if (linksError) {
+      return NextResponse.json(
+        { success: false, error: linksError.message ?? "Failed to load batch claims" },
+        { status: 422 },
+      );
+    }
+
     const claimIds = ((links ?? []) as DbRow[]).map((r) => text(r.professional_claim_id)).filter(Boolean);
 
     if (claimIds.length > 0) {
-      await supabase
+      const { error: claimUpdateError } = await supabase
         .from("professional_claims")
         .update({ claim_status: "submitted", submitted_at: now, updated_at: now })
         .eq("organization_id", guard.organizationId)
         .in("id", claimIds)
-        .in("claim_status", ["batched", "ready_for_batch"]);
+        .in("claim_status", ["batched", "ready_for_batch", "submitted"]);
+
+      if (claimUpdateError) {
+        return NextResponse.json(
+          { success: false, error: claimUpdateError.message ?? "Failed to update claims" },
+          { status: 422 },
+        );
+      }
+
+      const { error: chargeUpdateError } = await supabase
+        .from("charge_capture_items")
+        .update({
+          charge_status: "submitted",
+          submitted_at: now,
+          updated_at: now,
+        })
+        .eq("organization_id", guard.organizationId)
+        .in("claim_id", claimIds)
+        .is("archived_at", null);
+
+      if (chargeUpdateError) {
+        return NextResponse.json(
+          { success: false, error: chargeUpdateError.message ?? "Failed to update charge statuses" },
+          { status: 422 },
+        );
+      }
     }
 
     return NextResponse.json({ success: true, batchId: id, status: "submitted", submittedAt: now });
