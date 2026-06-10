@@ -1,25 +1,11 @@
 /**
  * GET /api/billing/charge-capture
  *
- * Workqueue list for the Charge Capture screen. Returns one row per
- * un-archived `charge_capture_items` row, joined with the supporting
- * detail the spec asks for (appointment, encounter / note, provider,
- * client, payer, latest eligibility check).
- *
- * Query params:
- *   organizationId — tenant id (verified against the session)
- *   tab            — one of the spec tab ids (filters by status/blocker)
- *   client         — free-text match on client or CPT
- *   clinician      — provider display name (exact)
- *   payer          — payer name (exact)
- *   dosFrom/dosTo  — service-date bounds (YYYY-MM-DD)
- *   status         — raw charge_status filter (overrides tab if set)
- *   minAmount      — minimum total_charge
- *   priority       — "urgent" → only blocked / missing-dx rows
- *   chargeCaptureId/encounterId/claimId — focus filters used after note signing
- *
- * The tabs are computed server-side so the header counts and row list
- * stay consistent regardless of which tab the biller has open.
+ * Workqueue list for the Charge Capture screen. Returns one row per active
+ * charge-capture item that still belongs in the pre-claim charge workflow.
+ * Released and downstream statuses are excluded from the active queue unless
+ * the caller asks for a direct focus row by chargeCaptureId, encounterId, claimId,
+ * status, or the released_to_claims tab.
  */
 import { NextResponse } from "next/server";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
@@ -32,6 +18,15 @@ const num = (v: unknown) => {
   const n = Number(v ?? 0);
   return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0;
 };
+
+const DOWNSTREAM_CHARGE_STATUSES = new Set([
+  "released",
+  "batched",
+  "downloaded",
+  "submitted",
+  "claim_created",
+  "ready_for_batch",
+]);
 
 function ageDays(dateStr: string | null): number | null {
   if (!dateStr) return null;
@@ -78,7 +73,7 @@ function classifyTab(opts: {
   eligibilityStatus: string | null;
 }): ChargeCaptureTab {
   const { chargeStatus, blockers, noteSigned, eligibilityStatus } = opts;
-  if (chargeStatus === "claim_created" || chargeStatus === "ready_for_batch") return "released_to_claims";
+  if (DOWNSTREAM_CHARGE_STATUSES.has(chargeStatus)) return "released_to_claims";
   if (chargeStatus === "blocked" || chargeStatus === "voided") return "held_charges";
 
   const fields = new Set(blockers.map((b) => (b.field ?? "").toLowerCase()));
@@ -140,6 +135,7 @@ export async function GET(request: Request) {
     const chargeCaptureId = (searchParams.get("chargeCaptureId") || "").trim();
     const encounterId = (searchParams.get("encounterId") || "").trim();
     const claimId = (searchParams.get("claimId") || "").trim();
+    const hasFocusFilter = Boolean(chargeCaptureId || encounterId || claimId || statusFilter || tab === "released_to_claims");
 
     let query = (supabase as any)
       .from("charge_capture_items")
@@ -152,6 +148,9 @@ export async function GET(request: Request) {
       .is("archived_at", null)
       .order("service_date", { ascending: true, nullsFirst: false });
 
+    if (!hasFocusFilter) {
+      query = query.not("charge_status", "in", `(${[...DOWNSTREAM_CHARGE_STATUSES].join(",")})`);
+    }
     if (chargeCaptureId) query = query.eq("id", chargeCaptureId);
     if (encounterId) query = query.eq("encounter_id", encounterId);
     if (claimId) query = query.eq("claim_id", claimId);
@@ -202,7 +201,6 @@ export async function GET(request: Request) {
       ? await supabase.from("insurance_payers").select("id, payer_name, payer_category").in("id", payerIds)
       : { data: [] as DbRow[] };
 
-    // Latest eligibility check per client (best-effort)
     let eligByClient = new Map<string, DbRow>();
     if (clientIds.length) {
       const { data: eligRows } = await (supabase as any)
@@ -308,7 +306,7 @@ export async function GET(request: Request) {
           authorizationRequired: Boolean(elig.authorization_required),
           rawStatusText: text(elig.raw_status_text) || null,
         } : null,
-        authorization: { status: "—", number: null as string | null }, // no auth table yet
+        authorization: { status: "—", number: null as string | null },
         chargeAmount: num(c.total_charge),
         agingDays: ageDays(c.service_date as string | null),
         blockers: blockerText(blockers),
@@ -317,7 +315,6 @@ export async function GET(request: Request) {
       };
     });
 
-    // In-memory filters (after tab classification).
     let filtered = items;
     if (tab) filtered = filtered.filter((i) => i.tab === tab);
     if (clientQ) {
