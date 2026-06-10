@@ -29,9 +29,12 @@ export default function ClaimReadinessSidebar({ checks = [], className = "" }: P
               : `${completedRequired}/${requiredChecks.length} required checks complete.`}
           </p>
         </div>
-        <span className={`rounded-full px-2 py-1 text-xs font-semibold ${
-          ready ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
-        }`}>
+
+        <span
+          className={`rounded-full px-2 py-1 text-xs font-semibold ${
+            ready ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
+          }`}
+        >
           {ready ? "Ready" : "Needs review"}
         </span>
       </div>
