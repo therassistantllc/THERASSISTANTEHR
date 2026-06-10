@@ -26,6 +26,37 @@ async function loadBatch(params: { orgId: string; batchId: string }) {
   return (data ?? null) as DbRow | null;
 }
 
+async function markChargesDownloaded(params: { orgId: string; batchId: string }) {
+  const supabase = createServerSupabaseAdminClient();
+  if (!supabase) throw new Error("Database connection not available");
+
+  const { data: links, error: linkError } = await supabase
+    .from("claim_837p_batch_claims")
+    .select("professional_claim_id")
+    .eq("organization_id", params.orgId)
+    .eq("batch_id", params.batchId)
+    .is("archived_at", null);
+
+  if (linkError) throw new Error(linkError.message ?? "Failed to load batch claims");
+
+  const claimIds = ((links ?? []) as DbRow[]).map((r) => text(r.professional_claim_id)).filter(Boolean);
+  if (claimIds.length === 0) return;
+
+  const now = new Date().toISOString();
+  const { error: chargeError } = await supabase
+    .from("charge_capture_items")
+    .update({
+      charge_status: "downloaded",
+      downloaded_at: now,
+      updated_at: now,
+    })
+    .eq("organization_id", params.orgId)
+    .in("claim_id", claimIds)
+    .is("archived_at", null);
+
+  if (chargeError) throw new Error(chargeError.message ?? "Failed to mark charges downloaded");
+}
+
 export async function GET(request: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
     const { searchParams } = new URL(request.url);
@@ -58,11 +89,13 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
       return NextResponse.json({ success: false, error: "No 837 content available for this batch" }, { status: 404 });
     }
 
+    await markChargesDownloaded({ orgId: guard.organizationId, batchId: id });
+
     return new NextResponse(content, {
       status: 200,
       headers: {
         "Content-Type": "text/plain; charset=utf-8",
-        "Content-Disposition": `attachment; filename=\"${fileName.replace(/\"/g, "")}\"`,
+        "Content-Disposition": `attachment; filename="${fileName.replace(/"/g, "")}"`,
         "Cache-Control": "private, no-store",
       },
     });
