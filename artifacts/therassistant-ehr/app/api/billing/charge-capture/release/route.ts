@@ -74,6 +74,28 @@ export async function POST(request: Request) {
         }
 
         const now = new Date().toISOString();
+
+        const { error: claimStatusError } = await supabase
+          .from("professional_claims")
+          .update({
+            claim_status: "ready_for_batch",
+            ready_for_batch_at: now,
+            updated_at: now,
+          })
+          .eq("organization_id", organizationId)
+          .eq("id", result.claimId)
+          .is("archived_at", null);
+
+        if (claimStatusError) {
+          results.push({
+            chargeCaptureId,
+            ok: false,
+            claimId: result.claimId,
+            errors: [{ field: "professional_claims", message: claimStatusError.message }],
+          });
+          continue;
+        }
+
         const { error: updateError } = await supabase
           .from("charge_capture_items")
           .update({
@@ -132,7 +154,7 @@ export async function POST(request: Request) {
         results,
         message:
           failed === 0
-            ? `Released ${succeeded} charge${succeeded === 1 ? "" : "s"} to claims.`
+            ? `Released ${succeeded} charge${succeeded === 1 ? "" : "s"} to claims and marked claim${succeeded === 1 ? "" : "s"} ready for batching.`
             : `Released ${succeeded} charge${succeeded === 1 ? "" : "s"}; ${failed} failed.`,
       },
       { status: failed === ids.length ? 422 : 200 },
