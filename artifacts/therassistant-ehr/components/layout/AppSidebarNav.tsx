@@ -123,7 +123,9 @@ function active(pathname: string, prefixes: string[], exact = false): boolean {
 }
 
 const DASHBOARD_PREFIXES = ["/billing/my-inbox", "/billing/executive-priority"];
-const CHARGES_PREFIXES = ["/billing/charge-capture"];
+const CHARGE_CAPTURE_PREFIXES = ["/billing/charge-capture"];
+const READY_TO_GENERATE_PREFIXES = ["/billing/ready-to-generate", "/billing/claim-readiness", "/billing/claim-build-errors"];
+const BATCHES_837P_PREFIXES = ["/billing/batches", "/billing/837p-batches", "/billing/orphaned-batches"];
 const CLAIMS_PREFIXES = ["/billing/claims", "/billing/documentation-pending", "/billing/no-response", "/billing/resubmissions", "/billing/corrected-claims", "/billing/submitted-claims", "/billing/payer-received", "/billing/appeals", "/billing/cob-issues", "/billing/secondary-billing", "/billing/transmission-failures", "/billing/claim-hold", "/billing/adjustments-review", "/billing/audit-queue", "/billing/compliance-audit", "/billing/compliance-holds", "/billing/blocked-claims"];
 const REJECTIONS_PREFIXES = ["/billing/rejections", "/billing/rejections-999", "/billing/rejections-277ca", "/billing/payer-rejections", "/billing/authorization-required", "/billing/provider-enrollment-issues"];
 const DENIALS_PREFIXES = ["/billing/denials", "/billing/denials-by-carc", "/billing/denials-by-rarc", "/billing/partial-denials", "/billing/underpayments", "/billing/timely-filing", "/billing/medical-necessity", "/billing/medical-review", "/billing/aging", "/billing/claim-submission"];
@@ -166,7 +168,9 @@ export default function AppSidebarNav() {
       {billingExpanded ? (
         <div className={styles.subnav}>
           <SubNavLinkIcon href="/billing/my-inbox" icon={<TasksIcon />} label="Dashboard" prefixes={DASHBOARD_PREFIXES} pathname={pathname} badge={<MyInboxBadge />} />
-          <SubNavLinkIcon href="/billing/charge-capture" icon={<ClipboardIcon />} label="Charges" prefixes={CHARGES_PREFIXES} pathname={pathname} />
+          <SubNavLinkIcon href="/billing/charge-capture" icon={<ClipboardIcon />} label="Charge Capture" prefixes={CHARGE_CAPTURE_PREFIXES} pathname={pathname} />
+          <SubNavLinkIcon href="/billing/ready-to-generate" icon={<ClipboardIcon />} label="Ready to Generate" prefixes={READY_TO_GENERATE_PREFIXES} pathname={pathname} />
+          <SubNavLinkIcon href="/billing/batches" icon={<ClipboardIcon />} label="837P Batches" prefixes={BATCHES_837P_PREFIXES} pathname={pathname} />
           <SubNavLinkIcon href="/billing/eligibility-batches" icon={<ShieldIcon />} label="Eligibility" prefixes={["/billing/eligibility-batches", "/billing/eligibility-issues"]} pathname={pathname} />
           <SubNavLinkIcon href="/billing/claims" icon={<ClipboardIcon />} label="Claims" prefixes={CLAIMS_PREFIXES} pathname={pathname} />
           <SubNavLinkIcon href="/billing/rejections-999" icon={<XCircleIcon />} label="Rejections" prefixes={REJECTIONS_PREFIXES} pathname={pathname} />
@@ -192,37 +196,44 @@ export default function AppSidebarNav() {
   );
 }
 
-function NavLink({ href, icon, label, prefixes, pathname, exact = false }: { href: string; icon: React.ReactNode; label: string; prefixes: string[]; pathname: string; exact?: boolean }) {
-  const isActive = active(pathname, prefixes, exact);
-  return <Link href={href} className={isActive ? `${styles.navItem} ${styles.navItemActive}` : styles.navItem} aria-current={isActive ? "page" : undefined}><span className={styles.navIcon}>{icon}</span>{label}</Link>;
+function NavLink({ href, icon, label, prefixes, pathname }: { href: string; icon: React.ReactNode; label: string; prefixes: string[]; pathname: string }) {
+  const isActive = active(pathname, prefixes);
+  return (
+    <Link href={href} className={`${styles.navItem} ${isActive ? styles.navItemActive : ""}`}>
+      <span className={styles.navIcon}>{icon}</span>
+      {label}
+    </Link>
+  );
 }
 
 function SubNavLinkIcon({ href, icon, label, prefixes, pathname, badge }: { href: string; icon: React.ReactNode; label: string; prefixes: string[]; pathname: string; badge?: React.ReactNode }) {
   const isActive = active(pathname, prefixes);
-  return <Link href={href} className={isActive ? `${styles.subnavItem} ${styles.subnavItemActive}` : styles.subnavItem} aria-current={isActive ? "page" : undefined}><span className={styles.subnavIcon}>{icon}</span><span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>{badge ?? null}</Link>;
+  return (
+    <Link href={href} className={`${styles.subnavItem} ${isActive ? styles.subnavItemActive : ""}`}>
+      <span className={styles.subnavIcon}>{icon}</span>
+      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+      {badge ?? null}
+    </Link>
+  );
 }
 
 function MyInboxBadge() {
   const [count, setCount] = useState<number | null>(null);
+
   useEffect(() => {
     let cancelled = false;
-    async function load() {
-      try {
-        const res = await fetch("/api/billing/my-inbox?countOnly=1", { cache: "no-store" });
-        if (!res.ok) return;
-        const json = (await res.json()) as { count?: number };
-        if (!cancelled) setCount(typeof json.count === "number" ? json.count : 0);
-      } catch {
-        // Badge is best-effort.
-      }
-    }
-    void load();
-    const t = setInterval(load, 60_000);
+    fetch("/api/billing/my-inbox/summary", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((json) => {
+        if (!cancelled && json?.success) setCount(Number(json.count ?? 0));
+      })
+      .catch(() => {
+        if (!cancelled) setCount(null);
+      });
     return () => {
       cancelled = true;
-      clearInterval(t);
     };
   }, []);
-  if (!count) return null;
-  return <span aria-label={`${count} routed eligibility items`} style={{ background: "#DC2626", color: "#FFFFFF", borderRadius: 999, fontSize: 10.5, fontWeight: 700, padding: "1px 7px", minWidth: 18, textAlign: "center", lineHeight: 1.4 }}>{count > 99 ? "99+" : count}</span>;
+
+  return count && count > 0 ? <span className={styles.subnavBadge}>{count}</span> : null;
 }
