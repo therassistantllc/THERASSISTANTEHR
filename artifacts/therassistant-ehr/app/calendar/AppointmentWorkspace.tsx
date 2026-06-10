@@ -640,7 +640,7 @@ export default function AppointmentWorkspace({
             </div>
           ) : null}
 
-          <div className="grid grid-cols-1 xl:grid-cols-[minmax(320px,420px)_minmax(0,1fr)] gap-6">
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
               <div className="flex flex-col gap-6">
                 <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
                   <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
@@ -943,39 +943,41 @@ export default function AppointmentWorkspace({
                     )}
                   </div>
 
-                  {showClinicalNote && noteEncounterId ? (
-                    <div className="flex-1 min-h-[620px]">
-                      <EncounterNoteClient
-                        encounterId={noteEncounterId}
-                        inlineMode
-                        onInlineNavigate={(path) => {
-                          if (path.startsWith("/billing/")) {
-                            window.open(path, "_blank");
-                          }
-                        }}
-                        onSigned={(data) => {
-                          setChargeResult(data);
-                          setActiveEncounterId(null);
-                          void loadDetail(appointmentId);
-                          void loadWorkspaceCtx(appointmentId);
-                          onRefresh?.();
-                        }}
-                      />
-                    </div>
-                  ) : (
-                    <div className="flex-1 flex flex-col items-center justify-center text-center border border-dashed border-slate-200 rounded-xl bg-slate-50 p-6">
-                      <FileText className="w-8 h-8 text-slate-300 mb-3" />
-                      <p className="text-sm font-semibold text-slate-700">
-                        Ready to document
-                      </p>
-                      <p className="text-xs text-slate-500 mt-1 max-w-sm">
-                        Click Check In / Start Encounter to open the clinical note in this workspace.
-                      </p>
-                    </div>
-                  )}
+                  <div className="flex-1 flex flex-col items-center justify-center text-center border border-dashed border-slate-200 rounded-xl bg-slate-50 p-6">
+                    <FileText className="w-8 h-8 text-slate-300 mb-3" />
+                    <p className="text-sm font-semibold text-slate-700">
+                      {showClinicalNote ? "Clinical note is open below" : "Ready to document"}
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1 max-w-sm">
+                      {showClinicalNote
+                        ? "Use the full-width note editor below to document and sign this encounter."
+                        : "Click Check In / Start Encounter to open the clinical note in this workspace."}
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
+
+          {showClinicalNote && noteEncounterId ? (
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3 min-h-[720px] w-full">
+              <EncounterNoteClient
+                encounterId={noteEncounterId}
+                inlineMode
+                onInlineNavigate={(path) => {
+                  if (path.startsWith("/billing/")) {
+                    window.open(path, "_blank");
+                  }
+                }}
+                onSigned={(data) => {
+                  setChargeResult(data);
+                  setActiveEncounterId(null);
+                  void loadDetail(appointmentId);
+                  void loadWorkspaceCtx(appointmentId);
+                  onRefresh?.();
+                }}
+              />
+            </div>
+          ) : null}
 
           {workspaceCtx?.goals && workspaceCtx.goals.length > 0 ? (
             <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
