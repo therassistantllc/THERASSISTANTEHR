@@ -170,17 +170,25 @@ export async function POST(request: Request) {
           const allPolicies = [...policiesByClient.values()].flat();
           const payerIds = [...new Set<string>(allPolicies.map((p: any) => p.payer_id).filter(Boolean))];
           const subscriberIds = [...new Set<string>(allPolicies.map((p: any) => p.subscriber_id).filter(Boolean))];
-          const [{ data: payers }, { data: subscribers }] = await Promise.all([
+          const providerIds = [...new Set<string>(actionable.map((a: any) => a.provider_id).filter(Boolean))];
+
+          const [{ data: payers }, { data: subscribers }, { data: clients }, { data: providers }] = await Promise.all([
             payerIds.length > 0
               ? (supabase as any).from("insurance_payers").select("id, payer_name, payer_id, archived_at").in("id", payerIds)
               : Promise.resolve({ data: [] }),
             subscriberIds.length > 0
               ? (supabase as any).from("insurance_subscribers").select("id, first_name, last_name, date_of_birth, member_id, relationship_to_client").in("id", subscriberIds)
               : Promise.resolve({ data: [] }),
+            (supabase as any).from("clients").select("id, first_name, last_name, date_of_birth").in("id", clientIds),
+            providerIds.length > 0
+              ? (supabase as any).from("providers").select("id, display_name, first_name, last_name").in("id", providerIds)
+              : Promise.resolve({ data: [] }),
           ]);
 
           const payerMap = new Map<string, any>((payers ?? []).map((p: any) => [p.id, p]));
           const subMap = new Map<string, any>((subscribers ?? []).map((s: any) => [s.id, s]));
+          const clientMap = new Map<string, any>((clients ?? []).map((c: any) => [c.id, c]));
+          const providerMap = new Map<string, any>((providers ?? []).map((p: any) => [p.id, p]));
 
           for (const appt of actionable) {
             if (existingApptIds.has(appt.id)) continue;
@@ -205,6 +213,12 @@ export async function POST(request: Request) {
             const memberid = subscriber?.member_id ?? policy.policy_number ?? null;
             if (!subscriber || !memberid) continue;
 
+            const client = clientMap.get(appt.client_id);
+            const provider = providerMap.get(appt.provider_id);
+            const providerName = provider
+              ? provider.display_name || [provider.first_name, provider.last_name].filter(Boolean).join(" ")
+              : null;
+
             fallbackCandidates.push({
               appointment_id: appt.id,
               client_id: appt.client_id,
@@ -213,7 +227,15 @@ export async function POST(request: Request) {
               payer_name: payer.payer_name ?? null,
               electronic_payer_id: payer.payer_id,
               service_date: serviceDate,
+              client_first_name: client?.first_name ?? null,
+              client_last_name: client?.last_name ?? null,
+              client_dob: client?.date_of_birth ?? null,
+              subscriber_first_name: subscriber?.first_name ?? client?.first_name ?? null,
+              subscriber_last_name: subscriber?.last_name ?? client?.last_name ?? null,
+              subscriber_dob: subscriber?.date_of_birth ?? client?.date_of_birth ?? null,
               subscriber_member_id: memberid,
+              relationship_to_client: subscriber?.relationship_to_client ?? "self",
+              provider_name: providerName ?? null,
             });
           }
         }
