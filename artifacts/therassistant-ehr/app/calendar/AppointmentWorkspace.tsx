@@ -181,14 +181,7 @@ export default function AppointmentWorkspace({
     text: string;
   } | null>(null);
   const [checkingIn, setCheckingIn] = useState(false);
-
-  /*
-   * This ID is only set when this appointment workspace creates the encounter.
-   * If it is set, the provider should document right here using EncounterNoteClient.
-   * Existing encounters/notes that were already present before check-in should not be rendered here.
-   */
   const [activeEncounterId, setActiveEncounterId] = useState<string | null>(null);
-
   const [chargeResult, setChargeResult] = useState<{
     chargeStatus: string | null;
     claimId: string | null;
@@ -337,11 +330,6 @@ export default function AppointmentWorkspace({
       }
 
       if (json.encounterId) {
-        /*
-         * Critical: set activeEncounterId BEFORE reloading appointment details.
-         * The reload will make detail.encounter exist, but this is still the brand-new
-         * encounter created by this workspace, so the note form must stay mounted here.
-         */
         setActiveEncounterId(json.encounterId);
         setBanner({
           kind: "success",
@@ -427,7 +415,6 @@ export default function AppointmentWorkspace({
     const isCancelled = status === "cancelled";
     const isNoShow = status === "no_show";
     const hasProvider = !!providerId;
-    const hasEncounter = !!detail.encounter;
     const eligible = detail.eligibility;
     const eligibilityWarning =
       eligible?.displayStatus === "stale" ||
@@ -441,7 +428,6 @@ export default function AppointmentWorkspace({
       isCancelled,
       isNoShow,
       hasProvider,
-      hasEncounter,
       eligibilityWarning,
       authWarning,
       canCheckIn: !alreadyCheckedIn && !isCancelled && !isNoShow && hasProvider,
@@ -553,19 +539,10 @@ export default function AppointmentWorkspace({
   } = detail;
 
   const meta = actionMeta;
-
-  /*
-   * Existing note rules:
-   * - If activeEncounterId is set, this workspace just created that encounter, so mount EncounterNoteClient here.
-   * - If there is an encounter/note but activeEncounterId is not set, it existed before this workspace session.
-   *   Do not render saved content; require chart edit.
-   */
-  const existingNoteEncounterId =
-    workspaceCtx?.currentSessionNote?.encounterId ?? encounter?.id ?? null;
-  const existingNoteStatus =
-    workspaceCtx?.currentSessionNote?.noteStatus ?? encounter?.encounter_status ?? null;
+  const existingNoteEncounterId = workspaceCtx?.currentSessionNote?.encounterId ?? encounter?.id ?? null;
+  const existingNoteStatus = workspaceCtx?.currentSessionNote?.noteStatus ?? encounter?.encounter_status ?? null;
   const hasExistingEncounterOrNote = !!existingNoteEncounterId && !activeEncounterId;
-  const shouldShowClinicalNoteModal = !!activeEncounterId;
+  const showClinicalNote = !!activeEncounterId;
 
   return (
     <div
@@ -579,7 +556,7 @@ export default function AppointmentWorkspace({
     >
       <div
         ref={workspaceRef}
-        className="w-full max-w-[1100px] h-full bg-[#f9fafc] text-slate-800 font-sans flex flex-col overflow-hidden shadow-2xl"
+        className="w-full max-w-[720px] h-full bg-[#f9fafc] text-slate-800 font-sans flex flex-col overflow-hidden shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex justify-between items-start p-6 bg-white border-b border-slate-200 shrink-0">
@@ -601,7 +578,7 @@ export default function AppointmentWorkspace({
             </div>
           </div>
 
-          <div className="text-right pr-8">
+          <div className="text-right">
             <div className="text-slate-800 font-semibold text-base flex items-center justify-end gap-1.5">
               <Calendar className="w-4 h-4 text-slate-400" />
               {fmtDate(appointment.scheduledStartAt)}
@@ -662,397 +639,366 @@ export default function AppointmentWorkspace({
             </div>
           ) : null}
 
-          <div className="grid grid-cols-1 xl:grid-cols-[320px_1fr] gap-6">
-            <div className="flex flex-col gap-6">
-              <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
-                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                  <FileText className="w-4 h-4" /> Visit Details
-                </h2>
+          {showClinicalNote && activeEncounterId ? (
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3 min-h-[620px]">
+              <EncounterNoteClient
+                encounterId={activeEncounterId}
+                inlineMode
+                onInlineNavigate={(path) => {
+                  if (path.startsWith("/billing/")) {
+                    window.open(path, "_blank");
+                  }
+                }}
+                onSigned={(data) => {
+                  setChargeResult(data);
+                  setActiveEncounterId(null);
+                  void loadDetail(appointmentId);
+                  void loadWorkspaceCtx(appointmentId);
+                  onRefresh?.();
+                }}
+              />
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="flex flex-col gap-6">
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+                  <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                    <FileText className="w-4 h-4" /> Visit Details
+                  </h2>
 
-                <div className="space-y-3.5 text-sm">
-                  <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
-                    <span className="text-slate-500 font-medium">Date of Birth</span>
-                    <span className="font-semibold text-slate-800">
-                      {clientDetails?.dateOfBirth
-                        ? new Date(clientDetails.dateOfBirth).toLocaleDateString()
-                        : "—"}
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
-                    <span className="text-slate-500 font-medium">Visit Type</span>
-                    <span className="font-semibold text-slate-800">
-                      {appointment.appointmentType ?? "—"}{" "}
-                      {appointment.cptCode ? (
-                        <span className="text-slate-400 font-normal">
-                          ({appointment.cptCode})
-                        </span>
-                      ) : null}
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
-                    <span className="text-slate-500 font-medium">Location</span>
-                    <span className="font-semibold text-slate-800 flex items-center gap-1">
-                      <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                      {appointment.serviceLocation ?? "—"}
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
-                    <span className="text-slate-500 font-medium">Clinician</span>
-                    <span className="font-semibold text-slate-800">
-                      {appointment.providerName || "—"}
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
-                    <span className="text-slate-500 font-medium">Balance</span>
-                    <span className="font-semibold text-slate-800">
-                      {money(balance.openBalance)} open
-                    </span>
-                  </div>
-
-                  {appointment.memo ? (
-                    <div className="pt-1">
-                      <span className="text-slate-500 font-medium block mb-1.5">Memo</span>
-                      <div className="text-slate-700 bg-amber-50/50 border border-amber-100 p-3 rounded-lg text-sm italic">
-                        &ldquo;{appointment.memo}&rdquo;
-                      </div>
+                  <div className="space-y-3.5 text-sm">
+                    <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
+                      <span className="text-slate-500 font-medium">Date of Birth</span>
+                      <span className="font-semibold text-slate-800">
+                        {clientDetails?.dateOfBirth
+                          ? new Date(clientDetails.dateOfBirth).toLocaleDateString()
+                          : "—"}
+                      </span>
                     </div>
-                  ) : null}
-                </div>
-              </div>
 
-              <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
-                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                  <Activity className="w-4 h-4" /> Quick Actions
-                </h2>
+                    <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
+                      <span className="text-slate-500 font-medium">Visit Type</span>
+                      <span className="font-semibold text-slate-800">
+                        {appointment.appointmentType ?? "—"}{" "}
+                        {appointment.cptCode ? (
+                          <span className="text-slate-400 font-normal">
+                            ({appointment.cptCode})
+                          </span>
+                        ) : null}
+                      </span>
+                    </div>
 
-                <div className="grid grid-cols-1 gap-2.5">
-                  {hasExistingEncounterOrNote ? (
-                    <button
-                      className="py-2.5 bg-[#2c6cf6] text-white rounded-lg text-sm font-semibold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
-                      type="button"
-                      onClick={handleOpenChart}
-                      disabled={!appointment.clientId}
-                    >
-                      <ExternalLink className="w-4 h-4" />
-                      Open Chart to Edit Existing Note
-                    </button>
-                  ) : activeEncounterId ? (
-                    <button
-                      className="py-2.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-sm font-semibold cursor-default flex items-center justify-center gap-2"
-                      type="button"
-                      disabled
-                    >
-                      <CheckCircle2 className="w-4 h-4" />
-                      Encounter Started
-                    </button>
-                  ) : (
-                    <button
-                      className="py-2.5 bg-[#2c6cf6] text-white rounded-lg text-sm font-semibold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
-                      type="button"
-                      onClick={handleCheckIn}
-                      disabled={checkingIn || !meta?.canCheckIn}
-                      aria-busy={checkingIn || undefined}
-                      title={
-                        !meta?.hasProvider && appointment.cptCode
-                          ? "Assign a provider before checking in"
-                          : meta?.isCancelled || meta?.isNoShow
-                            ? "Cannot check in cancelled/no-show appointment"
-                            : undefined
-                      }
-                    >
-                      {checkingIn ? (
-                        <>
-                          <span className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                          Checking in…
-                        </>
-                      ) : (
-                        <>
-                          <Edit3 className="w-4 h-4" /> Check In / Start Encounter
-                        </>
-                      )}
-                    </button>
-                  )}
+                    <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
+                      <span className="text-slate-500 font-medium">Location</span>
+                      <span className="font-semibold text-slate-800 flex items-center gap-1">
+                        <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                        {appointment.serviceLocation ?? "—"}
+                      </span>
+                    </div>
 
-                  {workspaceCtx?.telehealth?.isVirtual ? (
-                    <button
-                      className="py-2.5 bg-sky-50 text-sky-700 border border-sky-200 rounded-lg text-sm font-semibold hover:bg-sky-100 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
-                      type="button"
-                      onClick={handleTelehealth}
-                      disabled={telehealthLoading}
-                    >
-                      {telehealthLoading ? (
-                        <>
-                          <span className="inline-block w-4 h-4 border-2 border-sky-300 border-t-sky-700 rounded-full animate-spin" />
-                          Starting…
-                        </>
-                      ) : joinUrl ? (
-                        <>
-                          <Video className="w-4 h-4" /> Rejoin Telehealth
-                        </>
-                      ) : (
-                        <>
-                          <Video className="w-4 h-4" /> Start Telehealth
-                        </>
-                      )}
-                    </button>
-                  ) : null}
+                    <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
+                      <span className="text-slate-500 font-medium">Clinician</span>
+                      <span className="font-semibold text-slate-800">
+                        {appointment.providerName || "—"}
+                      </span>
+                    </div>
 
-                  {appointment.clientId ? (
-                    <Link
-                      href={`/clients/${appointment.clientId}`}
-                      className="py-2 bg-white border border-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors flex items-center justify-center gap-1"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" /> Open Chart
-                    </Link>
-                  ) : (
-                    <button
-                      className="py-2 bg-white border border-slate-200 text-slate-400 rounded-lg text-sm font-medium cursor-not-allowed"
-                      disabled
-                    >
-                      Open Chart
-                    </button>
-                  )}
+                    <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
+                      <span className="text-slate-500 font-medium">Balance</span>
+                      <span className="font-semibold text-slate-800">
+                        {money(balance.openBalance)} open
+                      </span>
+                    </div>
 
-                  {appointment.clientId && onCollect ? (
-                    <button
-                      className="py-2 bg-white border border-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"
-                      type="button"
-                      onClick={() => {
-                        onCollect({
-                          appointmentId: appointment.id,
-                          clientId: appointment.clientId,
-                          providerId: appointment.providerId,
-                          openBalance: balance.openBalance,
-                          clientName: appointment.clientName,
-                        });
-                      }}
-                    >
-                      Collect Copay
-                    </button>
-                  ) : (
-                    <button
-                      className="py-2 bg-white border border-slate-200 text-slate-400 rounded-lg text-sm font-medium cursor-not-allowed"
-                      disabled
-                    >
-                      Collect Copay
-                    </button>
-                  )}
-
-                  {meta?.canReschedule ? (
-                    <button
-                      className="py-2 bg-white border border-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"
-                      type="button"
-                      onClick={() => {
-                        setBanner({
-                          kind: "error",
-                          text: "Reschedule flow via schedule page — not yet wired",
-                        });
-                      }}
-                    >
-                      Reschedule
-                    </button>
-                  ) : (
-                    <button
-                      className="py-2 bg-white border border-slate-200 text-slate-400 rounded-lg text-sm font-medium cursor-not-allowed"
-                      disabled
-                    >
-                      Reschedule
-                    </button>
-                  )}
-
-                  {meta?.canCancel && onCancel ? (
-                    <button
-                      className="py-2 bg-white border border-slate-200 text-red-600 rounded-lg text-sm font-medium hover:bg-red-50 transition-colors"
-                      type="button"
-                      onClick={() => {
-                        onCancel({
-                          appointmentId: appointment.id,
-                          alreadyCancelled: appointment.status === "cancelled",
-                        });
-                      }}
-                    >
-                      Cancel Visit
-                    </button>
-                  ) : (
-                    <button
-                      className="py-2 bg-white border border-slate-200 text-slate-400 rounded-lg text-sm font-medium cursor-not-allowed"
-                      disabled
-                    >
-                      Cancel Visit
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
-                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                  <ShieldCheck className="w-4 h-4" /> Insurance & Billing
-                </h2>
-
-                <div className="space-y-3.5 text-sm">
-                  <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
-                    <span className="text-slate-500 font-medium">Primary Payer</span>
-                    <span className="font-semibold text-slate-800">
-                      {insurance.primaryPolicy?.payerName ?? "Unknown payer"}
-                    </span>
+                    {appointment.memo ? (
+                      <div className="pt-1">
+                        <span className="text-slate-500 font-medium block mb-1.5">Memo</span>
+                        <div className="text-slate-700 bg-amber-50/50 border border-amber-100 p-3 rounded-lg text-sm italic">
+                          &ldquo;{appointment.memo}&rdquo;
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
+                </div>
 
-                  <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
-                    <span className="text-slate-500 font-medium">Plan</span>
-                    <span className="font-semibold text-slate-800">
-                      {insurance.primaryPolicy?.planName ?? "—"}
-                    </span>
-                  </div>
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+                  <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                    <Activity className="w-4 h-4" /> Quick Actions
+                  </h2>
 
-                  <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
-                    <span className="text-slate-500 font-medium">Eligibility</span>
-                    {eligibility ? (
-                      <span
-                        className={`font-bold px-2.5 py-0.5 rounded-md text-xs border flex items-center gap-1 ${
-                          eligibility.displayStatus === "active"
-                            ? "text-emerald-700 bg-emerald-50 border-emerald-100"
-                            : eligibility.displayStatus === "inactive"
-                              ? "text-red-700 bg-red-50 border-red-100"
-                              : "text-amber-700 bg-amber-50 border-amber-100"
-                        }`}
+                  <div className="grid grid-cols-2 gap-2.5">
+                    {hasExistingEncounterOrNote ? (
+                      <button
+                        className="col-span-2 py-2.5 bg-[#2c6cf6] text-white rounded-lg text-sm font-semibold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
+                        type="button"
+                        onClick={handleOpenChart}
+                        disabled={!appointment.clientId}
                       >
-                        <CheckCircle2 className="w-3 h-3" />
-                        {eligibility.displayStatus === "active"
-                          ? "ACTIVE"
-                          : eligibility.displayStatus === "inactive"
-                            ? "INACTIVE"
-                            : eligibility.displayStatus === "stale"
-                              ? "STALE"
-                              : eligibility.displayStatus === "unknown"
-                                ? "UNKNOWN"
-                                : "NOT CHECKED"}
+                        <ExternalLink className="w-4 h-4" />
+                        Open Chart to Edit Existing Note
+                      </button>
+                    ) : (
+                      <button
+                        className="col-span-2 py-2.5 bg-[#2c6cf6] text-white rounded-lg text-sm font-semibold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
+                        type="button"
+                        onClick={handleCheckIn}
+                        disabled={checkingIn || !meta?.canCheckIn}
+                        aria-busy={checkingIn || undefined}
+                        title={
+                          !meta?.hasProvider && appointment.cptCode
+                            ? "Assign a provider before checking in"
+                            : meta?.isCancelled || meta?.isNoShow
+                              ? "Cannot check in cancelled/no-show appointment"
+                              : undefined
+                        }
+                      >
+                        {checkingIn ? (
+                          <>
+                            <span className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                            Checking in…
+                          </>
+                        ) : (
+                          <>
+                            <Edit3 className="w-4 h-4" /> Check In / Start Encounter
+                          </>
+                        )}
+                      </button>
+                    )}
+
+                    {workspaceCtx?.telehealth?.isVirtual ? (
+                      <button
+                        className="col-span-2 py-2.5 bg-sky-50 text-sky-700 border border-sky-200 rounded-lg text-sm font-semibold hover:bg-sky-100 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+                        type="button"
+                        onClick={handleTelehealth}
+                        disabled={telehealthLoading}
+                      >
+                        {telehealthLoading ? (
+                          <>
+                            <span className="inline-block w-4 h-4 border-2 border-sky-300 border-t-sky-700 rounded-full animate-spin" />
+                            Starting…
+                          </>
+                        ) : joinUrl ? (
+                          <>
+                            <Video className="w-4 h-4" /> Rejoin Telehealth
+                          </>
+                        ) : (
+                          <>
+                            <Video className="w-4 h-4" /> Start Telehealth
+                          </>
+                        )}
+                      </button>
+                    ) : null}
+
+                    {appointment.clientId ? (
+                      <Link
+                        href={`/clients/${appointment.clientId}`}
+                        className="py-2 bg-white border border-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors flex items-center justify-center gap-1"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" /> Open Chart
+                      </Link>
+                    ) : (
+                      <button
+                        className="py-2 bg-white border border-slate-200 text-slate-400 rounded-lg text-sm font-medium cursor-not-allowed"
+                        disabled
+                      >
+                        Open Chart
+                      </button>
+                    )}
+
+                    {appointment.clientId && onCollect ? (
+                      <button
+                        className="py-2 bg-white border border-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"
+                        type="button"
+                        onClick={() => {
+                          onCollect({
+                            appointmentId: appointment.id,
+                            clientId: appointment.clientId,
+                            providerId: appointment.providerId,
+                            openBalance: balance.openBalance,
+                            clientName: appointment.clientName,
+                          });
+                        }}
+                      >
+                        Collect Copay
+                      </button>
+                    ) : (
+                      <button
+                        className="py-2 bg-white border border-slate-200 text-slate-400 rounded-lg text-sm font-medium cursor-not-allowed"
+                        disabled
+                      >
+                        Collect Copay
+                      </button>
+                    )}
+
+                    {meta?.canReschedule ? (
+                      <button
+                        className="py-2 bg-white border border-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"
+                        type="button"
+                        onClick={() => {
+                          setBanner({
+                            kind: "error",
+                            text: "Reschedule flow via schedule page — not yet wired",
+                          });
+                        }}
+                      >
+                        Reschedule
+                      </button>
+                    ) : (
+                      <button
+                        className="py-2 bg-white border border-slate-200 text-slate-400 rounded-lg text-sm font-medium cursor-not-allowed"
+                        disabled
+                      >
+                        Reschedule
+                      </button>
+                    )}
+
+                    {meta?.canCancel && onCancel ? (
+                      <button
+                        className="py-2 bg-white border border-slate-200 text-red-600 rounded-lg text-sm font-medium hover:bg-red-50 transition-colors"
+                        type="button"
+                        onClick={() => {
+                          onCancel({
+                            appointmentId: appointment.id,
+                            alreadyCancelled: appointment.status === "cancelled",
+                          });
+                        }}
+                      >
+                        Cancel Visit
+                      </button>
+                    ) : (
+                      <button
+                        className="py-2 bg-white border border-slate-200 text-slate-400 rounded-lg text-sm font-medium cursor-not-allowed"
+                        disabled
+                      >
+                        Cancel Visit
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+                  <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4" /> Insurance & Billing
+                  </h2>
+
+                  <div className="space-y-3.5 text-sm">
+                    <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
+                      <span className="text-slate-500 font-medium">Primary Payer</span>
+                      <span className="font-semibold text-slate-800">
+                        {insurance.primaryPolicy?.payerName ?? "Unknown payer"}
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
+                      <span className="text-slate-500 font-medium">Plan</span>
+                      <span className="font-semibold text-slate-800">
+                        {insurance.primaryPolicy?.planName ?? "—"}
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
+                      <span className="text-slate-500 font-medium">Eligibility</span>
+                      {eligibility ? (
+                        <span
+                          className={`font-bold px-2.5 py-0.5 rounded-md text-xs border flex items-center gap-1 ${
+                            eligibility.displayStatus === "active"
+                              ? "text-emerald-700 bg-emerald-50 border-emerald-100"
+                              : eligibility.displayStatus === "inactive"
+                                ? "text-red-700 bg-red-50 border-red-100"
+                                : "text-amber-700 bg-amber-50 border-amber-100"
+                          }`}
+                        >
+                          <CheckCircle2 className="w-3 h-3" />
+                          {eligibility.displayStatus === "active"
+                            ? "ACTIVE"
+                            : eligibility.displayStatus === "inactive"
+                              ? "INACTIVE"
+                              : eligibility.displayStatus === "stale"
+                                ? "STALE"
+                                : eligibility.displayStatus === "unknown"
+                                  ? "UNKNOWN"
+                                  : "NOT CHECKED"}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </div>
+
+                    <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
+                      <span className="text-slate-500 font-medium">Copay</span>
+                      <span className="font-bold text-slate-800 flex items-center gap-1">
+                        <CreditCard className="w-4 h-4 text-slate-400" />
+                        {eligibility?.copay_amount != null ? money(eligibility.copay_amount) : "—"}
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500 font-medium">Auth</span>
+                      <span className="font-mono text-xs font-semibold text-slate-600 bg-slate-100 px-2 py-1 rounded">
+                        {authorization?.authorizationNumber ?? "—"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-6">
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 flex-1 flex flex-col min-h-[520px]">
+                  <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                      <FileText className="w-4 h-4" /> Clinical Note
+                    </h2>
+
+                    {existingNoteStatus ? (
+                      <span className="text-xs font-semibold text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-100">
+                        {existingNoteStatus.replace(/_/g, " ").toUpperCase()}
                       </span>
                     ) : (
-                      <span className="text-slate-400">—</span>
+                      <span className="text-xs font-semibold text-slate-500 bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
+                        READY TO START
+                      </span>
                     )}
                   </div>
 
-                  <div className="flex justify-between items-center border-b border-slate-50 pb-2.5">
-                    <span className="text-slate-500 font-medium">Copay</span>
-                    <span className="font-bold text-slate-800 flex items-center gap-1">
-                      <CreditCard className="w-4 h-4 text-slate-400" />
-                      {eligibility?.copay_amount != null ? money(eligibility.copay_amount) : "—"}
-                    </span>
-                  </div>
+                  {hasExistingEncounterOrNote ? (
+                    <div className="flex-1 flex flex-col items-center justify-center text-center border border-dashed border-slate-200 rounded-xl bg-slate-50 p-6">
+                      <FileText className="w-8 h-8 text-slate-300 mb-3" />
+                      <p className="text-sm font-semibold text-slate-700">
+                        Clinical note already exists
+                      </p>
+                      <p className="text-xs text-slate-500 mt-1 max-w-sm">
+                        Existing saved or completed notes are not displayed in the appointment workspace.
+                        Open the client chart to review or edit the note.
+                      </p>
 
-                  <div className="flex justify-between items-center">
-                    <span className="text-slate-500 font-medium">Auth</span>
-                    <span className="font-mono text-xs font-semibold text-slate-600 bg-slate-100 px-2 py-1 rounded">
-                      {authorization?.authorizationNumber ?? "—"}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-6">
-              <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 flex-1 flex flex-col min-h-[640px]">
-                <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                    <FileText className="w-4 h-4" /> Clinical Note
-                  </h2>
-
-                  {shouldShowClinicalNoteModal ? (
-                    <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">
-                      DOCUMENTING
-                    </span>
-                  ) : existingNoteStatus ? (
-                    <span className="text-xs font-semibold text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-100">
-                      {existingNoteStatus.replace(/_/g, " ").toUpperCase()}
-                    </span>
+                      {appointment.clientId ? (
+                        <button
+                          type="button"
+                          onClick={handleOpenChart}
+                          className="mt-4 inline-flex items-center justify-center gap-2 rounded-lg bg-[#2c6cf6] px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+                        >
+                          <ExternalLink className="w-4 h-4" />
+                          Open Chart
+                        </button>
+                      ) : null}
+                    </div>
                   ) : (
-                    <span className="text-xs font-semibold text-slate-500 bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
-                      READY TO START
-                    </span>
+                    <div className="flex-1 flex flex-col items-center justify-center text-center border border-dashed border-slate-200 rounded-xl bg-slate-50 p-6">
+                      <FileText className="w-8 h-8 text-slate-300 mb-3" />
+                      <p className="text-sm font-semibold text-slate-700">
+                        Ready to document
+                      </p>
+                      <p className="text-xs text-slate-500 mt-1 max-w-sm">
+                        Click Check In / Start Encounter to open the clinical note in this workspace.
+                      </p>
+                    </div>
                   )}
                 </div>
-
-                {shouldShowClinicalNoteModal && activeEncounterId ? (
-                  <div className="flex-1 min-h-0 overflow-y-auto rounded-xl border border-slate-200 bg-white">
-                    <EncounterNoteClient
-                      encounterId={activeEncounterId}
-                      inlineMode
-                      onInlineNavigate={(path) => {
-                        if (path.startsWith("/billing/")) {
-                          window.open(path, "_blank");
-                        }
-                      }}
-                      onSigned={(data) => {
-                        setChargeResult(data);
-                        setActiveEncounterId(null);
-                        void loadDetail(appointmentId);
-                        void loadWorkspaceCtx(appointmentId);
-                        onRefresh?.();
-                      }}
-                    />
-                  </div>
-                ) : hasExistingEncounterOrNote ? (
-                  <div className="flex-1 flex flex-col items-center justify-center text-center border border-dashed border-slate-200 rounded-xl bg-slate-50 p-6">
-                    <FileText className="w-8 h-8 text-slate-300 mb-3" />
-                    <p className="text-sm font-semibold text-slate-700">
-                      Clinical note already exists
-                    </p>
-                    <p className="text-xs text-slate-500 mt-1 max-w-sm">
-                      Existing saved or completed notes are not displayed in the appointment
-                      workspace. Open the client chart to review or edit the note.
-                    </p>
-
-                    {appointment.clientId ? (
-                      <button
-                        type="button"
-                        onClick={handleOpenChart}
-                        className="mt-4 inline-flex items-center justify-center gap-2 rounded-lg bg-[#2c6cf6] px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
-                      >
-                        <ExternalLink className="w-4 h-4" />
-                        Open Chart
-                      </button>
-                    ) : null}
-                  </div>
-                ) : (
-                  <div className="flex-1 flex flex-col items-center justify-center text-center border border-dashed border-slate-200 rounded-xl bg-slate-50 p-6">
-                    <FileText className="w-8 h-8 text-slate-300 mb-3" />
-                    <p className="text-sm font-semibold text-slate-700">
-                      Ready to document
-                    </p>
-                    <p className="text-xs text-slate-500 mt-1 max-w-sm">
-                      Click Check In / Start Encounter to open the existing clinical note form
-                      directly in this appointment workspace.
-                    </p>
-
-                    <button
-                      type="button"
-                      onClick={() => void handleCheckIn()}
-                      disabled={checkingIn || !meta?.canCheckIn}
-                      className="mt-4 inline-flex items-center justify-center gap-2 rounded-lg bg-[#2c6cf6] px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {checkingIn ? (
-                        <>
-                          <span className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                          Creating encounter…
-                        </>
-                      ) : (
-                        <>
-                          <Edit3 className="w-4 h-4" />
-                          Check In / Start Encounter
-                        </>
-                      )}
-                    </button>
-                  </div>
-                )}
               </div>
             </div>
-          </div>
+          )}
 
           {workspaceCtx?.goals && workspaceCtx.goals.length > 0 ? (
             <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
