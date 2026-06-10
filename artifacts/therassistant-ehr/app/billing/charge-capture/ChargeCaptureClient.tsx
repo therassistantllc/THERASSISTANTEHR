@@ -3,42 +3,43 @@
 /**
  * Charges / Charge Capture
  *
- * Operational charge queue. When a clinician signs a note, the charge is
- * created and routed here for review, correction, hold, or release.
+ * Operational charge queue. When a clinician signs a note the charge is
+ * created and routed here. Charges are auto-batched by Payer ID + TIN.
  *
- * Charge Capture should NOT generate 837P files or manage 837P batches.
- * Claim generation and batching belong on the Ready to Generate page.
+ * Top section  — BatchPanel: one card per batch, grouped by payer/TIN.
+ *               Actions: Download 837, Submit Batch (stub), Mark as Submitted.
+ *
+ * Bottom section — Dense charge queue.
+ *               Columns: Patient, DOS, CPT, Provider, Status, Actions.
+ *               Statuses: Missing DX | Unsigned | Ready | Hold
+ *               Row actions: Edit charge, Attach diagnosis,
+ *                            Review authorization, Release to billing.
  *
  * Data sources:
- *   GET   /api/billing/charge-capture          — per-charge queue rows
- *   GET   /api/billing/charge-capture/:id      — full CMS-1500 charge detail
- *   PATCH /api/billing/charge-capture/:id      — edit/status change
- *   POST  /api/billing/charge-capture/release  — release clean charges to Ready to Generate
+ *   GET  /api/billing/charges/batches         — batches grouped by payer/TIN
+ *   GET  /api/billing/charge-capture          — per-charge queue rows
+ *   POST /api/billing/charges/batches/:id/download    — 837 file
+ *   POST /api/billing/charges/batches/:id/submit      — electronic (stub)
+ *   POST /api/billing/charges/batches/:id/mark-submitted
+ *   PATCH /api/billing/charge-capture/:id             — edit/status change
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_ORG_ID } from "@/lib/config";
-import {
-  defaultPlaceOfService,
-  isAllowedPlaceOfService,
-  placeOfServiceWarning,
-} from "@/lib/billing/placeOfService";
+import { defaultPlaceOfService, isAllowedPlaceOfService, placeOfServiceWarning } from "@/lib/billing/placeOfService";
+import BatchPanel, { type Batch, type BatchTotals } from "./BatchPanel";
 import styles from "./ChargeCaptureClient.module.css";
 
 // ── Modal focus trap helpers ──────────────────────────────────────────────
 
 function trapFocus(container: HTMLElement, event: React.KeyboardEvent<HTMLElement>) {
   if (event.key !== "Tab") return;
-
   const focusable = container.querySelectorAll<HTMLElement>(
     'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])',
   );
-
   const first = focusable[0];
   const last = focusable[focusable.length - 1];
-
   if (!first || !last) return;
-
   if (event.shiftKey && document.activeElement === first) {
     event.preventDefault();
     last.focus();
@@ -48,11 +49,10 @@ function trapFocus(container: HTMLElement, event: React.KeyboardEvent<HTMLElemen
   }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function getOrgId() {
   if (typeof window === "undefined") return DEFAULT_ORG_ID;
-
   return (
     new URLSearchParams(window.location.search).get("organizationId") ||
     process.env.NEXT_PUBLIC_ORGANIZATION_ID ||
@@ -62,26 +62,16 @@ function getOrgId() {
 
 function fmtDate(v: string | null) {
   if (!v) return "—";
-
   const d = new Date(v + (v.includes("T") ? "" : "T00:00:00"));
-
   if (Number.isNaN(d.getTime())) return "—";
-
-  return d.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
 function fmtMoney(n: number) {
-  return n.toLocaleString("en-US", {
-    style: "currency",
-    currency: "USD",
-  });
+  return n.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
 
-// ── Types ─────────────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 type ChargeStatus = "Missing DX" | "Unsigned" | "Ready" | "Hold";
 
@@ -177,44 +167,47 @@ interface EditSL {
   authorizationNumber: string;
 }
 
-// ── Status derivation ─────────────────────────────────────────────────────
+// ── Status derivation ─────────────────────────────────────────────────────────
 
 function deriveStatus(r: ChargeRow): ChargeStatus {
   if (r.chargeStatus === "ready_for_claim") return "Ready";
   if (r.tab === "held_charges" || r.chargeStatus === "blocked") return "Hold";
   if (!r.encounter.noteSigned) return "Unsigned";
-
   if (
     r.codingAlerts.length > 0 ||
     r.blockers.some((b) => /diag|dx|cpt|code/i.test(b)) ||
     !r.encounter.billingFieldsComplete
-  ) {
-    return "Missing DX";
-  }
-
+  ) return "Missing DX";
   return "Ready";
 }
 
 function statusBadgeClass(status: ChargeStatus): string {
   switch (status) {
-    case "Missing DX":
-      return "statusBadgeDx";
-    case "Unsigned":
-      return "statusBadgeUnsigned";
-    case "Ready":
-      return "statusBadgeReady";
-    case "Hold":
-      return "statusBadgeHold";
+    case "Missing DX": return "statusBadgeDx";
+    case "Unsigned": return "statusBadgeUnsigned";
+    case "Ready": return "statusBadgeReady";
+    case "Hold": return "statusBadgeHold";
   }
 }
 
-// ── Main component ────────────────────────────────────────────────────────
+// ── Main component ────────────────────────────────────────────────────────────
 
 export default function ChargeCaptureClient() {
   const orgId = useMemo(() => getOrgId(), []);
   const modalRef = useRef<HTMLDivElement | null>(null);
   const lastFocusedRef = useRef<HTMLElement | null>(null);
-  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Batches
+  const [batches, setBatches] = useState<Batch[]>([]);
+  const [batchLoading, setBatchLoading] = useState(true);
+  const [batchError, setBatchError] = useState<string | null>(null);
+  const [batchTotals, setBatchTotals] = useState<BatchTotals>({ totalUnbilledCharges: 0, pendingBatches: 0, readyToSubmit: 0 });
+  const [busyBatch, setBusyBatch] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  // Generate batches
+  const [generating, setGenerating] = useState(false);
+  const [generateResult, setGenerateResult] = useState<{ batchesCreated: number; claimsQueued: number; message?: string } | null>(null);
 
   // Charge queue
   const [charges, setCharges] = useState<ChargeRow[]>([]);
@@ -224,11 +217,27 @@ export default function ChargeCaptureClient() {
   const [search, setSearch] = useState("");
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [selectedReleaseIds, setSelectedReleaseIds] = useState<string[]>([]);
-  const [toast, setToast] = useState<string | null>(null);
 
   // CMS-1500 Edit modal
   const [editRow, setEditRowRaw] = useState<ChargeRow | null>(null);
   const [editDetail, setEditDetail] = useState<ChargeDetail | null>(null);
+
+  const setEditRow = useCallback((row: ChargeRow | null) => {
+    if (row) {
+      lastFocusedRef.current = document.activeElement as HTMLElement;
+    }
+    setEditRowRaw(row);
+  }, []);
+
+  useEffect(() => {
+    if (editRow && modalRef.current) {
+      const timer = setTimeout(() => modalRef.current?.focus(), 0);
+      return () => clearTimeout(timer);
+    } else if (!editRow && lastFocusedRef.current) {
+      lastFocusedRef.current.focus();
+      lastFocusedRef.current = null;
+    }
+  }, [editRow]);
   const [editDetailLoading, setEditDetailLoading] = useState(false);
   const [editDiagnoses, setEditDiagnoses] = useState<string[]>([]);
   const [editPlaceOfService, setEditPlaceOfService] = useState("");
@@ -237,64 +246,47 @@ export default function ChargeCaptureClient() {
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
-  const setEditRow = useCallback((row: ChargeRow | null) => {
-    if (row) {
-      lastFocusedRef.current = document.activeElement as HTMLElement;
-    }
-
-    setEditRowRaw(row);
-  }, []);
-
-  useEffect(() => {
-    if (editRow && modalRef.current) {
-      const timer = setTimeout(() => modalRef.current?.focus(), 0);
-      return () => clearTimeout(timer);
-    }
-
-    if (!editRow && lastFocusedRef.current) {
-      lastFocusedRef.current.focus();
-      lastFocusedRef.current = null;
-    }
-  }, [editRow]);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function showToast(msg: string) {
     setToast(msg);
-
-    if (toastTimer.current) {
-      clearTimeout(toastTimer.current);
-    }
-
+    if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 4000);
   }
 
   // ── Loaders ──────────────────────────────────────────────────────────────
 
+  const loadBatches = useCallback(async () => {
+    setBatchLoading(true);
+    setBatchError(null);
+    try {
+      const res = await fetch(`/api/billing/charges/batches?organizationId=${encodeURIComponent(orgId)}`, { cache: "no-store" });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error ?? "Failed to load batches");
+      setBatches(json.batches ?? []);
+      setBatchTotals(json.totals ?? { totalUnbilledCharges: 0, pendingBatches: 0, readyToSubmit: 0 });
+    } catch (e) {
+      setBatchError(e instanceof Error ? e.message : "Failed to load batches");
+    } finally {
+      setBatchLoading(false);
+    }
+  }, [orgId]);
+
   const loadCharges = useCallback(async () => {
     setQueueLoading(true);
     setQueueError(null);
-
     try {
       const params = new URLSearchParams({ organizationId: orgId });
-
       if (typeof window !== "undefined") {
         const current = new URLSearchParams(window.location.search);
-
         ["chargeCaptureId", "encounterId", "claimId"].forEach((key) => {
           const value = current.get(key);
           if (value) params.set(key, value);
         });
       }
-
-      const res = await fetch(`/api/billing/charge-capture?${params.toString()}`, {
-        cache: "no-store",
-      });
-
+      const res = await fetch(`/api/billing/charge-capture?${params.toString()}`, { cache: "no-store" });
       const json = await res.json();
-
-      if (!res.ok || !json.success) {
-        throw new Error(json.error ?? "Failed to load charges");
-      }
-
+      if (!res.ok || !json.success) throw new Error(json.error ?? "Failed to load charges");
       setCharges(json.items ?? []);
     } catch (e) {
       setQueueError(e instanceof Error ? e.message : "Failed to load charges");
@@ -303,27 +295,89 @@ export default function ChargeCaptureClient() {
     }
   }, [orgId]);
 
-  useEffect(() => {
-    void loadCharges();
-  }, [loadCharges]);
+  useEffect(() => { void loadBatches(); void loadCharges(); }, [loadBatches, loadCharges]);
 
-  // ── Charge row actions ───────────────────────────────────────────────────
+  // ── Generate 837P batches from ready charges ─────────────────────────────
 
-  async function patchChargeStatus(
-    chargeId: string,
-    action: "approve" | "hold" | "route_back",
-  ) {
+  async function generateBatches() {
+    setGenerating(true);
+    setGenerateResult(null);
+    try {
+      const claimIds = [...new Set(
+        charges
+          .filter((row) => deriveStatus(row) === "Ready")
+          .map((row) => row.claimId)
+          .filter((id): id is string => typeof id === "string" && id.length > 0),
+      )];
+
+      const body =
+        claimIds.length > 0
+          ? { organizationId: orgId, claimIds }
+          : { organizationId: orgId, scopeAllReady: true };
+
+      const res = await fetch("/api/billing/charges/batches", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(json.error ?? json.message ?? "Failed to generate batches");
+      }
+      setGenerateResult({ batchesCreated: json.batchesCreated ?? 0, claimsQueued: json.claimsQueued ?? 0, message: json.message });
+      if ((json.batchesCreated ?? 0) > 0) {
+        if (json.generationMode === "queued") {
+          showToast(`Created ${json.batchesCreated} batch${json.batchesCreated === 1 ? "" : "es"} covering ${json.claimsQueued} claim${json.claimsQueued === 1 ? "" : "s"}. Background generation queued for ${json.jobsQueued ?? 0} batch${json.jobsQueued === 1 ? "" : "es"}.`);
+        } else {
+          showToast(`Generated ${json.batchesCreated} batch${json.batchesCreated === 1 ? "" : "es"} covering ${json.claimsQueued} claim${json.claimsQueued === 1 ? "" : "s"}. Download the 837P files below and upload to Availity.`);
+        }
+      } else {
+        showToast(json.message ?? "No new batches were created.");
+      }
+      await loadBatches();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed to generate batches");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  // ── Batch actions ─────────────────────────────────────────────────────────
+
+  async function batchAction(batchId: string, action: "submit" | "mark-submitted") {
+    setBusyBatch(batchId);
+    try {
+      const res = await fetch(`/api/billing/charges/batches/${encodeURIComponent(batchId)}/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ organizationId: orgId }),
+      });
+      const json = await res.json();
+      if (action === "submit" && !json.success) {
+        showToast("Electronic submission not yet active. Download 837 and upload to Availity, then click Mark Submitted.");
+      } else if (!res.ok || !json.success) {
+        throw new Error(json.error ?? `Failed to ${action}`);
+      } else {
+        showToast(action === "mark-submitted" ? "Batch marked as submitted." : "Batch submitted.");
+      }
+      await loadBatches();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : `Failed to ${action}`);
+    } finally {
+      setBusyBatch(null);
+    }
+  }
+
+  // ── Charge row actions ────────────────────────────────────────────────────
+
+  async function patchChargeStatus(chargeId: string, action: "approve" | "hold" | "route_back") {
     const res = await fetch(`/api/billing/charge-capture/${encodeURIComponent(chargeId)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ organizationId: orgId, action }),
     });
-
     const json = await res.json();
-
-    if (!res.ok || !json.success) {
-      throw new Error(json.error ?? "Failed to update charge");
-    }
+    if (!res.ok || !json.success) throw new Error(json.error ?? "Failed to update charge");
   }
 
   async function releaseChargesToClaims(chargeCaptureIds: string[]) {
@@ -332,13 +386,10 @@ export default function ChargeCaptureClient() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ organizationId: orgId, chargeCaptureIds }),
     });
-
     const json = await res.json();
-
     if (!res.ok || !json.success) {
       throw new Error(json.error ?? "Failed to release charges");
     }
-
     return json as {
       succeeded?: number;
       failed?: number;
@@ -348,11 +399,9 @@ export default function ChargeCaptureClient() {
 
   async function chargeAction(chargeId: string, action: "hold" | "release" | "approve") {
     setActionBusy(chargeId + action);
-
     try {
       if (action === "release") {
         const json = await releaseChargesToClaims([chargeId]);
-
         if ((json.succeeded ?? 0) !== 1) {
           const firstError = json.results?.[0]?.errors?.[0]?.message;
           throw new Error(firstError ?? "Charge could not be released");
@@ -360,15 +409,11 @@ export default function ChargeCaptureClient() {
       } else {
         await patchChargeStatus(chargeId, action === "approve" ? "approve" : "hold");
       }
-
       showToast(
-        action === "hold"
-          ? "Charge placed on hold."
-          : action === "release"
-            ? "Charge released to Ready to Generate."
-            : "Charge approved.",
+        action === "hold" ? "Charge placed on hold." :
+        action === "release" ? "Charge released to billing." :
+        "Charge approved."
       );
-
       await loadCharges();
     } catch (e) {
       showToast(e instanceof Error ? e.message : "Action failed");
@@ -377,40 +422,28 @@ export default function ChargeCaptureClient() {
     }
   }
 
-  // ── Open edit modal ──────────────────────────────────────────────────────
+  // ── Open edit modal (fetch full detail) ─────────────────────────────────
 
   async function openEditModal(r: ChargeRow) {
     setEditRow(r);
     setEditDetail(null);
     setEditDetailLoading(true);
     setEditError(null);
-
     try {
       const res = await fetch(
         `/api/billing/charge-capture/${encodeURIComponent(r.id)}?organizationId=${encodeURIComponent(orgId)}`,
         { cache: "no-store" },
       );
-
       const json = await res.json();
-
-      if (!res.ok || !json.detail) {
-        throw new Error(json.error ?? "Failed to load charge detail");
-      }
-
+      if (!res.ok || !json.detail) throw new Error(json.error ?? "Failed to load charge detail");
       const d: ChargeDetail = json.detail;
-
       setEditDetail(d);
-
-      const MAX_DX = 12;
-      const paddedDiagnoses = [
-        ...d.diagnoses,
-        ...Array(Math.max(0, MAX_DX - d.diagnoses.length)).fill(""),
-      ].slice(0, MAX_DX);
-
-      setEditDiagnoses(paddedDiagnoses);
+      setEditDiagnoses(d.diagnoses.length > 0 ? d.diagnoses : [""]);
       setEditPlaceOfService(d.placeOfService ?? defaultPlaceOfService(false));
       setEditPriorAuth(d.serviceLines[0]?.authorizationNumber ?? "");
-
+      const MAX_DX = 12;
+      const padded = [...d.diagnoses, ...Array(Math.max(0, MAX_DX - d.diagnoses.length)).fill("")].slice(0, MAX_DX);
+      setEditDiagnoses(padded);
       setEditServiceLines(
         d.serviceLines.length > 0
           ? d.serviceLines.map((sl) => ({
@@ -421,25 +454,22 @@ export default function ChargeCaptureClient() {
               diagnosisPointers: sl.diagnosisPointers.join(", "),
               units: String(sl.units),
               chargeAmount: String(sl.chargeAmount),
-              placeOfService:
-                sl.placeOfService ?? d.placeOfService ?? defaultPlaceOfService(false),
+              placeOfService: sl.placeOfService ?? d.placeOfService ?? defaultPlaceOfService(false),
               renderingProviderNpi: sl.renderingProviderNpi ?? d.provider?.npi ?? "",
               authorizationNumber: sl.authorizationNumber ?? "",
             }))
-          : [
-              {
-                procedureCode: r.providerSelectedCode ?? r.systemSuggestedCode ?? "",
-                serviceDateFrom: d.serviceDate ?? "",
-                serviceDateTo: d.serviceDate ?? "",
-                modifiers: "",
-                diagnosisPointers: "A",
-                units: "1",
-                chargeAmount: String(d.totalCharge),
-                placeOfService: d.placeOfService ?? defaultPlaceOfService(false),
-                renderingProviderNpi: d.provider?.npi ?? "",
-                authorizationNumber: "",
-              },
-            ],
+          : [{
+              procedureCode: r.providerSelectedCode ?? r.systemSuggestedCode ?? "",
+              serviceDateFrom: d.serviceDate ?? "",
+              serviceDateTo: d.serviceDate ?? "",
+              modifiers: "",
+              diagnosisPointers: "A",
+              units: "1",
+              chargeAmount: String(d.totalCharge),
+              placeOfService: d.placeOfService ?? defaultPlaceOfService(false),
+              renderingProviderNpi: d.provider?.npi ?? "",
+              authorizationNumber: "",
+            }],
       );
     } catch (e) {
       setEditError(e instanceof Error ? e.message : "Failed to load charge");
@@ -448,26 +478,18 @@ export default function ChargeCaptureClient() {
     }
   }
 
-  // ── Edit save ────────────────────────────────────────────────────────────
+  // ── Edit save ─────────────────────────────────────────────────────────────
 
   async function saveEdit() {
     if (!editRow) return;
-
     setEditSaving(true);
     setEditError(null);
-
     try {
       const defaultPos = editPlaceOfService.trim();
-
       if (defaultPos && !isAllowedPlaceOfService(defaultPos)) {
-        throw new Error(
-          placeOfServiceWarning(defaultPos) ??
-            `POS ${defaultPos} is not allowed. Use 11 (office) or 02 (telehealth).`,
-        );
+        throw new Error(placeOfServiceWarning(defaultPos) ?? `POS ${defaultPos} is not allowed. Use 11 (office) or 02 (telehealth).`);
       }
-
       const diagnoses = editDiagnoses.map((s) => s.trim().toUpperCase()).filter(Boolean);
-
       const serviceLines = editServiceLines.map((sl) => ({
         procedureCode: sl.procedureCode.trim(),
         serviceDateFrom: sl.serviceDateFrom.trim() || undefined,
@@ -480,35 +502,25 @@ export default function ChargeCaptureClient() {
         renderingProviderNpi: sl.renderingProviderNpi.trim() || null,
         authorizationNumber: sl.authorizationNumber.trim() || null,
       }));
-
       for (const line of serviceLines) {
         const pos = String(line.placeOfService ?? defaultPos ?? "").trim();
-
         if (pos && !isAllowedPlaceOfService(pos)) {
-          throw new Error(
-            placeOfServiceWarning(pos) ??
-              `POS ${pos} is not allowed. Use 11 (office) or 02 (telehealth).`,
-          );
+          throw new Error(placeOfServiceWarning(pos) ?? `POS ${pos} is not allowed. Use 11 (office) or 02 (telehealth).`);
         }
       }
-
+      const body: Record<string, unknown> = {
+        organizationId: orgId,
+        diagnoses,
+        serviceLines,
+        placeOfService: defaultPos || null,
+      };
       const res = await fetch(`/api/billing/charge-capture/${encodeURIComponent(editRow.id)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          organizationId: orgId,
-          diagnoses,
-          serviceLines,
-          placeOfService: defaultPos || null,
-        }),
+        body: JSON.stringify(body),
       });
-
       const json = await res.json();
-
-      if (!res.ok || !json.success) {
-        throw new Error(json.error ?? "Save failed");
-      }
-
+      if (!res.ok || !json.success) throw new Error(json.error ?? "Save failed");
       showToast("Charge updated.");
       setEditRow(null);
       await loadCharges();
@@ -519,44 +531,36 @@ export default function ChargeCaptureClient() {
     }
   }
 
-  // ── Filtered charge queue ────────────────────────────────────────────────
+  // ── Filtered charge queue ─────────────────────────────────────────────────
 
   const visibleCharges = useMemo(() => {
     return charges.filter((r) => {
       const status = deriveStatus(r);
-
       if (statusFilter !== "all" && status !== statusFilter) return false;
-
       if (search.trim()) {
         const q = search.toLowerCase();
-
         if (
           !r.client.name.toLowerCase().includes(q) &&
           !r.clinician.toLowerCase().includes(q) &&
           !(r.providerSelectedCode ?? "").toLowerCase().includes(q)
-        ) {
-          return false;
-        }
+        ) return false;
       }
-
       return true;
     });
   }, [charges, statusFilter, search]);
 
   const statusCounts = useMemo(() => {
-    const counts: Record<ChargeStatus, number> = {
-      "Missing DX": 0,
-      Unsigned: 0,
-      Ready: 0,
-      Hold: 0,
-    };
-
-    for (const r of charges) {
-      counts[deriveStatus(r)]++;
-    }
-
+    const counts: Record<string, number> = { "Missing DX": 0, "Unsigned": 0, "Ready": 0, "Hold": 0 };
+    for (const r of charges) counts[deriveStatus(r)]++;
     return counts;
   }, [charges]);
+
+  const hasDraftAutoBatch = useMemo(
+    () => batches.some((b) => ["draft", "ready_to_generate"].includes((b.status ?? "").toLowerCase())),
+    [batches],
+  );
+
+  const canGenerateBatches = statusCounts["Ready"] > 0 || hasDraftAutoBatch;
 
   const releasableVisibleIds = useMemo(() => {
     return visibleCharges
@@ -578,7 +582,7 @@ export default function ChargeCaptureClient() {
       prev.filter((id) => {
         const row = charges.find((r) => r.id === id);
         return row ? deriveStatus(row) === "Ready" && row.tab !== "released_to_claims" : false;
-      }),
+      })
     );
   }, [charges]);
 
@@ -595,13 +599,8 @@ export default function ChargeCaptureClient() {
         const clearSet = new Set(releasableVisibleIds);
         return prev.filter((id) => !clearSet.has(id));
       }
-
       const next = new Set(prev);
-
-      for (const id of releasableVisibleIds) {
-        next.add(id);
-      }
-
+      for (const id of releasableVisibleIds) next.add(id);
       return Array.from(next);
     });
   }
@@ -611,30 +610,25 @@ export default function ChargeCaptureClient() {
       const row = charges.find((r) => r.id === id);
       return row ? deriveStatus(row) === "Ready" && row.tab !== "released_to_claims" : false;
     });
-
     if (releasableIds.length === 0) {
       showToast("No ready charges selected to release.");
       return;
     }
 
     setActionBusy("bulk-release");
-
     try {
       const json = await releaseChargesToClaims(releasableIds);
       const succeeded = Number(json.succeeded ?? 0);
       const failed = Number(json.failed ?? Math.max(0, releasableIds.length - succeeded));
 
       if (succeeded > 0 && failed === 0) {
-        showToast(
-          `Released ${succeeded} charge${succeeded === 1 ? "" : "s"} to Ready to Generate.`,
-        );
+        showToast(`Released ${succeeded} charge${succeeded === 1 ? "" : "s"} to billing.`);
       } else if (succeeded > 0 && failed > 0) {
         showToast(`Released ${succeeded} charge${succeeded === 1 ? "" : "s"}; ${failed} failed.`);
       } else {
         showToast("Failed to release selected charges.");
       }
 
-      setSelectedReleaseIds([]);
       await loadCharges();
     } catch {
       showToast("Failed to release selected charges.");
@@ -643,48 +637,65 @@ export default function ChargeCaptureClient() {
     }
   }
 
-  // ── Render ───────────────────────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className={styles.page}>
+      {/* Page header */}
       <div className={styles.header}>
         <div>
-          <h1>Charge Capture</h1>
-          <p>
-            Review signed-note charges, edit CMS-1500 claim details, then release clean
-            charges to Ready to Generate.
-          </p>
+          <h1>Claim Prep</h1>
+          <p>Review signed-note charges, edit CMS-1500 claim details, then release them to automatically batch 837P files by payer / TIN.</p>
         </div>
-
-        <button
-          type="button"
-          className={styles.refreshBtn}
-          onClick={() => {
-            void loadCharges();
-          }}
-        >
+        <button type="button" className={styles.refreshBtn} onClick={() => { void loadBatches(); void loadCharges(); }}>
           ↻ Refresh
         </button>
       </div>
 
       {toast ? <div className={styles.toast}>{toast}</div> : null}
 
+      {/* Summary metrics */}
+      <div className={styles.metrics}>
+        <div className={styles.metricCard}>
+          <div className={styles.metricLabel}>Total Unbilled</div>
+          <div className={styles.metricValue}>{fmtMoney(batchTotals.totalUnbilledCharges)}</div>
+        </div>
+        <div className={styles.metricCard}>
+          <div className={styles.metricLabel}>Pending Batches</div>
+          <div className={batchTotals.pendingBatches > 0 ? styles.metricValueWarn : styles.metricValue}>{batchTotals.pendingBatches}</div>
+        </div>
+        <div className={styles.metricCard}>
+          <div className={styles.metricLabel}>Ready to Submit</div>
+          <div className={batchTotals.readyToSubmit > 0 ? styles.metricValueSuccess : styles.metricValue}>{batchTotals.readyToSubmit}</div>
+        </div>
+      </div>
+
+      {/* Batch Panel */}
+      <BatchPanel
+        batches={batches}
+        loading={batchLoading}
+        error={batchError}
+        generating={generating}
+        readyCount={statusCounts["Ready"]}
+        canGenerate={canGenerateBatches}
+        busyBatchId={busyBatch}
+        orgId={orgId}
+        onGenerate={generateBatches}
+        onMarkSubmitted={(id) => void batchAction(id, "mark-submitted")}
+        onSubmit={(id) => void batchAction(id, "submit")}
+      />
+
+      {/* Charge Queue */}
       <section className={styles.queueSection}>
         <div className={styles.queueHeader}>
           <h2 className={styles.queueTitle}>
             Charge Queue
-            {!queueLoading ? (
-              <span className={styles.queueCount}>
-                {visibleCharges.length} of {charges.length}
-              </span>
-            ) : null}
+            {!queueLoading && <span className={styles.queueCount}>{visibleCharges.length} of {charges.length}</span>}
           </h2>
-
           <div className={styles.queueToolbar}>
             {(["all", "Missing DX", "Unsigned", "Ready", "Hold"] as const).map((s) => {
               const isActive = statusFilter === s;
               const count = s === "all" ? charges.length : statusCounts[s] ?? 0;
-
               return (
                 <button
                   key={s}
@@ -692,12 +703,10 @@ export default function ChargeCaptureClient() {
                   onClick={() => setStatusFilter(s)}
                   className={isActive ? styles.chipActive : styles.chip}
                 >
-                  {s === "all" ? "All" : s}{" "}
-                  <span className={styles.chipCount}>{count}</span>
+                  {s === "all" ? "All" : s} <span className={styles.chipCount}>{count}</span>
                 </button>
               );
             })}
-
             <input
               type="search"
               placeholder="Patient, clinician, CPT…"
@@ -705,7 +714,6 @@ export default function ChargeCaptureClient() {
               onChange={(e) => setSearch(e.target.value)}
               className={styles.search}
             />
-
             <button
               type="button"
               onClick={toggleSelectAllReleasableVisible}
@@ -714,16 +722,13 @@ export default function ChargeCaptureClient() {
             >
               {allReleasableVisibleSelected ? "Clear Selected" : "Select All Ready"}
             </button>
-
             <button
               type="button"
               onClick={() => void releaseSelectedForBatching()}
               disabled={selectedReleasableCount === 0 || actionBusy === "bulk-release"}
               className={styles.releaseBtn}
             >
-              {actionBusy === "bulk-release"
-                ? "Releasing…"
-                : `Release Selected (${selectedReleasableCount})`}
+              {actionBusy === "bulk-release" ? "Releasing…" : `Release Selected (${selectedReleasableCount})`}
             </button>
           </div>
         </div>
@@ -734,23 +739,18 @@ export default function ChargeCaptureClient() {
           <div className={styles.queueLoading}>Loading charges…</div>
         ) : visibleCharges.length === 0 ? (
           <div className={styles.queueEmpty}>
-            {charges.length === 0
-              ? "No charges pending. Charges appear here when clinicians sign notes."
-              : "No charges match this filter."}
+            {charges.length === 0 ? "No charges pending. Charges appear here when clinicians sign notes." : "No charges match this filter."}
           </div>
         ) : (
           <div className={styles.queueTableWrap}>
             <table className={styles.queueTable}>
               <thead>
                 <tr>
-                  {["Select", "Patient", "DOS", "CPT", "Provider", "Status", "Actions"].map(
-                    (h) => (
-                      <th key={h}>{h}</th>
-                    ),
-                  )}
+                  {["Select", "Patient", "DOS", "CPT", "Provider", "Status", "Actions"].map((h) => (
+                    <th key={h}>{h}</th>
+                  ))}
                 </tr>
               </thead>
-
               <tbody>
                 {visibleCharges.map((r) => {
                   const status = deriveStatus(r);
@@ -758,9 +758,9 @@ export default function ChargeCaptureClient() {
                   const encounterId = r.encounter.id;
                   const isReleased = r.tab === "released_to_claims";
                   const isReleasable = status === "Ready" && !isReleased;
-
                   return (
                     <tr key={r.id}>
+                      {/* Select */}
                       <td>
                         {isReleasable ? (
                           <input
@@ -774,6 +774,7 @@ export default function ChargeCaptureClient() {
                         )}
                       </td>
 
+                      {/* Patient */}
                       <td>
                         <span className={styles.patientName}>{r.client.name}</span>
                         {r.client.dob ? (
@@ -781,44 +782,39 @@ export default function ChargeCaptureClient() {
                         ) : null}
                       </td>
 
+                      {/* DOS */}
                       <td className={styles.dosCell}>{fmtDate(r.dateOfService)}</td>
+
+                      {/* CPT */}
                       <td className={styles.cptCode}>{cpt}</td>
+
+                      {/* Provider */}
                       <td className={styles.providerCell}>{r.clinician}</td>
 
+                      {/* Status */}
                       <td>
-                        <span className={styles[statusBadgeClass(status)]}>{status}</span>
+                        <span className={styles[statusBadgeClass(status)]}>
+                          {status}
+                        </span>
                       </td>
 
+                      {/* Actions */}
                       <td>
                         <div className={styles.rowActions}>
                           {!isReleased ? (
-                            <button
-                              type="button"
-                              className={styles.rowBtn}
-                              onClick={() => void openEditModal(r)}
-                            >
+                            <button type="button" className={styles.rowBtn} onClick={() => void openEditModal(r)}>
                               Edit
                             </button>
                           ) : null}
 
-                          {status === "Missing DX" || status === "Unsigned" ? (
-                            <button
-                              type="button"
-                              className={styles.rowBtnWarn}
-                              onClick={() => void openEditModal(r)}
-                            >
+                          {(status === "Missing DX" || status === "Unsigned") ? (
+                            <button type="button" className={styles.rowBtnWarn} onClick={() => void openEditModal(r)}>
                               Attach DX
                             </button>
                           ) : null}
 
-                          {r.authorization?.status === "required" ||
-                          r.tab === "eligibility_auth_issue" ? (
-                            <a
-                              href={
-                                encounterId ? `/encounters/${encounterId}` : `/clients/${r.client.id}`
-                              }
-                              className={styles.rowBtnAuth}
-                            >
+                          {r.authorization?.status === "required" || r.tab === "eligibility_auth_issue" ? (
+                            <a href={encounterId ? `/encounters/${encounterId}` : `/clients/${r.client.id}`} className={styles.rowBtnAuth}>
                               Auth
                             </a>
                           ) : null}
@@ -855,6 +851,7 @@ export default function ChargeCaptureClient() {
         )}
       </section>
 
+      {/* CMS-1500 Edit Modal */}
       {editRow ? (
         <div
           ref={modalRef}
@@ -864,34 +861,19 @@ export default function ChargeCaptureClient() {
           aria-labelledby="modal-title"
           onClick={() => setEditRow(null)}
           onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              e.preventDefault();
-              setEditRow(null);
-            } else if (modalRef.current) {
-              trapFocus(modalRef.current, e);
-            }
+            if (e.key === "Escape") { e.preventDefault(); setEditRow(null); }
+            else if (modalRef.current) { trapFocus(modalRef.current, e); }
           }}
           tabIndex={-1}
         >
           <div className={styles.modalCard} onClick={(e) => e.stopPropagation()}>
+            {/* Modal header */}
             <div className={styles.modalHeader}>
               <div>
-                <div id="modal-title" className={styles.modalHeaderTitle}>
-                  CMS-1500 Health Insurance Claim Form
-                </div>
-                <div className={styles.modalHeaderSubtitle}>
-                  {editRow.client.name} · {editRow.payer?.name ?? "Unknown Payer"}
-                </div>
+                <div id="modal-title" className={styles.modalHeaderTitle}>CMS-1500 Health Insurance Claim Form</div>
+                <div className={styles.modalHeaderSubtitle}>{editRow.client.name} · {editRow.payer?.name ?? "Unknown Payer"}</div>
               </div>
-
-              <button
-                type="button"
-                className={styles.modalCloseBtn}
-                onClick={() => setEditRow(null)}
-                aria-label="Close"
-              >
-                ×
-              </button>
+              <button type="button" className={styles.modalCloseBtn} onClick={() => setEditRow(null)} aria-label="Close">×</button>
             </div>
 
             {editDetailLoading ? (
@@ -900,95 +882,74 @@ export default function ChargeCaptureClient() {
               <div className={styles.queueError}>{editError}</div>
             ) : editDetail ? (
               <div className={styles.modalBody}>
+
                 {editError ? <div className={styles.modalError}>{editError}</div> : null}
 
+                {/* Section A: Patient & Insured Info */}
                 <div className={styles.modalGrid2}>
                   <FieldBox label="2. Patient's Name">
                     <ReadonlyVal>{editDetail.client?.displayName ?? "—"}</ReadonlyVal>
                   </FieldBox>
-
                   <FieldBox label="3. Patient's Date of Birth">
-                    <ReadonlyVal>
-                      {editDetail.client?.dateOfBirth
-                        ? fmtDate(editDetail.client.dateOfBirth)
-                        : "—"}
-                    </ReadonlyVal>
+                    <ReadonlyVal>{editDetail.client?.dateOfBirth ? fmtDate(editDetail.client.dateOfBirth) : "—"}</ReadonlyVal>
                   </FieldBox>
-
                   <FieldBox label="1a. Insured's ID # / Member ID">
-                    <ReadonlyVal>
-                      {editDetail.policy?.subscriberId ?? editDetail.policy?.policyNumber ?? "—"}
-                    </ReadonlyVal>
+                    <ReadonlyVal>{editDetail.policy?.subscriberId ?? editDetail.policy?.policyNumber ?? "—"}</ReadonlyVal>
                   </FieldBox>
-
                   <FieldBox label="4. Insured's Name">
                     <ReadonlyVal>{editDetail.client?.displayName ?? "—"}</ReadonlyVal>
                   </FieldBox>
-
                   <FieldBox label="11. Insured's Policy / Group #">
                     <ReadonlyVal>{editDetail.policy?.policyNumber ?? "—"}</ReadonlyVal>
                   </FieldBox>
-
                   <FieldBox label="11c. Insurance Plan or Program Name">
-                    <ReadonlyVal>
-                      {editDetail.payer?.name ?? "—"}
-                      {editDetail.policy?.planName ? ` — ${editDetail.policy.planName}` : ""}
-                    </ReadonlyVal>
+                    <ReadonlyVal>{editDetail.payer?.name ?? "—"}{editDetail.policy?.planName ? ` — ${editDetail.policy.planName}` : ""}</ReadonlyVal>
                   </FieldBox>
-
                   <FieldBox label="26. Patient Account No.">
                     <ReadonlyVal>{editDetail.client?.accountNumber ?? "—"}</ReadonlyVal>
                   </FieldBox>
                 </div>
 
+                {/* Patient address & relationship */}
                 <div className={styles.modalGrid2}>
                   <FieldBox label="5. Patient's Address">
                     <ReadonlyVal>
                       {editDetail.clientAddress?.line1
-                        ? [
-                            editDetail.clientAddress.line1,
-                            editDetail.clientAddress.line2,
-                            editDetail.clientAddress.city &&
-                              `${editDetail.clientAddress.city}, ${editDetail.clientAddress.state} ${editDetail.clientAddress.postalCode}`,
-                          ]
-                            .filter(Boolean)
-                            .join(" · ")
+                        ? [editDetail.clientAddress.line1, editDetail.clientAddress.line2, editDetail.clientAddress.city && `${editDetail.clientAddress.city}, ${editDetail.clientAddress.state} ${editDetail.clientAddress.postalCode}`].filter(Boolean).join(" · ")
                         : "—"}
                     </ReadonlyVal>
                   </FieldBox>
-
                   <FieldBox label="6. Patient Relationship to Insured">
                     <ReadonlyVal>{editDetail.subscriberRelationship ?? "self"}</ReadonlyVal>
                   </FieldBox>
                 </div>
 
+                {/* Section B: Physician / Supplier */}
                 <SectionHeader>Physician / Supplier Information</SectionHeader>
 
+                {/* Box 21 — Diagnoses */}
                 <FieldBox label="21. Diagnosis Codes (ICD-10-CM)" fullWidth>
                   <div className={styles.diagWrap}>
-                    {(editDiagnoses.length > 0 ? editDiagnoses : Array(4).fill("")).map(
-                      (code, i) => (
-                        <div key={i} className={styles.diagRow}>
-                          <span className={styles.diagLabel}>
-                            {String.fromCharCode(65 + i)}.
-                          </span>
-                          <input
-                            type="text"
-                            value={code}
-                            onChange={(e) => {
-                              const next = [...editDiagnoses];
-                              next[i] = e.target.value.toUpperCase();
-                              setEditDiagnoses(next);
-                            }}
-                            placeholder="ICD-10"
-                            className={styles.modalInputUpper}
-                          />
-                        </div>
-                      ),
-                    )}
+                    {(editDiagnoses.length > 0 ? editDiagnoses : Array(4).fill("")).map((code, i) => (
+                      <div key={i} className={styles.diagRow}>
+                        <span className={styles.diagLabel}>{String.fromCharCode(65 + i)}.</span>
+                        <input
+                          type="text"
+                          value={code}
+                          onChange={(e) => {
+                            const next = [...editDiagnoses];
+                            next[i] = e.target.value.toUpperCase();
+                            setEditDiagnoses(next);
+                          }}
+                          placeholder="ICD-10"
+                          className={styles.modalInputUpper}
+                        />
+                      </div>
+                    ))}
                   </div>
                 </FieldBox>
 
+                {/* Box 23 — Prior Auth */}
                 <div className={styles.modalGrid2}>
                   <FieldBox label="23. Prior Authorization #">
                     <input
@@ -999,7 +960,6 @@ export default function ChargeCaptureClient() {
                       className={styles.modalInputFull}
                     />
                   </FieldBox>
-
                   <FieldBox label="24B. Default Place of Service">
                     <div className={styles.diagRow}>
                       <select
@@ -1008,9 +968,7 @@ export default function ChargeCaptureClient() {
                         className={styles.modalSelect}
                       >
                         {!isAllowedPlaceOfService(editPlaceOfService) && editPlaceOfService ? (
-                          <option value={editPlaceOfService}>
-                            {editPlaceOfService} (invalid)
-                          </option>
+                          <option value={editPlaceOfService}>{editPlaceOfService} (invalid)</option>
                         ) : null}
                         <option value="11">11 · Office</option>
                         <option value="02">02 · Telehealth</option>
@@ -1018,303 +976,99 @@ export default function ChargeCaptureClient() {
                       <span className={styles.modalHint}>Select only 11 or 02.</span>
                     </div>
                   </FieldBox>
-
                   <FieldBox label="33a. Billing Provider NPI">
-                    <ReadonlyVal>
-                      {editDetail.billingProvider?.npi ?? editDetail.provider?.npi ?? "—"}
-                    </ReadonlyVal>
+                    <ReadonlyVal>{editDetail.billingProvider?.npi ?? editDetail.provider?.npi ?? "—"}</ReadonlyVal>
                   </FieldBox>
-
                   <FieldBox label="33b. Billing Provider Taxonomy">
                     <ReadonlyVal>{editDetail.billingProvider?.taxonomyCode ?? "—"}</ReadonlyVal>
                   </FieldBox>
-
                   <FieldBox label="33. Billing Provider Name">
                     <ReadonlyVal>{editDetail.billingProvider?.displayName ?? "—"}</ReadonlyVal>
                   </FieldBox>
-
                   <FieldBox label="25. Federal Tax ID">
                     <ReadonlyVal>on file</ReadonlyVal>
                   </FieldBox>
-
                   <FieldBox label="31. Signature of Physician">
-                    <ReadonlyVal>
-                      {editDetail.provider?.displayName ?? "—"}
-                      {editDetail.provider?.credential ? `, ${editDetail.provider.credential}` : ""}
-                    </ReadonlyVal>
+                    <ReadonlyVal>{editDetail.provider?.displayName ?? "—"}{editDetail.provider?.credential ? `, ${editDetail.provider.credential}` : ""}</ReadonlyVal>
                   </FieldBox>
                 </div>
 
-                <SectionHeader className={styles.sectionHeaderWithMargin}>
-                  Box 24 — Service Line Items
-                </SectionHeader>
-
-                {placeOfServiceWarning(editPlaceOfService) ||
-                editServiceLines.some((sl) => placeOfServiceWarning(sl.placeOfService)) ? (
+                {/* Section C: Service Lines (Box 24) */}
+                <SectionHeader className={styles.sectionHeaderWithMargin}>Box 24 — Service Line Items</SectionHeader>
+                {(placeOfServiceWarning(editPlaceOfService) || editServiceLines.some((sl) => placeOfServiceWarning(sl.placeOfService))) ? (
                   <div className={styles.posWarn}>
-                    {placeOfServiceWarning(editPlaceOfService) ??
-                      placeOfServiceWarning(
-                        editServiceLines.find((sl) => placeOfServiceWarning(sl.placeOfService))
-                          ?.placeOfService,
-                      ) ??
-                      "POS is not allowed. Use 11 (office) or 02 (telehealth)."}
+                    {placeOfServiceWarning(editPlaceOfService) ?? placeOfServiceWarning(editServiceLines.find((sl) => placeOfServiceWarning(sl.placeOfService))?.placeOfService) ?? "POS is not allowed. Use 11 (office) or 02 (telehealth)."}
                   </div>
                 ) : null}
-
                 <div className={styles.slWrap}>
                   <table className={styles.slTable}>
                     <thead>
                       <tr>
-                        {[
-                          "#",
-                          "24A DOS From",
-                          "24A DOS To",
-                          "24B POS",
-                          "24D CPT / Procedure",
-                          "24D Modifiers",
-                          "24E Dx Ptr",
-                          "24G Units",
-                          "24F Charge ($)",
-                          "24J Rendering NPI",
-                          "Auth #",
-                        ].map((h) => (
+                        {["#", "24A DOS From", "24A DOS To", "24B POS", "24D CPT / Procedure", "24D Modifiers", "24E Dx Ptr", "24G Units", "24F Charge ($)", "24J Rendering NPI", "Auth #"].map((h) => (
                           <th key={h}>{h}</th>
                         ))}
                         <th></th>
                       </tr>
                     </thead>
-
                     <tbody>
                       {editServiceLines.map((sl, idx) => (
                         <tr key={idx} className={styles.slRow}>
                           <td className={styles.slRowNum}>{idx + 1}</td>
-
-                          <td className={styles.slCell}>
-                            <input
-                              type="date"
-                              value={sl.serviceDateFrom}
-                              onChange={(e) => {
-                                const n = [...editServiceLines];
-                                n[idx] = { ...n[idx], serviceDateFrom: e.target.value };
-                                setEditServiceLines(n);
-                              }}
-                              className={`${styles.slInput} ${styles.slWidth120}`}
-                            />
-                          </td>
-
-                          <td className={styles.slCell}>
-                            <input
-                              type="date"
-                              value={sl.serviceDateTo}
-                              onChange={(e) => {
-                                const n = [...editServiceLines];
-                                n[idx] = { ...n[idx], serviceDateTo: e.target.value };
-                                setEditServiceLines(n);
-                              }}
-                              className={`${styles.slInput} ${styles.slWidth120}`}
-                            />
-                          </td>
-
+                          <td className={styles.slCell}><input type="date" value={sl.serviceDateFrom} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], serviceDateFrom:e.target.value}; setEditServiceLines(n); }} className={`${styles.slInput} ${styles.slWidth120}`} /></td>
+                          <td className={styles.slCell}><input type="date" value={sl.serviceDateTo} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], serviceDateTo:e.target.value}; setEditServiceLines(n); }} className={`${styles.slInput} ${styles.slWidth120}`} /></td>
                           <td className={styles.slCell}>
                             <select
                               value={sl.placeOfService}
-                              onChange={(e) => {
-                                const n = [...editServiceLines];
-                                n[idx] = { ...n[idx], placeOfService: e.target.value };
-                                setEditServiceLines(n);
-                              }}
+                              onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], placeOfService:e.target.value}; setEditServiceLines(n); }}
                               className={styles.slSelect}
                             >
                               {!isAllowedPlaceOfService(sl.placeOfService) && sl.placeOfService ? (
-                                <option value={sl.placeOfService}>
-                                  {sl.placeOfService} (invalid)
-                                </option>
+                                <option value={sl.placeOfService}>{sl.placeOfService} (invalid)</option>
                               ) : null}
                               <option value="11">11 · Office</option>
                               <option value="02">02 · Telehealth</option>
                             </select>
                           </td>
-
-                          <td className={styles.slCell}>
-                            <input
-                              type="text"
-                              value={sl.procedureCode}
-                              onChange={(e) => {
-                                const n = [...editServiceLines];
-                                n[idx] = {
-                                  ...n[idx],
-                                  procedureCode: e.target.value.toUpperCase(),
-                                };
-                                setEditServiceLines(n);
-                              }}
-                              placeholder="90837"
-                              className={`${styles.slInput} ${styles.slWidth72}`}
-                            />
-                          </td>
-
-                          <td className={styles.slCell}>
-                            <input
-                              type="text"
-                              value={sl.modifiers}
-                              onChange={(e) => {
-                                const n = [...editServiceLines];
-                                n[idx] = { ...n[idx], modifiers: e.target.value };
-                                setEditServiceLines(n);
-                              }}
-                              placeholder="GT, 95"
-                              className={`${styles.slInput} ${styles.slWidth80}`}
-                            />
-                          </td>
-
-                          <td className={styles.slCell}>
-                            <input
-                              type="text"
-                              value={sl.diagnosisPointers}
-                              onChange={(e) => {
-                                const n = [...editServiceLines];
-                                n[idx] = { ...n[idx], diagnosisPointers: e.target.value };
-                                setEditServiceLines(n);
-                              }}
-                              placeholder="A, B"
-                              className={`${styles.slInput} ${styles.slWidth60}`}
-                            />
-                          </td>
-
-                          <td className={styles.slCell}>
-                            <input
-                              type="number"
-                              min="1"
-                              value={sl.units}
-                              onChange={(e) => {
-                                const n = [...editServiceLines];
-                                n[idx] = { ...n[idx], units: e.target.value };
-                                setEditServiceLines(n);
-                              }}
-                              className={`${styles.slInput} ${styles.slWidth50}`}
-                            />
-                          </td>
-
-                          <td className={styles.slCell}>
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={sl.chargeAmount}
-                              onChange={(e) => {
-                                const n = [...editServiceLines];
-                                n[idx] = { ...n[idx], chargeAmount: e.target.value };
-                                setEditServiceLines(n);
-                              }}
-                              className={`${styles.slInput} ${styles.slWidth88}`}
-                            />
-                          </td>
-
-                          <td className={styles.slCell}>
-                            <input
-                              type="text"
-                              value={sl.renderingProviderNpi}
-                              onChange={(e) => {
-                                const n = [...editServiceLines];
-                                n[idx] = { ...n[idx], renderingProviderNpi: e.target.value };
-                                setEditServiceLines(n);
-                              }}
-                              placeholder="NPI"
-                              className={`${styles.slInput} ${styles.slWidth100}`}
-                            />
-                          </td>
-
-                          <td className={styles.slCell}>
-                            <input
-                              type="text"
-                              value={sl.authorizationNumber}
-                              onChange={(e) => {
-                                const n = [...editServiceLines];
-                                n[idx] = { ...n[idx], authorizationNumber: e.target.value };
-                                setEditServiceLines(n);
-                              }}
-                              placeholder="Auth #"
-                              className={`${styles.slInput} ${styles.slWidth90}`}
-                            />
-                          </td>
-
+                          <td className={styles.slCell}><input type="text" value={sl.procedureCode} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], procedureCode:e.target.value.toUpperCase()}; setEditServiceLines(n); }} placeholder="90837" className={`${styles.slInput} ${styles.slWidth72}`} /></td>
+                          <td className={styles.slCell}><input type="text" value={sl.modifiers} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], modifiers:e.target.value}; setEditServiceLines(n); }} placeholder="GT, 95" className={`${styles.slInput} ${styles.slWidth80}`} /></td>
+                          <td className={styles.slCell}><input type="text" value={sl.diagnosisPointers} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], diagnosisPointers:e.target.value}; setEditServiceLines(n); }} placeholder="A, B" className={`${styles.slInput} ${styles.slWidth60}`} /></td>
+                          <td className={styles.slCell}><input type="number" min="1" value={sl.units} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], units:e.target.value}; setEditServiceLines(n); }} className={`${styles.slInput} ${styles.slWidth50}`} /></td>
+                          <td className={styles.slCell}><input type="number" min="0" step="0.01" value={sl.chargeAmount} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], chargeAmount:e.target.value}; setEditServiceLines(n); }} className={`${styles.slInput} ${styles.slWidth88}`} /></td>
+                          <td className={styles.slCell}><input type="text" value={sl.renderingProviderNpi} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], renderingProviderNpi:e.target.value}; setEditServiceLines(n); }} placeholder="NPI" className={`${styles.slInput} ${styles.slWidth100}`} /></td>
+                          <td className={styles.slCell}><input type="text" value={sl.authorizationNumber} onChange={(e) => { const n=[...editServiceLines]; n[idx]={...n[idx], authorizationNumber:e.target.value}; setEditServiceLines(n); }} placeholder="Auth #" className={`${styles.slInput} ${styles.slWidth90}`} /></td>
                           <td className={`${styles.slCell} ${styles.slCellCenter}`}>
-                            <button
-                              type="button"
-                              className={styles.removeBtn}
-                              onClick={() =>
-                                setEditServiceLines((s) => s.filter((_, i) => i !== idx))
-                              }
-                              title="Remove line"
-                            >
-                              ×
-                            </button>
+                            <button type="button" className={styles.removeBtn} onClick={() => setEditServiceLines((s) => s.filter((_, i) => i !== idx))} title="Remove line">×</button>
                           </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
-
                 <button
                   type="button"
-                  onClick={() =>
-                    setEditServiceLines((s) => [
-                      ...s,
-                      {
-                        procedureCode: "",
-                        serviceDateFrom: editDetail.serviceDate ?? "",
-                        serviceDateTo: editDetail.serviceDate ?? "",
-                        modifiers: "",
-                        diagnosisPointers: "A",
-                        units: "1",
-                        chargeAmount: "0",
-                        placeOfService: editPlaceOfService,
-                        renderingProviderNpi: editDetail.provider?.npi ?? "",
-                        authorizationNumber: editPriorAuth,
-                      },
-                    ])
-                  }
+                  onClick={() => setEditServiceLines((s) => [...s, {
+                    procedureCode: "", serviceDateFrom: editDetail.serviceDate ?? "", serviceDateTo: editDetail.serviceDate ?? "",
+                    modifiers: "", diagnosisPointers: "A", units: "1", chargeAmount: "0",
+                    placeOfService: editPlaceOfService, renderingProviderNpi: editDetail.provider?.npi ?? "", authorizationNumber: editPriorAuth,
+                  }])}
                   className={styles.addBtn}
                 >
                   + Add Service Line
                 </button>
 
+                {/* Totals row */}
                 <div className={styles.totals}>
-                  <span>
-                    <strong>28. Total Charge:</strong>{" "}
-                    {fmtMoney(
-                      editServiceLines.reduce(
-                        (sum, sl) => sum + (parseFloat(sl.chargeAmount) || 0),
-                        0,
-                      ),
-                    )}
-                  </span>
-                  <span>
-                    <strong>29. Amount Paid:</strong> {fmtMoney(0)}
-                  </span>
-                  <span>
-                    <strong>30. Balance Due:</strong>{" "}
-                    {fmtMoney(
-                      editServiceLines.reduce(
-                        (sum, sl) => sum + (parseFloat(sl.chargeAmount) || 0),
-                        0,
-                      ),
-                    )}
-                  </span>
-                  <span>
-                    <strong>Lines:</strong> {editServiceLines.length}
-                  </span>
+                  <span><strong>28. Total Charge:</strong> {fmtMoney(editServiceLines.reduce((sum, sl) => sum + (parseFloat(sl.chargeAmount) || 0), 0))}</span>
+                  <span><strong>29. Amount Paid:</strong> {fmtMoney(0)}</span>
+                  <span><strong>30. Balance Due:</strong> {fmtMoney(editServiceLines.reduce((sum, sl) => sum + (parseFloat(sl.chargeAmount) || 0), 0))}</span>
+                  <span><strong>Lines:</strong> {editServiceLines.length}</span>
                 </div>
 
+                {/* Action footer */}
                 <div className={styles.modalFooter}>
-                  <button
-                    type="button"
-                    className={styles.modalBtn}
-                    onClick={() => setEditRow(null)}
-                  >
+                  <button type="button" className={styles.modalBtn} onClick={() => setEditRow(null)}>
                     Cancel
                   </button>
-
                   <button
                     type="button"
                     disabled={editSaving}
@@ -1333,27 +1087,17 @@ export default function ChargeCaptureClient() {
   );
 }
 
-// ── Small presentational helpers ──────────────────────────────────────────
+// ── Small presentational helpers ────────────────────────────────────────────
 
-function SectionHeader({
-  children,
-  className,
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return <div className={className ?? styles.sectionHeader}>{children}</div>;
+function SectionHeader({ children, className }: { children: React.ReactNode; className?: string }) {
+  return (
+    <div className={className ?? styles.sectionHeader}>
+      {children}
+    </div>
+  );
 }
 
-function FieldBox({
-  label,
-  children,
-  fullWidth,
-}: {
-  label: string;
-  children: React.ReactNode;
-  fullWidth?: boolean;
-}) {
+function FieldBox({ label, children, fullWidth }: { label: string; children: React.ReactNode; fullWidth?: boolean }) {
   return (
     <div className={fullWidth ? `${styles.fieldBox} ${styles.fieldBoxFullWidth}` : styles.fieldBox}>
       <div className={styles.fieldBoxLabel}>{label}</div>
