@@ -60,20 +60,22 @@ export default function AddClientDialog({ open, organizationId, onClose, onCreat
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
-  function resetForm() {
+  function closeDialog() {
+    if (busy) return;
     setForm(buildInitialForm(initialValues));
     setBusy(false);
     setError(null);
+    onClose();
   }
 
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape" && !busy) onClose();
+      if (e.key === "Escape" && !busy) closeDialog();
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, busy, onClose]);
+  }, [open, busy]);
 
   const canSubmit =
     form.firstName.trim().length > 0 &&
@@ -121,8 +123,7 @@ export default function AddClientDialog({ open, organizationId, onClose, onCreat
         throw new Error(json.error ?? "Failed to create client");
       }
       onCreated(json.client?.id);
-      onClose();
-      resetForm();
+      closeDialog();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create client");
     } finally {
@@ -139,7 +140,7 @@ export default function AddClientDialog({ open, organizationId, onClose, onCreat
       aria-modal="true"
       aria-label="Add new client"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget && !busy) onClose();
+        if (e.target === e.currentTarget && !busy) closeDialog();
       }}
     >
       <form className={styles.modal} onSubmit={handleSubmit} style={{ width: "min(640px, 100%)" }}>
@@ -148,14 +149,162 @@ export default function AddClientDialog({ open, organizationId, onClose, onCreat
           <button
             type="button"
             className={styles.closeBtn}
-            onClick={onClose}
+            onClick={closeDialog}
             disabled={busy}
             aria-label="Close"
           >
             ×
           </button>
         </header>
+
+        <div className={styles.body}>
+          {error ? <div className={styles.error}>{error}</div> : null}
+
+          <div className={styles.stage} style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+            <Section title="Basics" subtitle="Required to create the client">
+              <Grid>
+                <Field label="First name" required>
+                  <input type="text" value={form.firstName} onChange={(e) => setField("firstName", e.target.value)} required autoFocus style={inputStyle} />
+                </Field>
+                <Field label="Last name" required>
+                  <input type="text" value={form.lastName} onChange={(e) => setField("lastName", e.target.value)} required style={inputStyle} />
+                </Field>
+                <Field label="Preferred name">
+                  <input type="text" value={form.preferredName} onChange={(e) => setField("preferredName", e.target.value)} style={inputStyle} />
+                </Field>
+                <Field label="Date of birth" required>
+                  <input type="date" value={form.dateOfBirth} onChange={(e) => setField("dateOfBirth", e.target.value)} required max={new Date().toISOString().slice(0, 10)} style={inputStyle} />
+                </Field>
+                <Field label="Primary phone">
+                  <input type="tel" value={form.phone} onChange={(e) => setField("phone", e.target.value)} style={inputStyle} />
+                </Field>
+                <Field label="Email">
+                  <input type="email" value={form.email} onChange={(e) => setField("email", e.target.value)} style={inputStyle} />
+                </Field>
+              </Grid>
+            </Section>
+
+            <Section title="Demographics" subtitle="Optional — helps with intake & eligibility">
+              <Grid>
+                <Field label="Sex at birth">
+                  <select value={form.sexAtBirth} onChange={(e) => setField("sexAtBirth", e.target.value)} style={inputStyle}>
+                    <option value="">—</option>
+                    {SEX_AT_BIRTH_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Gender identity">
+                  <select value={form.genderIdentity} onChange={(e) => setField("genderIdentity", e.target.value)} style={inputStyle}>
+                    <option value="">—</option>
+                    {GENDER_IDENTITY_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="MRN">
+                  <input type="text" value={form.mrn} onChange={(e) => setField("mrn", e.target.value)} style={inputStyle} />
+                </Field>
+                <Field label="Source client ID">
+                  <input type="text" value={form.sourceClientId} onChange={(e) => setField("sourceClientId", e.target.value)} placeholder="External system ID" style={inputStyle} />
+                </Field>
+              </Grid>
+            </Section>
+
+            <Section title="Address" subtitle="Optional">
+              <Grid>
+                <FullField label="Address line 1">
+                  <input type="text" value={form.addressLine1} onChange={(e) => setField("addressLine1", e.target.value)} style={inputStyle} />
+                </FullField>
+                <FullField label="Address line 2">
+                  <input type="text" value={form.addressLine2} onChange={(e) => setField("addressLine2", e.target.value)} style={inputStyle} />
+                </FullField>
+                <Field label="City">
+                  <input type="text" value={form.city} onChange={(e) => setField("city", e.target.value)} style={inputStyle} />
+                </Field>
+                <Field label="State">
+                  <select value={form.state} onChange={(e) => setField("state", e.target.value)} style={inputStyle}>
+                    <option value="">—</option>
+                    {US_STATE_OPTIONS.map((s) => (
+                      <option key={s.code} value={s.code}>{s.code} — {s.name}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Postal code">
+                  <input type="text" value={form.postalCode} onChange={(e) => setField("postalCode", e.target.value)} placeholder="12345 or 12345-6789" style={inputStyle} />
+                </Field>
+              </Grid>
+            </Section>
+
+            <Section title="Emergency contact" subtitle="Optional">
+              <Grid>
+                <Field label="Contact name">
+                  <input type="text" value={form.emergencyContactName} onChange={(e) => setField("emergencyContactName", e.target.value)} style={inputStyle} />
+                </Field>
+                <Field label="Contact phone">
+                  <input type="tel" value={form.emergencyContactPhone} onChange={(e) => setField("emergencyContactPhone", e.target.value)} style={inputStyle} />
+                </Field>
+              </Grid>
+            </Section>
+          </div>
+        </div>
+
+        <footer className={styles.footer}>
+          <button type="button" className={styles.secondaryBtn} onClick={closeDialog} disabled={busy}>
+            Cancel
+          </button>
+          <button type="submit" className={styles.primaryBtn} disabled={!canSubmit}>
+            {busy ? "Saving…" : "Save client"}
+          </button>
+        </footer>
       </form>
     </div>
   );
 }
+
+function Section({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
+  return (
+    <section style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <h3 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: "#0F172A" }}>{title}</h3>
+        {subtitle ? <span style={{ fontSize: 11, color: "#64748B" }}>{subtitle}</span> : null}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function Grid({ children }: { children: React.ReactNode }) {
+  return <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>{children}</div>;
+}
+
+function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <span style={{ fontSize: 12, color: "#475569", fontWeight: 500 }}>
+        {label} {required ? <span style={{ color: "#B91C1C" }}>*</span> : null}
+      </span>
+      {children}
+    </label>
+  );
+}
+
+function FullField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 4 }}>
+      <span style={{ fontSize: 12, color: "#475569", fontWeight: 500 }}>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+const inputStyle: React.CSSProperties = {
+  height: 36,
+  border: "1px solid #CBD5E1",
+  borderRadius: 6,
+  padding: "0 10px",
+  fontSize: 13,
+  color: "#0F172A",
+  background: "#ffffff",
+  outline: "none",
+};
