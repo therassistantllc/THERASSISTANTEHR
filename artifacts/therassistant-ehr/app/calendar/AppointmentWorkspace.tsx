@@ -640,27 +640,7 @@ export default function AppointmentWorkspace({
             </div>
           ) : null}
 
-          {showClinicalNote && noteEncounterId ? (
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3 min-h-[620px] w-full">
-              <EncounterNoteClient
-                encounterId={noteEncounterId}
-                inlineMode
-                onInlineNavigate={(path) => {
-                  if (path.startsWith("/billing/")) {
-                    window.open(path, "_blank");
-                  }
-                }}
-                onSigned={(data) => {
-                  setChargeResult(data);
-                  setActiveEncounterId(null);
-                  void loadDetail(appointmentId);
-                  void loadWorkspaceCtx(appointmentId);
-                  onRefresh?.();
-                }}
-              />
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 xl:grid-cols-[minmax(320px,420px)_minmax(0,1fr)] gap-6">
+          <div className="grid grid-cols-1 xl:grid-cols-[minmax(320px,420px)_minmax(0,1fr)] gap-6">
               <div className="flex flex-col gap-6">
                 <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
                   <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
@@ -963,27 +943,24 @@ export default function AppointmentWorkspace({
                     )}
                   </div>
 
-                  {hasExistingEncounterOrNote ? (
-                    <div className="flex-1 flex flex-col items-center justify-center text-center border border-dashed border-slate-200 rounded-xl bg-slate-50 p-6">
-                      <FileText className="w-8 h-8 text-slate-300 mb-3" />
-                      <p className="text-sm font-semibold text-slate-700">
-                        Clinical note already exists
-                      </p>
-                      <p className="text-xs text-slate-500 mt-1 max-w-sm">
-                        Existing saved or completed notes are not displayed in the appointment workspace.
-                        Open the client chart to review or edit the note.
-                      </p>
-
-                      {appointment.clientId ? (
-                        <button
-                          type="button"
-                          onClick={handleOpenChart}
-                          className="mt-4 inline-flex items-center justify-center gap-2 rounded-lg bg-[#2c6cf6] px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
-                        >
-                          <ExternalLink className="w-4 h-4" />
-                          Open Chart
-                        </button>
-                      ) : null}
+                  {showClinicalNote && noteEncounterId ? (
+                    <div className="flex-1 min-h-[620px]">
+                      <EncounterNoteClient
+                        encounterId={noteEncounterId}
+                        inlineMode
+                        onInlineNavigate={(path) => {
+                          if (path.startsWith("/billing/")) {
+                            window.open(path, "_blank");
+                          }
+                        }}
+                        onSigned={(data) => {
+                          setChargeResult(data);
+                          setActiveEncounterId(null);
+                          void loadDetail(appointmentId);
+                          void loadWorkspaceCtx(appointmentId);
+                          onRefresh?.();
+                        }}
+                      />
                     </div>
                   ) : (
                     <div className="flex-1 flex flex-col items-center justify-center text-center border border-dashed border-slate-200 rounded-xl bg-slate-50 p-6">
@@ -999,7 +976,6 @@ export default function AppointmentWorkspace({
                 </div>
               </div>
             </div>
-          )}
 
           {workspaceCtx?.goals && workspaceCtx.goals.length > 0 ? (
             <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
