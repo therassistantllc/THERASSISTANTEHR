@@ -642,11 +642,13 @@ export default function EncounterNoteClient({
   }
 
   async function handleJournalImport(result: ImportResult) {
-    const text = result.entry.body.trim();
+    const entry = result.entry;
+    const text = String(entry.body ?? "").trim();
+
     if (!text) return;
     const field = window.prompt("Import into which SOAP field? Enter subjective, objective, assessment, or plan.", "subjective")?.toLowerCase();
     if (!field || !["subjective", "objective", "assessment", "plan"].includes(field)) return;
-    await appendJournalEntry(result.entry, field as keyof SoapNoteData, text);
+    await appendJournalEntry(entry, field as keyof SoapNoteData, text);
   }
 
   async function appendJournalEntry(entry: ImportResult["entry"], field: keyof SoapNoteData, text: string) {
