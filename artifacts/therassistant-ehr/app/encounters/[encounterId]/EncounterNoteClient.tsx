@@ -710,15 +710,36 @@ export default function EncounterNoteClient({
 
   return (
     <>
-      <section className="hero-panel">
-        <div>
-          <p className="eyebrow">Encounter Documentation Workspace</p>
-          <h1>{client?.name ?? "Encounter"}</h1>
-          <p className="hero-copy">Service date: {formatDate(encounter.service_date)} · Status: {encounter.encounter_status ?? "not set"}</p>
-        </div>
-        <div className="hero-actions">
-          {client?.id ? <Link className="button button-secondary" href={`/clients/${client.id}`}>Client Chart</Link> : null}
-          <Link className="button button-secondary" href="/clinician/agenda">Agenda</Link>
+      {!inlineMode ? (
+        <section className="hero-panel">
+          <div>
+            <p className="eyebrow">Encounter Documentation Workspace</p>
+            <h1>{client?.name ?? "Encounter"}</h1>
+            <p className="hero-copy">Service date: {formatDate(encounter.service_date)} · Status: {encounter.encounter_status ?? "not set"}</p>
+          </div>
+          <div className="hero-actions">
+            {client?.id ? <Link className="button button-secondary" href={`/clients/${client.id}`}>Client Chart</Link> : null}
+            <Link className="button button-secondary" href="/clinician/agenda">Agenda</Link>
+            <button className="button button-secondary" type="button" onClick={() => setShowCodingHelper(true)}>Coding Helper</button>
+            {isSigned && !amending ? (
+              <button className="button button-secondary" type="button" onClick={() => { setAmending(true); setMessage("Editing signed note. Click Save Amendment when done."); }} disabled={saving}>Edit Note</button>
+            ) : null}
+            {isSigned && amending ? (
+              <>
+                <button className="button button-secondary" type="button" onClick={() => { setAmending(false); loadEncounter(); }} disabled={saving}>Cancel</button>
+                <button className="button" type="button" onClick={saveAmendment} disabled={saving || !soapNote.subjective}>{saving ? "Saving…" : "Save Amendment"}</button>
+              </>
+            ) : null}
+            {!isSigned ? (
+              <>
+                <button className="button button-secondary" type="button" onClick={saveDraftAndBillingDetails} disabled={saving || finalized || hasInvalidPos}>Save Draft</button>
+                <button className="button" type="button" onClick={() => setShowSignModal(true)} disabled={saving || finalized || !soapNote.subjective || hasInvalidPos}>Sign Note</button>
+              </>
+            ) : null}
+          </div>
+        </section>
+      ) : (
+        <div className="inline-note-actions">
           <button className="button button-secondary" type="button" onClick={() => setShowCodingHelper(true)}>Coding Helper</button>
           {isSigned && !amending ? (
             <button className="button button-secondary" type="button" onClick={() => { setAmending(true); setMessage("Editing signed note. Click Save Amendment when done."); }} disabled={saving}>Edit Note</button>
@@ -736,7 +757,7 @@ export default function EncounterNoteClient({
             </>
           ) : null}
         </div>
-      </section>
+      )}
 
       {message ? <div className="empty-state success-panel">{message}</div> : null}
       {error ? <div className="alert-panel">{error}</div> : null}
@@ -817,6 +838,7 @@ export default function EncounterNoteClient({
       ) : null}
 
       <style jsx>{`
+        .inline-note-actions { display: flex; justify-content: flex-end; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
         .encounter-workspace { display: grid; grid-template-columns: 1fr; gap: 1.5rem; max-width: 100%; }
         .workspace-sidebar-left { display: flex; flex-direction: column; gap: 1rem; }
         .workspace-main { display: flex; flex-direction: column; gap: 1.5rem; }
@@ -824,7 +846,7 @@ export default function EncounterNoteClient({
         .template-picker-controls { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
         .template-picker-controls select { flex: 1 1 240px; min-width: 0; }
         @media (max-width: 1024px) { .encounter-workspace { grid-template-columns: 1fr; } .workspace-sidebar-left { display: flex; flex-direction: column; } }
-        @media (max-width: 640px) { .encounter-workspace { gap: 1rem; } .workspace-sidebar-left { display: flex; flex-direction: column; } }
+        @media (max-width: 640px) { .encounter-workspace { gap: 1rem; } .workspace-sidebar-left { display: flex; flex-direction: column; } .inline-note-actions { justify-content: stretch; } .inline-note-actions :global(.button) { flex: 1 1 160px; } }
       `}</style>
     </>
   );
