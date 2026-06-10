@@ -542,6 +542,15 @@ export default function EncounterNoteClient({
     }
   }
 
+  function hasUsableServiceLine() {
+    return serviceLines.some((line) => {
+      const code = String(line.procedureCode ?? line.cpt_hcpcs_code ?? "").trim();
+      const amount = Number(line.chargeAmount ?? line.charge_amount ?? 0);
+      const date = String(line.serviceDate ?? line.service_date ?? encounter?.service_date ?? "").trim();
+      return code && Number.isFinite(amount) && amount > 0 && date;
+    });
+  }
+
   async function saveAmendment() {
     setSaving(true);
     setError(null);
@@ -588,7 +597,9 @@ export default function EncounterNoteClient({
     setError(null);
     setMessage(null);
     try {
-      await persistBillingDetails();
+      if (hasUsableServiceLine()) {
+        await persistBillingDetails();
+      }
       const codingReport = buildCodingReport({
         encounterId,
         answers: {},
