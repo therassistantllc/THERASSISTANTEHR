@@ -622,22 +622,17 @@ export default function EncounterNoteClient({
 
       await loadEncounter();
       if (chargeStatus === "blocked") {
-        setMessage("Note signed, but the encounter is blocked before claim creation.");
-        setError(`Revenue-cycle blocker: ${describeRevenueCycleErrors(signResult.chargeCapture?.blockers)}`);
-        return;
-      }
-
-      if (chargeStatus === "ready_for_claim") {
-        setMessage("Note signed and charge capture is ready, but no claim draft was created.");
-        setError(`Claim creation blocker: ${describeRevenueCycleErrors(signResult.claimDraft?.errors)}`);
-        return;
-      }
-
-      setMessage("Note signed. Review charge capture for next billing steps.");
-      if (inlineMode && onInlineNavigate) {
-        onInlineNavigate(ccPath);
+        setMessage("Note signed, but charge capture is blocked: " + describeRevenueCycleErrors(signResult.chargeCapture?.blockers));
+      } else if (signResult.claimDraft?.errors?.length) {
+        setMessage("Note signed and charge captured. Claim draft needs review: " + describeRevenueCycleErrors(signResult.claimDraft.errors));
+      } else if (chargeStatus) {
+        if (inlineMode && onInlineNavigate) {
+          onInlineNavigate(ccPath);
+        } else {
+          router.push(ccPath);
+        }
       } else {
-        router.push(ccPath);
+        setMessage("Note signed.");
       }
     } catch (signError) {
       setError(signError instanceof Error ? signError.message : "Failed to sign note");
@@ -646,7 +641,15 @@ export default function EncounterNoteClient({
     }
   }
 
-  async function handleJournalImport({ entry, field, text }: ImportResult) {
+  async function handleJournalImport(result: ImportResult) {
+    const text = result.entry.body.trim();
+    if (!text) return;
+    const field = window.prompt("Import into which SOAP field? Enter subjective, objective, assessment, or plan.", "subjective")?.toLowerCase();
+    if (!field || !["subjective", "objective", "assessment", "plan"].includes(field)) return;
+    await appendJournalEntry(result.entry, field as keyof SoapNoteData, text);
+  }
+
+  async function appendJournalEntry(entry: ImportResult["entry"], field: keyof SoapNoteData, text: string) {
     if (!summary?.clinicalNote?.id) await saveNote();
     let noteId = summary?.clinicalNote?.id ?? null;
     if (!noteId) {
@@ -814,14 +817,14 @@ export default function EncounterNoteClient({
       ) : null}
 
       <style jsx>{`
-        .encounter-workspace { display: grid; grid-template-columns: 280px 1fr; gap: 1.5rem; max-width: 100%; }
+        .encounter-workspace { display: grid; grid-template-columns: 1fr; gap: 1.5rem; max-width: 100%; }
         .workspace-sidebar-left { display: flex; flex-direction: column; gap: 1rem; }
         .workspace-main { display: flex; flex-direction: column; gap: 1.5rem; }
         .template-picker-row { display: flex; flex-direction: column; gap: 0.5rem; }
         .template-picker-controls { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
         .template-picker-controls select { flex: 1 1 240px; min-width: 0; }
-        @media (max-width: 1024px) { .encounter-workspace { grid-template-columns: 1fr; } .workspace-sidebar-left { display: grid; grid-template-columns: repeat(2, 1fr); } }
-        @media (max-width: 640px) { .encounter-workspace { gap: 1rem; } .workspace-sidebar-left { grid-template-columns: 1fr; } }
+        @media (max-width: 1024px) { .encounter-workspace { grid-template-columns: 1fr; } .workspace-sidebar-left { display: flex; flex-direction: column; } }
+        @media (max-width: 640px) { .encounter-workspace { gap: 1rem; } .workspace-sidebar-left { display: flex; flex-direction: column; } }
       `}</style>
     </>
   );
