@@ -11,7 +11,7 @@
   background: #fff;
   width: 720px;
   max-width: 100%;
-  height: 100%;
+  height: auto;
   display: flex;
   flex-direction: column;
   box-shadow: -4px 0 24px rgba(0, 0, 0, 0.15);
@@ -22,7 +22,7 @@
   padding: 16px 24px;
   border-bottom: 1px solid #e3e7ef;
   display: flex;
-  justify-content: space-between;
+  justify-content: normal;
   align-items: center;
   flex-shrink: 0;
   background: #fff;
@@ -30,7 +30,7 @@
 
 .title {
   margin: 0;
-  font-size: 18px;
+  font-size: 10px;
   font-weight: 600;
   color: #1a2233;
 }
@@ -38,11 +38,11 @@
 .closeBtn {
   background: none;
   border: none;
-  font-size: 22px;
+  font-size: 12px;
   cursor: pointer;
   color: #5a6677;
   padding: 0 4px;
-  line-height: 1;
+  line-height: auto;
 }
 
 .closeBtn:hover {
@@ -50,19 +50,19 @@
 }
 
 .body {
-  padding: 16px 24px;
+  padding: 8px 12px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 8px;
   flex: 1;
   overflow-y: auto;
 }
 
 .loading {
-  padding: 24px 0;
+  padding: 12px 0;
   text-align: center;
   color: #5a6677;
-  font-size: 14px;
+  font-size: 10px;
 }
 
 .banner {
@@ -290,7 +290,7 @@
 .spinner {
   display: inline-block;
   width: 10px;
-  height: 10px;
+  height: auto;
   border: 2px solid rgba(255, 255, 255, 0.4);
   border-top-color: #fff;
   border-radius: 50%;
@@ -404,7 +404,7 @@
   margin: 0;
   font-size: 13px;
   color: #374151;
-  line-height: 1.55;
+  line-height: auto;
   white-space: pre-wrap;
 }
 /* Active goals */
@@ -423,7 +423,7 @@
 }
 .goalDot {
   width: 7px;
-  height: 7px;
+  height: auto;
   border-radius: 50%;
   background: #2c6cf6;
   margin-top: 5px;
@@ -432,7 +432,7 @@
 .goalText {
   font-size: 13px;
   color: #1a2233;
-  line-height: 1.45;
+  line-height: auto;
 }
 
 /* Telehealth button */
