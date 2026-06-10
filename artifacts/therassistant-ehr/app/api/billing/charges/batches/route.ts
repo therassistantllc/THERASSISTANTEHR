@@ -49,6 +49,33 @@ function chunkRows<T>(rows: T[], size: number): T[][] {
   return chunks;
 }
 
+async function stampChargeStatusForClaims({
+  supabase,
+  organizationId,
+  claimIds,
+  status,
+}: {
+  supabase: any;
+  organizationId: string;
+  claimIds: string[];
+  status: "batched";
+}) {
+  const ids = [...new Set(claimIds.map(text).filter(Boolean))];
+  if (ids.length === 0) return;
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from("charge_capture_items")
+    .update({
+      charge_status: status,
+      batched_at: now,
+      updated_at: now,
+    })
+    .eq("organization_id", organizationId)
+    .in("claim_id", ids)
+    .is("archived_at", null);
+  if (error) throw error;
+}
+
 async function loadCanonical837PBatches({
   supabase,
   organizationId,
@@ -301,49 +328,43 @@ export async function GET(request: Request) {
       if (error && !isMissingRpcError(error)) throw error;
 
       const rpcRows = (data ?? []) as DbRow[];
-      if (!error && rpcRows.length > 0) {
-        const totalCount = Number(rpcRows[0].total_count ?? rpcRows.length);
+      if (rpcRows.length > 0) {
+        const batchIds = [...new Set(rpcRows.map((r) => text(r.batch_id)).filter(Boolean))];
+        const totalCount = Number(rpcRows[0]?.total_count ?? rpcRows.length) || rpcRows.length;
+        const claimIds = [...new Set(rpcRows.map((r) => text(r.claim_id)).filter(Boolean))];
+        const { data: lineRowsRaw } = claimIds.length
+          ? await supabase.from("professional_claim_service_lines").select("id, claim_id, line_number, service_date_from, procedure_code, charge_amount").in("claim_id", claimIds)
+          : { data: [] as DbRow[] };
+        const linesByClaimId = new Map<string, DbRow[]>();
+        for (const line of (lineRowsRaw ?? []) as DbRow[]) {
+          const claimId = text(line.claim_id);
+          if (!claimId) continue;
+          const rows = linesByClaimId.get(claimId) ?? [];
+          rows.push(line);
+          linesByClaimId.set(claimId, rows);
+        }
+        const batchMap = new Map<string, any>();
         const practiceSet = new Set<string>();
-        const batches = rpcRows.map((r) => {
-          const rawClaims = Array.isArray(r.claims) ? (r.claims as DbRow[]) : [];
-          const claims = rawClaims.map((claim) => {
-            const serviceLinesRaw = Array.isArray(claim.serviceLines) ? (claim.serviceLines as DbRow[]) : [];
-            const practiceId = text(claim.practiceId) || null;
-            if (practiceId) practiceSet.add(practiceId);
-            return {
-              id: text(claim.id),
-              claimNumber: text(claim.claimNumber) || text(claim.id).slice(0, 8),
-              status: text(claim.status),
-              totalCharge: money(claim.totalCharge),
-              practiceId,
-              patientName: text(claim.patientName) || "Unknown Client",
-              providerName: text(claim.providerName) || "—",
-              serviceLines: serviceLinesRaw.map((line) => ({
-                id: text(line.id) || `${text(claim.id)}-${text(line.lineNumber) || "1"}`,
-                lineNumber: Number(line.lineNumber ?? 0) || 0,
-                dateOfService: text(line.dateOfService) || null,
-                procedureCode: text(line.procedureCode) || "—",
-                chargeAmount: money(line.chargeAmount),
-              })),
-            };
-          });
-          return {
-            id: text(r.id),
-            batchNumber: text(r.batch_number) || text(r.id).slice(0, 8),
-            status: text(r.batch_status),
-            claimCount: Number(r.claim_count ?? claims.length) || claims.length,
-            totalChargeAmount: money(r.total_charge_amount),
-            generatedFileName: text(r.generated_file_name) || null,
-            submittedAt: text(r.submitted_at) || null,
-            createdAt: text(r.created_at) || null,
-            updatedAt: text(r.updated_at) || null,
-            payerProfileId: text(r.payer_profile_id) || null,
-            payerName: text(r.payer_name) || "Payer",
-            billingProviderTaxId: text(r.billing_provider_tax_id) || null,
-            claims,
-          };
-        });
-        const chargeRows = batches.flatMap((batch) => batch.claims.flatMap((claim) => claim.serviceLines.length ? claim.serviceLines.map((line) => ({ chargeId: line.id, claimId: claim.id, patientName: claim.patientName, dateOfService: line.dateOfService, providerName: claim.providerName, cptCode: line.procedureCode, billedAmount: line.chargeAmount, status: claim.status, batchId: batch.id, batchNumber: batch.batchNumber, submitDate: batch.submittedAt, notes: "Auto-batched by payer/TIN" })) : [{ chargeId: `${claim.id}-1`, claimId: claim.id, patientName: claim.patientName, dateOfService: null, providerName: claim.providerName, cptCode: "—", billedAmount: claim.totalCharge, status: claim.status, batchId: batch.id, batchNumber: batch.batchNumber, submitDate: batch.submittedAt, notes: "Auto-batched by payer/TIN" }]));
+        for (const r of rpcRows) {
+          const batchId = text(r.batch_id);
+          if (!batchId) continue;
+          const practiceName = text(r.practice_name);
+          if (practiceName) practiceSet.add(practiceName);
+          const batch = batchMap.get(batchId) ?? { id: batchId, batchNumber: text(r.batch_number) || batchId.slice(0, 8), status: text(r.batch_status), claimCount: 0, totalChargeAmount: 0, generatedFileName: text(r.generated_file_name) || null, submittedAt: text(r.submitted_at) || null, createdAt: text(r.created_at) || null, updatedAt: text(r.updated_at) || null, payerProfileId: text(r.payer_profile_id) || null, payerName: text(r.payer_name) || "Payer", billingProviderTaxId: text(r.billing_provider_tax_id) || null, claims: [] as any[] };
+          const claimId = text(r.claim_id);
+          if (claimId && !batch.claims.some((c: any) => c.id === claimId)) {
+            const lineRows = linesByClaimId.get(claimId) ?? [];
+            const patientName = text(r.patient_name) || "Unknown Client";
+            const providerName = text(r.provider_name) || "—";
+            const totalCharge = money(r.total_charge);
+            batch.claims.push({ id: claimId, claimNumber: text(r.claim_number) || claimId.slice(0, 8), status: text(r.claim_status), totalCharge, practiceId: text(r.practice_id) || null, patientName, providerName, serviceLines: lineRows.map((line) => ({ id: text(line.id) || `${claimId}-${text(line.line_number) || "1"}`, lineNumber: Number(line.line_number ?? 0) || 0, dateOfService: text(line.service_date_from) || null, procedureCode: text(line.procedure_code) || "—", chargeAmount: money(line.charge_amount) })) });
+            batch.claimCount += 1;
+            batch.totalChargeAmount = Math.round((batch.totalChargeAmount + totalCharge) * 100) / 100;
+          }
+          batchMap.set(batchId, batch);
+        }
+        const batches = batchIds.map((id) => batchMap.get(id)).filter(Boolean);
+        const chargeRows = batches.flatMap((batch) => batch.claims.flatMap((claim: any) => claim.serviceLines.length ? claim.serviceLines.map((line: any) => ({ chargeId: line.id, claimId: claim.id, patientName: claim.patientName, dateOfService: line.dateOfService, providerName: claim.providerName, cptCode: line.procedureCode, billedAmount: line.chargeAmount, status: claim.status, batchId: batch.id, batchNumber: batch.batchNumber, submitDate: batch.submittedAt, notes: "Auto-batched by payer/TIN" })) : [{ chargeId: `${claim.id}-1`, claimId: claim.id, patientName: claim.patientName, dateOfService: null, providerName: claim.providerName, cptCode: "—", billedAmount: claim.totalCharge, status: claim.status, batchId: batch.id, batchNumber: batch.batchNumber, submitDate: batch.submittedAt, notes: "Auto-batched by payer/TIN" }]));
         const submittedBatchIds = new Set(batches.filter((b) => ["submitted", "accepted"].includes((b.status || "").toLowerCase())).map((b) => b.id));
         const totalUnbilledCharges = Math.round(chargeRows.filter((row) => !submittedBatchIds.has(row.batchId)).reduce((sum, row) => sum + Number(row.billedAmount ?? 0), 0) * 100) / 100;
         const pendingBatches = batches.filter((b) => !["submitted", "accepted"].includes((b.status || "").toLowerCase())).length;
@@ -376,7 +397,7 @@ export async function POST(request: Request) {
     const supabase = createServerSupabaseAdminClient();
     if (!supabase) return NextResponse.json({ success: false, error: "Database connection not available" }, { status: 500 });
 
-    let existingProcessable: Array<{ batchId: string; batchNumber: string; claimCount: number }> = [];
+    let existingProcessable: Array<{ batchId: string; batchNumber: string; claimCount: number; claimIds: string[] }> = [];
     const { data: existingBatchesRaw, error: existingBatchesError } = await supabase
       .from("claim_837p_batches")
       .select("id, batch_number, batch_status, generated_file_name, batch_source")
@@ -391,12 +412,21 @@ export async function POST(request: Request) {
       ? await supabase.from("claim_837p_batch_claims").select("batch_id, professional_claim_id").eq("organization_id", organizationId).in("batch_id", existingBatchIds).is("archived_at", null)
       : { data: [] as DbRow[], error: null };
     if (existingLinksError) throw existingLinksError;
-    const existingClaimCountsByBatchId = new Map<string, number>();
+    const existingClaimIdsByBatchId = new Map<string, string[]>();
     for (const link of (existingLinksRaw ?? []) as DbRow[]) {
       const batchId = text(link.batch_id);
-      if (batchId) existingClaimCountsByBatchId.set(batchId, (existingClaimCountsByBatchId.get(batchId) ?? 0) + 1);
+      const claimId = text(link.professional_claim_id);
+      if (!batchId || !claimId) continue;
+      const ids = existingClaimIdsByBatchId.get(batchId) ?? [];
+      ids.push(claimId);
+      existingClaimIdsByBatchId.set(batchId, ids);
     }
-    existingProcessable = existingBatchRows.filter((b) => (existingClaimCountsByBatchId.get(text(b.id)) ?? 0) > 0).map((b) => ({ batchId: text(b.id), batchNumber: text(b.batch_number) || text(b.id).slice(0, 8), claimCount: existingClaimCountsByBatchId.get(text(b.id)) ?? 0 }));
+    existingProcessable = existingBatchRows
+      .filter((b) => (existingClaimIdsByBatchId.get(text(b.id)) ?? []).length > 0)
+      .map((b) => {
+        const claimIds = existingClaimIdsByBatchId.get(text(b.id)) ?? [];
+        return { batchId: text(b.id), batchNumber: text(b.batch_number) || text(b.id).slice(0, 8), claimCount: claimIds.length, claimIds };
+      });
 
     let readyClaimsQuery = supabase.from("professional_claims").select("id, claim_status, total_charge, payer_profile_id, created_at").eq("organization_id", organizationId).eq("claim_status", "ready_for_batch").is("archived_at", null).order("created_at", { ascending: true });
     if (explicitSelection) readyClaimsQuery = readyClaimsQuery.in("id", selectedClaimIds);
@@ -459,11 +489,12 @@ export async function POST(request: Request) {
         if (!result.batch_id) throw new Error("Batch creation returned no batch id");
         const { error: stampError } = await supabase.from("claim_837p_batches").update({ batch_source: "charge_auto", billing_provider_tax_id: group.billingProviderTaxId, updated_at: new Date().toISOString() }).eq("organization_id", organizationId).eq("id", result.batch_id);
         if (stampError) throw stampError;
+        await stampChargeStatusForClaims({ supabase, organizationId, claimIds: ids, status: "batched" });
         createdBatches.push({ batchId: result.batch_id, batchNumber: result.batch_number ?? batchNumber, payerProfileId: group.payerProfileId, billingProviderTaxId: group.billingProviderTaxId, claimCount: chunk.length, totalChargeAmount: Math.round(totalChargeAmount * 100) / 100, claimIds: ids });
       }
     }
     const processedBatchMap = new Map<string, { batchId: string; batchNumber: string; payerProfileId: string | null; billingProviderTaxId: string | null; claimCount: number; totalChargeAmount: number; claimIds: string[]; source: "existing" | "created" }>();
-    for (const batch of existingProcessable) processedBatchMap.set(batch.batchId, { batchId: batch.batchId, batchNumber: batch.batchNumber, payerProfileId: null, billingProviderTaxId: null, claimCount: batch.claimCount, totalChargeAmount: 0, claimIds: [], source: "existing" });
+    for (const batch of existingProcessable) processedBatchMap.set(batch.batchId, { batchId: batch.batchId, batchNumber: batch.batchNumber, payerProfileId: null, billingProviderTaxId: null, claimCount: batch.claimCount, totalChargeAmount: 0, claimIds: batch.claimIds, source: "existing" });
     for (const batch of createdBatches) processedBatchMap.set(batch.batchId, { ...batch, source: "created" });
     const processedBatches = Array.from(processedBatchMap.values());
     if (processedBatches.length === 0) return NextResponse.json({ success: true, batchesCreated: 0, generationMode: "eager", jobsQueued: 0, selectionMode: explicitSelection ? "explicit" : "auto", scannedReadyClaims: allReady.length, claimsQueued: 0, existingBatchesRegenerated: 0, batches: [], message: "No ready batches or unbatched ready claims were found." });
@@ -474,6 +505,11 @@ export async function POST(request: Request) {
       const generationError = result.status === "rejected" ? String(result.reason) : result.status === "fulfilled" && !result.value.ok ? result.value.error ?? "837P generation failed" : null;
       return { batchId: batch.batchId, batchNumber: batch.batchNumber, payerProfileId: batch.payerProfileId, billingProviderTaxId: batch.billingProviderTaxId, claimCount: batch.claimCount, totalChargeAmount: batch.totalChargeAmount, source: batch.source, generated, generationError, generationDeferred: false };
     });
+    for (const batch of processedBatches) {
+      if (batch.claimIds.length > 0) {
+        await stampChargeStatusForClaims({ supabase, organizationId, claimIds: batch.claimIds, status: "batched" });
+      }
+    }
     const failedGenerationCount = outputBatches.filter((b) => !b.generated).length;
     const existingRegenerated = outputBatches.filter((b) => b.source === "existing").length;
     const totalClaimsCovered = processedBatches.reduce((sum, b) => sum + b.claimCount, 0);
