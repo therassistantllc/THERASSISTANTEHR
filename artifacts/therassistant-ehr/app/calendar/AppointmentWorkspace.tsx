@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { DEFAULT_ORG_ID } from "@/lib/config";
+import EncounterNoteClient from "../encounters/[encounterId]/EncounterNoteClient";
 import {
   Calendar,
   Clock,
@@ -180,6 +181,7 @@ export default function AppointmentWorkspace({
     text: string;
   } | null>(null);
   const [checkingIn, setCheckingIn] = useState(false);
+  const [activeEncounterId, setActiveEncounterId] = useState<string | null>(null);
   const [chargeResult, setChargeResult] = useState<{
     chargeStatus: string | null;
     claimId: string | null;
@@ -226,7 +228,7 @@ export default function AppointmentWorkspace({
         }
       }
     } catch {
-      // Non-critical. Appointment workspace can load without context.
+      // Appointment workspace can still operate without context.
     }
   }, []);
 
@@ -240,6 +242,7 @@ export default function AppointmentWorkspace({
   useEffect(() => {
     setChargeResult(null);
     setJoinUrl(null);
+    setActiveEncounterId(null);
   }, [appointmentId]);
 
   useEffect(() => {
@@ -327,9 +330,10 @@ export default function AppointmentWorkspace({
       }
 
       if (json.encounterId) {
+        setActiveEncounterId(json.encounterId);
         setBanner({
           kind: "success",
-          text: "Encounter created. Open the chart to complete the clinical note.",
+          text: "Encounter created. Document the visit below.",
         });
 
         await loadDetail(detail.appointment.id);
@@ -535,8 +539,14 @@ export default function AppointmentWorkspace({
     clientDetails,
     authorization,
   } = detail;
+
   const meta = actionMeta;
-  const noteExists = !!workspaceCtx?.currentSessionNote || !!encounter;
+  const existingNoteEncounterId =
+    workspaceCtx?.currentSessionNote?.encounterId ?? encounter?.id ?? null;
+  const existingNoteStatus =
+    workspaceCtx?.currentSessionNote?.noteStatus ?? encounter?.encounter_status ?? null;
+  const hasExistingEncounterOrNote = !!existingNoteEncounterId;
+  const shouldShowInlineDocumentationForm = !!activeEncounterId && !hasExistingEncounterOrNote;
 
   return (
     <div
@@ -550,7 +560,7 @@ export default function AppointmentWorkspace({
     >
       <div
         ref={workspaceRef}
-        className="w-full max-w-[720px] h-full bg-[#f9fafc] text-slate-800 font-sans flex flex-col overflow-hidden shadow-2xl"
+        className="w-full max-w-[900px] h-full bg-[#f9fafc] text-slate-800 font-sans flex flex-col overflow-hidden shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex justify-between items-start p-6 bg-white border-b border-slate-200 shrink-0">
@@ -563,16 +573,16 @@ export default function AppointmentWorkspace({
             </h1>
             <div className="flex items-center gap-2 mt-3">
               {statusBadge(appointment.status)}
-              {encounter ? (
+              {existingNoteStatus ? (
                 <span className="px-2.5 py-1 text-xs font-bold tracking-wide bg-amber-100 text-amber-800 rounded-md flex items-center gap-1.5">
                   <Edit3 className="w-3 h-3" />
-                  NOTE: {encounter.encounter_status.replace(/_/g, " ").toUpperCase()}
+                  NOTE: {existingNoteStatus.replace(/_/g, " ").toUpperCase()}
                 </span>
               ) : null}
             </div>
           </div>
 
-          <div className="text-right">
+          <div className="text-right pr-8">
             <div className="text-slate-800 font-semibold text-base flex items-center justify-end gap-1.5">
               <Calendar className="w-4 h-4 text-slate-400" />
               {fmtDate(appointment.scheduledStartAt)}
@@ -633,7 +643,7 @@ export default function AppointmentWorkspace({
             </div>
           ) : null}
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 xl:grid-cols-[320px_1fr] gap-6">
             <div className="flex flex-col gap-6">
               <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
                 <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
@@ -700,20 +710,29 @@ export default function AppointmentWorkspace({
                   <Activity className="w-4 h-4" /> Quick Actions
                 </h2>
 
-                <div className="grid grid-cols-2 gap-2.5">
-                  {noteExists || meta?.alreadyCheckedIn ? (
+                <div className="grid grid-cols-1 gap-2.5">
+                  {hasExistingEncounterOrNote ? (
                     <button
-                      className="col-span-2 py-2.5 bg-[#2c6cf6] text-white rounded-lg text-sm font-semibold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
+                      className="py-2.5 bg-[#2c6cf6] text-white rounded-lg text-sm font-semibold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
                       type="button"
                       onClick={handleOpenChart}
                       disabled={!appointment.clientId}
                     >
                       <ExternalLink className="w-4 h-4" />
-                      Open Chart to Edit Note
+                      Open Chart to Edit Existing Note
+                    </button>
+                  ) : activeEncounterId ? (
+                    <button
+                      className="py-2.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-sm font-semibold cursor-default flex items-center justify-center gap-2"
+                      type="button"
+                      disabled
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      Encounter Started
                     </button>
                   ) : (
                     <button
-                      className="col-span-2 py-2.5 bg-[#2c6cf6] text-white rounded-lg text-sm font-semibold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
+                      className="py-2.5 bg-[#2c6cf6] text-white rounded-lg text-sm font-semibold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
                       type="button"
                       onClick={handleCheckIn}
                       disabled={checkingIn || !meta?.canCheckIn}
@@ -741,7 +760,7 @@ export default function AppointmentWorkspace({
 
                   {workspaceCtx?.telehealth?.isVirtual ? (
                     <button
-                      className="col-span-2 py-2.5 bg-sky-50 text-sky-700 border border-sky-200 rounded-lg text-sm font-semibold hover:bg-sky-100 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+                      className="py-2.5 bg-sky-50 text-sky-700 border border-sky-200 rounded-lg text-sm font-semibold hover:bg-sky-100 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
                       type="button"
                       onClick={handleTelehealth}
                       disabled={telehealthLoading}
@@ -919,34 +938,32 @@ export default function AppointmentWorkspace({
             </div>
 
             <div className="flex flex-col gap-6">
-              <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 flex-1 flex flex-col">
+              <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 flex-1 flex flex-col min-h-[520px]">
                 <div className="flex justify-between items-center mb-4">
                   <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
                     <FileText className="w-4 h-4" /> Clinical Note
                   </h2>
 
-                  {workspaceCtx?.currentSessionNote?.noteStatus ? (
+                  {existingNoteStatus ? (
                     <span className="text-xs font-semibold text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-100">
-                      {workspaceCtx.currentSessionNote.noteStatus
-                        .replace(/_/g, " ")
-                        .toUpperCase()}
+                      {existingNoteStatus.replace(/_/g, " ").toUpperCase()}
                     </span>
-                  ) : encounter ? (
-                    <span className="text-xs font-semibold text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-100">
-                      {encounter.encounter_status.replace(/_/g, " ").toUpperCase()}
+                  ) : activeEncounterId ? (
+                    <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">
+                      DOCUMENTING
                     </span>
                   ) : null}
                 </div>
 
-                {noteExists ? (
+                {hasExistingEncounterOrNote ? (
                   <div className="flex-1 flex flex-col items-center justify-center text-center border border-dashed border-slate-200 rounded-xl bg-slate-50 p-6">
                     <FileText className="w-8 h-8 text-slate-300 mb-3" />
                     <p className="text-sm font-semibold text-slate-700">
                       Clinical note already exists
                     </p>
-                    <p className="text-xs text-slate-500 mt-1 max-w-xs">
-                      Existing or completed notes are not shown in the appointment workspace.
-                      Open the client chart to review or edit the note.
+                    <p className="text-xs text-slate-500 mt-1 max-w-sm">
+                      Existing saved or completed notes are not displayed in the appointment
+                      workspace. Open the client chart to review or edit the note.
                     </p>
 
                     {appointment.clientId ? (
@@ -960,15 +977,34 @@ export default function AppointmentWorkspace({
                       </button>
                     ) : null}
                   </div>
+                ) : shouldShowInlineDocumentationForm && activeEncounterId ? (
+                  <div className="flex-1 min-h-0 overflow-y-auto rounded-xl border border-slate-200">
+                    <EncounterNoteClient
+                      encounterId={activeEncounterId}
+                      inlineMode
+                      onInlineNavigate={(path) => {
+                        if (path.startsWith("/billing/")) {
+                          window.open(path, "_blank");
+                        }
+                      }}
+                      onSigned={(data) => {
+                        setChargeResult(data);
+                        setActiveEncounterId(null);
+                        void loadDetail(appointmentId);
+                        void loadWorkspaceCtx(appointmentId);
+                        onRefresh?.();
+                      }}
+                    />
+                  </div>
                 ) : (
                   <div className="flex-1 flex flex-col items-center justify-center text-center border border-dashed border-slate-200 rounded-xl bg-slate-50 p-6">
                     <FileText className="w-8 h-8 text-slate-300 mb-3" />
                     <p className="text-sm font-semibold text-slate-700">
                       No clinical note yet
                     </p>
-                    <p className="text-xs text-slate-500 mt-1 max-w-xs">
-                      Check in to create the encounter. The appointment workspace does not
-                      display completed note content.
+                    <p className="text-xs text-slate-500 mt-1 max-w-sm">
+                      Check in to create the encounter. The clinical note form will open here
+                      for this new encounter only.
                     </p>
                   </div>
                 )}
