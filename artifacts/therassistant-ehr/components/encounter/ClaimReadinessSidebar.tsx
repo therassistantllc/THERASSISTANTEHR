@@ -1,13 +1,7 @@
-"use client";
-
-export type ClaimReadinessCheck = {
-  label: string;
-  isComplete: boolean;
-  required: boolean;
-};
-
 type Props = {
-  checks: ClaimReadinessCheck[];
+  encounterId?: string | null;
+  claimId?: string | null;
+  className?: string;
 };
 
 export default function ClaimReadinessSidebar(_props: Props) {
