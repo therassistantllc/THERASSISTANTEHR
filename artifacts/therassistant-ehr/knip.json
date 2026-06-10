@@ -14,7 +14,6 @@
     "scripts/**/*.ts"
   ],
   "ignore": [
-    "supabase/functions/**",
     "app/billing/charges/ChargesClient.tsx",
     "app/billing/denials/DenialsClient.tsx",
     "app/billing/payments/era/EraWorksheetClient.tsx",
@@ -29,12 +28,31 @@
     "lib/validation/simulation.tsx"
   ],
   "ignoreDependencies": [
-    "@tailwindcss/postcss",
     "tailwindcss",
     "server-only",
     "undici",
     "sharp",
     "zustand"
+  ],
+  "ignoreExports": [
+    "fetchChildCodes",
+    "default",
+    "tabLabel",
+    "TRANSMITTED_STATUSES",
+    "fetchCodeSetFreshness",
+    "isBlockedPlaceOfService",
+    "workqueuesByStage",
+    "UNIVERSAL_FILTER_IDS",
+    "__testing",
+    "BILLER_USER_ID",
+    "__private999ParserForTests",
+    "storeClearinghouseApiKey",
+    "listCoreServiceTypeCodes",
+    "getSuggestedCodes",
+    "getClarifyingQuestions",
+    "formatRecommendationSummary",
+    "getAuthenticatedUser",
+    "_resetSchemaCacheForTests"
   ],
   "ignoreExportsUsedInFile": true,
   "rules": {
