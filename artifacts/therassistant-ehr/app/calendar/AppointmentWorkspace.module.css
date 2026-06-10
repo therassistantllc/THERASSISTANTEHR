@@ -9,9 +9,9 @@
 
 .workspace {
   background: #fff;
-  width: 720px;
+  width: min(1100px, 95vw);
   max-width: 100%;
-  height: auto;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   box-shadow: -4px 0 24px rgba(0, 0, 0, 0.15);
@@ -19,10 +19,10 @@
 }
 
 .header {
-  padding: 16px 24px;
+  padding: 8px 12px;
   border-bottom: 1px solid #e3e7ef;
   display: flex;
-  justify-content: normal;
+  justify-content: space-between;
   align-items: center;
   flex-shrink: 0;
   background: #fff;
@@ -30,7 +30,8 @@
 
 .title {
   margin: 0;
-  font-size: 10px;
+  font-size: 14px;
+  line-height: 1.2;
   font-weight: 600;
   color: #1a2233;
 }
@@ -38,11 +39,11 @@
 .closeBtn {
   background: none;
   border: none;
-  font-size: 12px;
+  font-size: 18px;
   cursor: pointer;
   color: #5a6677;
   padding: 0 4px;
-  line-height: auto;
+  line-height: 1;
 }
 
 .closeBtn:hover {
@@ -50,34 +51,39 @@
 }
 
 .body {
-  padding: 8px 12px;
+  padding: 8px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
   flex: 1;
   overflow-y: auto;
 }
 
 .loading {
-  padding: 12px 0;
+  padding: 8px 0;
   text-align: center;
   color: #5a6677;
-  font-size: 10px;
+  font-size: 13px;
+  line-height: 1.3;
 }
 
 .banner {
-  padding: 10px 12px;
-  border-radius: 6px;
+  padding: 8px 10px;
+  border-radius: 4px;
   font-size: 13px;
+  line-height: 1.3;
 }
+
 .bannerSuccess {
   background: #e6f5ec;
   color: #1d6f3b;
 }
+
 .bannerError {
   background: #fdecec;
   color: #8a2222;
 }
+
 .bannerWarning {
   background: #fff4e0;
   color: #92400e;
@@ -85,15 +91,16 @@
 
 .statusRow {
   display: flex;
-  gap: 8px;
+  gap: 4px;
   flex-wrap: wrap;
 }
 
 .statusBadge {
   display: inline-block;
-  padding: 3px 10px;
+  padding: 2px 6px;
   border-radius: 10px;
-  font-size: 11px;
+  font-size: 10px;
+  line-height: 1.2;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.03em;
@@ -105,15 +112,18 @@
   background: #e6f5ec;
   color: #1d6f3b;
 }
+
 .statusCancelled {
   background: #f0f1f3;
   color: #5a6677;
   text-decoration: line-through;
 }
+
 .statusNoShow {
   background: #fdecec;
   color: #8a2222;
 }
+
 .statusInProgress {
   background: #fff4e0;
   color: #b45309;
@@ -121,8 +131,8 @@
 
 .contentGrid {
   display: grid;
-  grid-template-columns: 1fr 280px;
-  gap: 16px;
+  grid-template-columns: 2fr 1fr;
+  gap: 6px;
 }
 
 @media (max-width: 900px) {
@@ -134,11 +144,11 @@
 .panel {
   background: #f9fafc;
   border: 1px solid #e3e7ef;
-  border-radius: 8px;
-  padding: 14px 16px;
+  border-radius: 4px;
+  padding: 8px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 4px;
 }
 
 .collapsibleHeader {
@@ -163,8 +173,9 @@
 
 .panelTitle {
   margin: 0;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 13px;
+  line-height: 1.2;
+  font-weight: 700;
   color: #1a2233;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -173,17 +184,20 @@
 .detailList {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 4px;
 }
 
 .detailRow {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 4px;
+  align-items: start;
 }
 
 .detailLabel {
+  margin: 0;
   font-size: 11px;
+  line-height: 1.2;
   font-weight: 600;
   color: #5a6677;
   text-transform: uppercase;
@@ -191,7 +205,9 @@
 }
 
 .detailValue {
-  font-size: 14px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.3;
   color: #1a2233;
   display: flex;
   flex-direction: column;
@@ -199,7 +215,8 @@
 }
 
 .detailMuted {
-  font-size: 13px;
+  font-size: 12px;
+  line-height: 1.3;
   color: #5a6677;
 }
 
@@ -208,26 +225,31 @@
   text-decoration: none;
   font-weight: 500;
 }
+
 .link:hover {
   text-decoration: underline;
 }
 
 .elBadge {
   display: inline-block;
-  padding: 2px 8px;
+  padding: 2px 6px;
   border-radius: 10px;
-  font-size: 11px;
+  font-size: 10px;
+  line-height: 1.2;
   font-weight: 600;
   width: fit-content;
 }
+
 .elBadgeActive {
   background: #e6f5ec;
   color: #1d6f3b;
 }
+
 .elBadgeInactive {
   background: #fdecec;
   color: #8a2222;
 }
+
 .elBadgeWarning {
   background: #fff4e0;
   color: #b45309;
@@ -236,23 +258,30 @@
 .actionsList {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
+}
+
+.primaryBtn,
+.secondaryBtn,
+.telehealthBtn {
+  border-radius: 4px;
+  padding: 6px 10px;
+  min-height: 30px;
+  font-size: 13px;
+  line-height: 1.2;
+  cursor: pointer;
+  font-weight: 500;
+  text-align: center;
 }
 
 .primaryBtn {
   background: #2c6cf6;
   color: #fff;
   border: none;
-  border-radius: 6px;
-  padding: 8px 14px;
-  font-size: 14px;
-  cursor: pointer;
-  font-weight: 500;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  text-align: center;
+  gap: 4px;
 }
 
 .primaryBtn:hover {
@@ -268,12 +297,6 @@
   background: #fff;
   color: #1a2233;
   border: 1px solid #d6dbe3;
-  border-radius: 6px;
-  padding: 8px 14px;
-  font-size: 14px;
-  cursor: pointer;
-  font-weight: 500;
-  text-align: center;
   text-decoration: none;
   display: inline-block;
 }
@@ -287,10 +310,29 @@
   cursor: not-allowed;
 }
 
+.telehealthBtn {
+  background: #0ea5e9;
+  color: #fff;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.telehealthBtn:hover {
+  background: #0284c7;
+}
+
+.telehealthBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .spinner {
   display: inline-block;
   width: 10px;
-  height: auto;
+  height: 10px;
   border: 2px solid rgba(255, 255, 255, 0.4);
   border-top-color: #fff;
   border-radius: 50%;
@@ -305,150 +347,155 @@
 }
 
 .encounterWrapper {
-  margin-top: 8px;
+  margin-top: 4px;
   border: 1px solid #e3e7ef;
-  border-radius: 8px;
+  border-radius: 4px;
   overflow: hidden;
 }
 
-/* Charge result panel */
 .chargeResultPanel {
   background: #f0fdf4;
   border: 1px solid #bbf7d0;
-  border-radius: 8px;
-  padding: 14px 16px;
+  border-radius: 4px;
+  padding: 8px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 4px;
 }
+
 .chargeResultHeader {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 4px;
   flex-wrap: wrap;
 }
+
 .chargeResultBadge {
   font-size: 13px;
+  line-height: 1.2;
   font-weight: 700;
   color: #15803d;
 }
+
 .chargeResultBadge[data-status="blocked"] {
   color: #92400e;
 }
+
 .chargeResultBadge[data-status="pr"] {
   color: #1d4ed8;
 }
+
 .chargeResultNote {
-  font-size: 13px;
+  font-size: 12px;
+  line-height: 1.3;
   color: #4b5563;
 }
+
 .chargeResultActions {
   display: flex;
-  gap: 10px;
+  gap: 4px;
   flex-wrap: wrap;
 }
+
 .chargeResultLink {
-  font-size: 13px;
+  font-size: 12px;
+  line-height: 1.2;
   color: #2c6cf6;
   text-decoration: none;
   font-weight: 500;
-  padding: 6px 12px;
+  padding: 5px 8px;
   border: 1px solid #2c6cf6;
-  border-radius: 6px;
+  border-radius: 4px;
 }
-.chargeResultLink:hover { background: #eef3ff; }
+
+.chargeResultLink:hover {
+  background: #eef3ff;
+}
+
 .openNextBtn {
-  font-size: 13px;
+  font-size: 12px;
+  line-height: 1.2;
   color: #fff;
   background: #2c6cf6;
   border: none;
-  border-radius: 6px;
-  padding: 6px 14px;
+  border-radius: 4px;
+  padding: 5px 10px;
   cursor: pointer;
   font-weight: 500;
 }
-.openNextBtn:hover { background: #1f55cd; }
 
-/* Full-width panels below contentGrid */
+.openNextBtn:hover {
+  background: #1f55cd;
+}
+
 .panelFull {
   background: #f9fafc;
   border: 1px solid #e3e7ef;
-  border-radius: 8px;
-  padding: 14px 16px;
+  border-radius: 4px;
+  padding: 8px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
 }
 
-/* Prior session */
 .priorSessionMeta {
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1.2;
   color: #5a6677;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+
 .priorSessionSection {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 1px;
 }
+
 .priorSessionSectionLabel {
-  font-size: 11px;
+  font-size: 10px;
+  line-height: 1.2;
   font-weight: 600;
   color: #8a93a6;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+
 .priorSessionText {
   margin: 0;
   font-size: 13px;
+  line-height: 1.3;
   color: #374151;
-  line-height: auto;
   white-space: pre-wrap;
 }
-/* Active goals */
+
 .goalsList {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
 }
+
 .goalItem {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: 4px;
 }
+
 .goalDot {
   width: 7px;
-  height: auto;
+  height: 7px;
   border-radius: 50%;
   background: #2c6cf6;
   margin-top: 5px;
   flex-shrink: 0;
 }
+
 .goalText {
   font-size: 13px;
+  line-height: 1.3;
   color: #1a2233;
-  line-height: auto;
 }
-
-/* Telehealth button */
-.telehealthBtn {
-  background: #0ea5e9;
-  color: #fff;
-  border: none;
-  border-radius: 6px;
-  padding: 8px 14px;
-  font-size: 14px;
-  cursor: pointer;
-  font-weight: 500;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-}
-.telehealthBtn:hover { background: #0284c7; }
-.telehealthBtn:disabled { opacity: 0.55; cursor: not-allowed; }
