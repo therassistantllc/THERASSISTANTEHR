@@ -735,7 +735,7 @@ export default function EncounterNoteClient({
             {!isSigned ? (
               <>
                 <button className="button button-secondary" type="button" onClick={saveDraftAndBillingDetails} disabled={saving || finalized || hasInvalidPos}>Save Draft</button>
-                <button className="button" type="button" onClick={() => setShowSignModal(true)} disabled={saving || finalized || !soapNote.subjective || hasInvalidPos}>Sign Note</button>
+                <button className="button" type="button" onClick={() => setShowSignModal(true)} disabled={saving || finalized || hasInvalidPos}>Sign Note</button>
               </>
             ) : null}
           </div>
@@ -755,7 +755,7 @@ export default function EncounterNoteClient({
           {!isSigned ? (
             <>
               <button className="button button-secondary" type="button" onClick={saveDraftAndBillingDetails} disabled={saving || finalized || hasInvalidPos}>Save Draft</button>
-              <button className="button" type="button" onClick={() => setShowSignModal(true)} disabled={saving || finalized || !soapNote.subjective || hasInvalidPos}>Sign Note</button>
+              <button className="button" type="button" onClick={() => setShowSignModal(true)} disabled={saving || finalized || hasInvalidPos}>Sign Note</button>
             </>
           ) : null}
         </div>
