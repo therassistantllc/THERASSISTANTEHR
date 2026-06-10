@@ -484,33 +484,53 @@ export default function EncounterNoteClient({
     }
   }
 
-  function billingDetailsPayload() {
+  function normalizedBillingDetailsPayload() {
+    const normalizedDiagnoses = diagnoses
+      .map((d) => ({
+        diagnosis_code: String(d.diagnosis_code ?? "").trim().toUpperCase(),
+        diagnosis_description: String(d.diagnosis_description ?? "").trim(),
+        is_primary: Boolean(d.is_primary),
+      }))
+      .filter((d) => d.diagnosis_code);
+
+    const normalizedServiceLines = serviceLines
+      .map((s) => ({
+        service_date: String(s.service_date ?? summary?.encounter?.service_date ?? "").trim(),
+        cpt_hcpcs_code: String(s.cpt_hcpcs_code ?? "").trim().toUpperCase(),
+        modifier_1: String(s.modifier_1 ?? "").trim(),
+        modifier_2: String(s.modifier_2 ?? "").trim(),
+        modifier_3: String(s.modifier_3 ?? "").trim(),
+        modifier_4: String(s.modifier_4 ?? "").trim(),
+        units: Number(s.units ?? 1) || 1,
+        charge_amount: Number(s.charge_amount ?? 0) || 0,
+        place_of_service_code: String(s.place_of_service_code ?? "").trim(),
+      }))
+      .filter((s) => s.service_date && s.cpt_hcpcs_code && s.charge_amount > 0);
+
     return {
       organizationId,
-      diagnoses: diagnoses.map((d) => ({
-        diagnosis_code: d.diagnosis_code,
-        diagnosis_description: d.diagnosis_description,
-        is_primary: d.is_primary,
-      })),
-      serviceLines: serviceLines.map((s) => ({
-        service_date: s.service_date,
-        cpt_hcpcs_code: s.cpt_hcpcs_code,
-        modifier_1: s.modifier_1,
-        modifier_2: s.modifier_2,
-        modifier_3: s.modifier_3,
-        modifier_4: s.modifier_4,
-        units: s.units,
-        charge_amount: s.charge_amount,
-        place_of_service_code: s.place_of_service_code,
-      })),
+      diagnoses: normalizedDiagnoses,
+      serviceLines: normalizedServiceLines,
     };
+  }
+
+  function billingReadinessError(): string | null {
+    const payload = normalizedBillingDetailsPayload();
+    if (!payload.diagnoses.some((d) => d.is_primary) && payload.diagnoses.length > 0) {
+      payload.diagnoses[0].is_primary = true;
+    }
+    if (payload.diagnoses.length === 0) return "Add at least one diagnosis before signing the note.";
+    if (payload.serviceLines.length === 0) return "Add at least one complete service line before signing the note.";
+    const missingPos = payload.serviceLines.some((s) => !s.place_of_service_code);
+    if (missingPos) return "Add place of service before signing the note.";
+    return null;
   }
 
   async function persistBillingDetails() {
     const response = await fetch(`/api/encounters/${encounterId}/billing-details`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(billingDetailsPayload()),
+      body: JSON.stringify(normalizedBillingDetailsPayload()),
     });
     const json = (await response.json()) as { success?: boolean; error?: string };
     if (!response.ok || !json.success) throw new Error(json.error ?? "Failed to save billing details");
@@ -567,15 +587,6 @@ export default function EncounterNoteClient({
     }
   }
 
-  function hasUsableServiceLine() {
-    return serviceLines.some((line) => {
-      const code = String(line.cpt_hcpcs_code ?? "").trim();
-      const amount = Number(line.charge_amount ?? 0);
-      const date = String(line.service_date ?? summary?.encounter?.service_date ?? "").trim();
-      return code && Number.isFinite(amount) && amount > 0 && date;
-    });
-  }
-
   async function saveAmendment() {
     setSaving(true);
     setError(null);
@@ -622,9 +633,15 @@ export default function EncounterNoteClient({
     setError(null);
     setMessage(null);
     try {
-      if (hasUsableServiceLine()) {
-        await persistBillingDetails();
+      const readinessError = billingReadinessError();
+      if (readinessError) {
+        setError(readinessError);
+        setShowSignModal(false);
+        return;
       }
+
+      await persistBillingDetails();
+
       const codingReport = buildCodingReport({
         encounterId,
         answers: {},
