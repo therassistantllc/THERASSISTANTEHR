@@ -3,14 +3,16 @@ import { requireBillingAccess } from "@/lib/billing/requireBillingAccess";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 
 type DbRow = Record<string, unknown>;
+type SupabaseMaybeError = { message?: string; code?: string } | null;
 
 function text(value: unknown) {
   return String(value ?? "").trim();
 }
 
 function isMissingColumnError(err: unknown) {
-  return String((err as { code?: string })?.code ?? "") === "42703"
-    || String((err as { message?: string })?.message ?? "").toLowerCase().includes("does not exist");
+  const code = String((err as { code?: string })?.code ?? "");
+  const message = String((err as { message?: string })?.message ?? "").toLowerCase();
+  return code === "42703" || message.includes("does not exist");
 }
 
 export async function POST(request: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -21,22 +23,23 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
 
     const supabase = createServerSupabaseAdminClient();
     if (!supabase) {
-      return NextResponse.json({ success: false, error: "Database connection not available" }, { status: 500 });
+      return NextResponse.json(
+        { success: false, error: "Database connection not available" },
+        { status: 500 },
+      );
     }
 
     const { id } = await ctx.params;
 
-    let { data: batch, error: lookupError }: {
-      data: DbRow | null;
-      error: { message?: string; code?: string } | null;
-    } = await supabase
-      .from("claim_837p_batches")
-      .select("id, batch_source, batch_status")
-      .eq("organization_id", guard.organizationId)
-      .eq("id", id)
-      .eq("batch_source", "charge_auto")
-      .is("archived_at", null)
-      .maybeSingle();
+    let { data: batch, error: lookupError }: { data: DbRow | null; error: SupabaseMaybeError } =
+      await supabase
+        .from("claim_837p_batches")
+        .select("id, batch_source, batch_status")
+        .eq("organization_id", guard.organizationId)
+        .eq("id", id)
+        .eq("batch_source", "charge_auto")
+        .is("archived_at", null)
+        .maybeSingle();
 
     if (lookupError && isMissingColumnError(lookupError)) {
       const fallback = await supabase
@@ -47,12 +50,16 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
         .is("archived_at", null)
         .maybeSingle();
       batch = (fallback.data as DbRow | null) ?? null;
-      lookupError = (fallback.error as { message?: string; code?: string } | null) ?? null;
+      lookupError = (fallback.error as SupabaseMaybeError) ?? null;
     }
 
     if (lookupError) {
-      return NextResponse.json({ success: false, error: lookupError.message ?? "Failed to load batch" }, { status: 422 });
+      return NextResponse.json(
+        { success: false, error: lookupError.message ?? "Failed to load batch" },
+        { status: 422 },
+      );
     }
+
     if (!batch) {
       return NextResponse.json({ success: false, error: "Batch not found" }, { status: 404 });
     }
@@ -91,7 +98,9 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       );
     }
 
-    const claimIds = ((links ?? []) as DbRow[]).map((r) => text(r.professional_claim_id)).filter(Boolean);
+    const claimIds = ((links ?? []) as DbRow[])
+      .map((row) => text(row.professional_claim_id))
+      .filter(Boolean);
 
     if (claimIds.length > 0) {
       const { error: claimUpdateError } = await supabase
