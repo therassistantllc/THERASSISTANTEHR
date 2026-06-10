@@ -38,14 +38,13 @@ const COMMON_CPT_CODES = [
 ];
 
 const PLACE_OF_SERVICE_OPTIONS = [
-  { code: "10", name: "Office" },
+  { code: "11", name: "Office" },
   { code: "02", name: "Telehealth" },
-  { code: "21", name: "Inclient Hospital" },
-  { code: "22", name: "Outclient Hospital" },
-  { code: "23", name: "Emergency Dept" },
-  { code: "11", name: "Client Home" },
-  { code: "31", name: "Skilled Nursing Facility" },
 ];
+
+function normalizePlaceOfService(code: string | null | undefined): string {
+  return code === "02" ? "02" : "11";
+}
 
 export default function CptCodePanel({ serviceLines, onChange, disabled = false, serviceDate = "", organizationId }: Props) {
   const idCounter = useRef(0);
@@ -100,7 +99,7 @@ export default function CptCodePanel({ serviceLines, onChange, disabled = false,
       modifier_4: "",
       units: 1,
       charge_amount: chargeAmount,
-      place_of_service_code: "10",
+      place_of_service_code: "11",
     };
 
     onChange([...serviceLines, newLine]);
@@ -233,7 +232,7 @@ export default function CptCodePanel({ serviceLines, onChange, disabled = false,
                 <div>
                   <label style={{ fontSize: "0.875rem", display: "block", marginBottom: "0.25rem" }}>Place of Service</label>
                   <select
-                    value={line.place_of_service_code}
+                    value={normalizePlaceOfService(line.place_of_service_code)}
                     onChange={(e) => updateServiceLine(line.id, { place_of_service_code: e.target.value })}
                     disabled={disabled}
                   >
