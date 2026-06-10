@@ -43,6 +43,7 @@ type EncounterSummary = {
   };
   appointment?: {
     appointment_type?: string | null;
+    cpt_code?: string | null;
     scheduled_start_at?: string | null;
     scheduled_end_at?: string | null;
     service_location?: string | null;
@@ -327,7 +328,7 @@ export default function EncounterNoteClient({
         is_primary: d.is_primary || false,
       })));
 
-      setServiceLines((json.serviceLines ?? []).map((s) => ({
+      const loadedServiceLines = (json.serviceLines ?? []).map((s) => ({
         id: s.id || `service-${Date.now()}`,
         service_date: s.service_date || json.encounter?.service_date || new Date().toISOString().slice(0, 10),
         cpt_hcpcs_code: s.cpt_hcpcs_code || "",
@@ -338,7 +339,31 @@ export default function EncounterNoteClient({
         units: s.units || 1,
         charge_amount: s.charge_amount || 0,
         place_of_service_code: s.place_of_service_code || defaultPlaceOfService(encounterIsTelehealth(json)),
-      })));
+      }));
+
+      if (loadedServiceLines.length > 0) {
+        setServiceLines(loadedServiceLines);
+      } else {
+        const appointmentCpt = String(json.appointment?.cpt_code ?? "").trim();
+        setServiceLines(
+          appointmentCpt
+            ? [
+                {
+                  id: `service-${Date.now()}`,
+                  service_date: json.encounter?.service_date || new Date().toISOString().slice(0, 10),
+                  cpt_hcpcs_code: appointmentCpt,
+                  modifier_1: encounterIsTelehealth(json) ? "95" : "",
+                  modifier_2: "",
+                  modifier_3: "",
+                  modifier_4: "",
+                  units: 1,
+                  charge_amount: 200,
+                  place_of_service_code: defaultPlaceOfService(encounterIsTelehealth(json)),
+                },
+              ]
+            : [],
+        );
+      }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Failed to load encounter");
     } finally {
@@ -544,9 +569,9 @@ export default function EncounterNoteClient({
 
   function hasUsableServiceLine() {
     return serviceLines.some((line) => {
-      const code = String(line.procedureCode ?? line.cpt_hcpcs_code ?? "").trim();
-      const amount = Number(line.chargeAmount ?? line.charge_amount ?? 0);
-      const date = String(line.serviceDate ?? line.service_date ?? encounter?.service_date ?? "").trim();
+      const code = String(line.cpt_hcpcs_code ?? "").trim();
+      const amount = Number(line.charge_amount ?? 0);
+      const date = String(line.service_date ?? summary?.encounter?.service_date ?? "").trim();
       return code && Number.isFinite(amount) && amount > 0 && date;
     });
   }

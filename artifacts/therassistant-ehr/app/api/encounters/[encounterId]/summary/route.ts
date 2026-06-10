@@ -78,7 +78,7 @@ export async function GET(request: Request, context: { params: Promise<{ encount
     const { data: appointment } = encounter.appointment_id
       ? await supabase
           .from("appointments")
-          .select("id, scheduled_start_at, scheduled_end_at, appointment_type, service_location, telehealth_url, appointment_status")
+          .select("id, scheduled_start_at, scheduled_end_at, appointment_type, cpt_code, service_location, telehealth_url, appointment_status")
           .eq("organization_id", organizationId)
           .eq("id", encounter.appointment_id)
           .is("archived_at", null)
