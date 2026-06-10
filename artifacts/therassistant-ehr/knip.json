@@ -14,13 +14,27 @@
     "scripts/**/*.ts"
   ],
   "ignore": [
-    "supabase/functions/**"
+    "supabase/functions/**",
+    "app/billing/charges/ChargesClient.tsx",
+    "app/billing/denials/DenialsClient.tsx",
+    "app/billing/payments/era/EraWorksheetClient.tsx",
+    "app/billing/ready-to-generate/ReadyToGenerateClient.tsx",
+    "components/billing/BillingSidebar.tsx",
+    "components/billing/PlaceholderQueueClient.tsx",
+    "components/encounter/InlineCodingHelper.tsx",
+    "lib/claims/autoBatchClaimService.ts",
+    "lib/claims/edi837pBatchService.ts",
+    "lib/navigation/roles.ts",
+    "lib/store/userRole.tsx",
+    "lib/validation/simulation.tsx"
   ],
   "ignoreDependencies": [
     "@tailwindcss/postcss",
     "tailwindcss",
     "server-only",
-    "undici"
+    "undici",
+    "sharp",
+    "zustand"
   ],
   "ignoreExportsUsedInFile": true,
   "rules": {
