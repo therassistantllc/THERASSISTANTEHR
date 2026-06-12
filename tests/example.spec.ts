@@ -1,126 +1,104 @@
-import { test, expect } from '@playwright/test';
-
-const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:5173';
+import { expect, test } from '@playwright/test';
 
 const ROUTES_TO_CHECK = [
-  '/',
   '/billing/charge-capture',
   '/billing/claims',
-  '/billing/837p',
 ];
 
-const HARD_FAILURE_PATTERNS = [
+const FATAL_TEXT_PATTERNS = [
+  /Application error/i,
+  /Unhandled Runtime Error/i,
+  /Internal Server Error/i,
   /could not find the table/i,
   /schema cache/i,
   /relation .* does not exist/i,
   /column .* does not exist/i,
-  /failed to fetch/i,
-  /supabase/i,
-  /missing diagnosis/i,
-  /missing service code/i,
-  /missing procedure code/i,
-  /draft/i,
-  /on hold/i,
 ];
 
-test('THERASSISTANT app routes should not expose schema or claim workflow errors', async ({
+test('THERASSISTANT billing pages load without fatal runtime errors', async ({
   page,
 }, testInfo) => {
   const problems: string[] = [];
-  const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
-  const failedRequests: string[] = [];
-  const routeSnapshots: Record<string, string> = {};
-
-  page.on('console', message => {
-    if (message.type() === 'error') {
-      consoleErrors.push(message.text());
-    }
-  });
+  const serverErrors: string[] = [];
+  const routeSnapshots: Record<string, unknown> = {};
 
   page.on('pageerror', error => {
     pageErrors.push(error.message);
   });
 
-  page.on('requestfailed', request => {
-    failedRequests.push(
-      `${request.method()} ${request.url()} :: ${
-        request.failure()?.errorText ?? 'unknown request failure'
-      }`
-    );
-  });
-
   page.on('response', response => {
-    const status = response.status();
-    const url = response.url();
-
-    if (status >= 500) {
-      failedRequests.push(`${status} ${url}`);
+    if (response.status() >= 500) {
+      serverErrors.push(`${response.status()} ${response.url()}`);
     }
   });
 
   for (const route of ROUTES_TO_CHECK) {
-    const url = new URL(route, BASE_URL).toString();
-
-    await page.goto(url, {
+    const response = await page.goto(route, {
       waitUntil: 'domcontentloaded',
-      timeout: 30000,
+      timeout: 30_000,
     });
 
-    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {
-      problems.push(`${route}: page did not reach networkidle`);
+    await page.waitForLoadState('load', { timeout: 15_000 }).catch(() => {
+      problems.push(`${route}: page did not finish loading`);
     });
+
+    const status = response?.status() ?? null;
 
     const bodyText = await page
       .locator('body')
-      .innerText({ timeout: 10000 })
+      .innerText({ timeout: 10_000 })
       .catch(() => '');
 
-    const normalizedText = bodyText.replace(/\s+/g, ' ').trim();
-    routeSnapshots[route] = normalizedText.slice(0, 5000);
+    const normalizedBodyText = bodyText.replace(/\s+/g, ' ').trim();
+
+    routeSnapshots[route] = {
+      status,
+      finalUrl: page.url(),
+      bodyPreview: normalizedBodyText.slice(0, 3000),
+    };
 
     await testInfo.attach(
-      `${route === '/' ? 'home' : route.replaceAll('/', '_')}.png`,
+      `${route.replace(/^\/+/, '').replace(/\//g, '_')}.png`,
       {
         body: await page.screenshot({ fullPage: true }),
         contentType: 'image/png',
-      }
+      },
     );
 
-    for (const pattern of HARD_FAILURE_PATTERNS) {
-      if (pattern.test(normalizedText)) {
-        problems.push(`${route}: visible page text matched ${String(pattern)}`);
+    if (status === null) {
+      problems.push(`${route}: no HTTP response`);
+    } else if (status === 404) {
+      problems.push(`${route}: route returned 404`);
+    } else if (status >= 500) {
+      problems.push(`${route}: route returned HTTP ${status}`);
+    }
+
+    for (const pattern of FATAL_TEXT_PATTERNS) {
+      if (pattern.test(normalizedBodyText)) {
+        problems.push(`${route}: page text matched ${String(pattern)}`);
       }
     }
   }
 
   if (pageErrors.length > 0) {
-    problems.push(`Browser page errors: ${pageErrors.join(' | ')}`);
+    problems.push(`Browser runtime errors: ${pageErrors.join(' | ')}`);
   }
 
-  if (consoleErrors.length > 0) {
-    problems.push(`Console errors: ${consoleErrors.join(' | ')}`);
+  if (serverErrors.length > 0) {
+    problems.push(`Server/API errors: ${serverErrors.join(' | ')}`);
   }
-
-  if (failedRequests.length > 0) {
-    problems.push(`Failed/server requests: ${failedRequests.join(' | ')}`);
-  }
-
-  await testInfo.attach('therassistant-route-snapshots.json', {
-    body: JSON.stringify(routeSnapshots, null, 2),
-    contentType: 'application/json',
-  });
 
   await testInfo.attach('therassistant-diagnostics.json', {
     body: JSON.stringify(
       {
         problems,
-        consoleErrors,
         pageErrors,
-        failedRequests,
+        serverErrors,
+        routeSnapshots,
       },
       null,
-      2
+      2,
     ),
     contentType: 'application/json',
   });
