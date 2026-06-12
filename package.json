@@ -20,6 +20,8 @@
     "test:system": "pnpm test:routes && pnpm test:schema && pnpm test:billing-smoke"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@types/node": "catalog:",
     "prettier": "^3.8.3",
     "typescript": "~5.9.3"
   },
