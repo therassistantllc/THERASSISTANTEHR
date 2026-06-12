@@ -123,7 +123,7 @@ function active(pathname: string, prefixes: string[], exact = false): boolean {
 }
 
 const DASHBOARD_PREFIXES = ["/billing/my-inbox", "/billing/executive-priority"];
-const CHARGE_CAPTURE_PREFIXES = ["/billing/charge-capture"];
+const CHARGE_CAPTURE_PREFIXES = ["/billing/charge-capture", "/billing/charges"];
 const READY_TO_GENERATE_PREFIXES = ["/billing/ready-to-generate", "/billing/claim-readiness", "/billing/claim-build-errors"];
 const BATCHES_837P_PREFIXES = ["/billing/batches", "/billing/837p-batches", "/billing/orphaned-batches"];
 const CLAIMS_PREFIXES = ["/billing/claims", "/billing/documentation-pending", "/billing/no-response", "/billing/resubmissions", "/billing/corrected-claims", "/billing/submitted-claims", "/billing/payer-received", "/billing/appeals", "/billing/cob-issues", "/billing/secondary-billing", "/billing/transmission-failures", "/billing/claim-hold", "/billing/adjustments-review", "/billing/audit-queue", "/billing/compliance-audit", "/billing/compliance-holds", "/billing/blocked-claims"];
@@ -138,13 +138,12 @@ const PAYMENTS_PREFIXES = [...ERA_INSURANCE_PREFIXES, ...PAPER_CHECKS_PREFIXES, 
 
 export default function AppSidebarNav() {
   const pathname = usePathname();
-  const billingGroupActive = pathname.startsWith("/billing");
   const billingRouteActive = pathname.startsWith("/billing");
   const paymentsActive = PAYMENTS_PREFIXES.some((p) => pathname.startsWith(p));
   const [billingOpen, setBillingOpen] = useState(billingRouteActive);
   const [paymentsOpen, setPaymentsOpen] = useState(paymentsActive);
   const billingExpanded = billingOpen || billingRouteActive;
-  const paymentsExpanded = billingExpanded || paymentsOpen || paymentsActive;
+  const paymentsExpanded = paymentsOpen || paymentsActive;
 
   return (
     <nav className={styles.nav} aria-label="Primary navigation">
@@ -159,7 +158,7 @@ export default function AppSidebarNav() {
 
       <div className={styles.navSectionSpacer} />
       <div className={styles.navSection}>Billing</div>
-      <button type="button" className={`${styles.navItem} ${styles.navItemCollapsible} ${billingGroupActive ? styles.navItemActive : ""}`} onClick={() => setBillingOpen((o) => !o)} aria-expanded={billingExpanded}>
+      <button type="button" className={`${styles.navItem} ${styles.navItemCollapsible} ${billingRouteActive ? styles.navItemActive : ""}`} onClick={() => setBillingOpen((o) => !o)} aria-expanded={billingExpanded}>
         <span className={styles.navIcon}><DollarIcon /></span>
         Billing
         <ChevronIcon open={billingExpanded} />
@@ -168,14 +167,14 @@ export default function AppSidebarNav() {
       {billingExpanded ? (
         <div className={styles.subnav}>
           <SubNavLinkIcon href="/billing/my-inbox" icon={<TasksIcon />} label="Dashboard" prefixes={DASHBOARD_PREFIXES} pathname={pathname} badge={<MyInboxBadge />} />
-          <SubNavLinkIcon href="/billing/charge-capture" icon={<ClipboardIcon />} label="Charge Capture" prefixes={CHARGE_CAPTURE_PREFIXES} pathname={pathname} />
+          <SubNavLinkIcon href="/billing/charge-capture" icon={<ClipboardIcon />} label="Charges" prefixes={CHARGE_CAPTURE_PREFIXES} pathname={pathname} />
           <SubNavLinkIcon href="/billing/ready-to-generate" icon={<ClipboardIcon />} label="Ready to Generate" prefixes={READY_TO_GENERATE_PREFIXES} pathname={pathname} />
           <SubNavLinkIcon href="/billing/batches" icon={<ClipboardIcon />} label="837P Batches" prefixes={BATCHES_837P_PREFIXES} pathname={pathname} />
           <SubNavLinkIcon href="/billing/eligibility-batches" icon={<ShieldIcon />} label="Eligibility" prefixes={["/billing/eligibility-batches", "/billing/eligibility-issues"]} pathname={pathname} />
           <SubNavLinkIcon href="/billing/claims" icon={<ClipboardIcon />} label="Claims" prefixes={CLAIMS_PREFIXES} pathname={pathname} />
           <SubNavLinkIcon href="/billing/rejections-999" icon={<XCircleIcon />} label="Rejections" prefixes={REJECTIONS_PREFIXES} pathname={pathname} />
           <SubNavLinkIcon href="/billing/denials-by-carc" icon={<XCircleIcon />} label="Denials" prefixes={DENIALS_PREFIXES} pathname={pathname} />
-          <button type="button" className={`${styles.subnavItem} ${styles.subnavItemCollapsible ?? ""} ${paymentsActive ? styles.subnavItemActive : ""}`} onClick={() => setPaymentsOpen((o) => !o)} aria-expanded={paymentsExpanded} style={{ width: "100%", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", padding: 0 }}>
+          <button type="button" className={`${styles.subnavItem} ${styles.subnavItemGroup} ${paymentsExpanded ? styles.subnavItemGroupOpen : ""} ${paymentsActive ? styles.subnavItemActive : ""}`} onClick={() => setPaymentsOpen((o) => !o)} aria-expanded={paymentsExpanded}>
             <span className={styles.subnavIcon}><CreditCardIcon /></span>
             <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left" }}>Payments</span>
             <ChevronIcon open={paymentsExpanded} />
