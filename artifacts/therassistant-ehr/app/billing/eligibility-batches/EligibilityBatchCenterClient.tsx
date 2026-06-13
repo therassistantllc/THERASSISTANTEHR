@@ -38,6 +38,21 @@ type Batch = {
   created_at: string;
 };
 
+type Diagnostics = {
+  totalAppointmentsInMonth: number;
+  appointmentPolicyMissing: number;
+  clientPolicyFound: number;
+  clientPolicyMissing: number;
+  clientPolicyRejectedMissingPayer: number;
+  clientPolicyRejectedMissingSubscriber: number;
+  multiplePoliciesNeedSelection: number;
+  excludedNoPolicyId: number;
+  excludedCanceledOrNoShow: number;
+  excludedAlreadyCheckedThisMonth: number;
+  includedCandidates: number;
+  usedClientPolicyFallback: number;
+};
+
 function currentMonth() {
   return new Date().toISOString().slice(0, 7);
 }
@@ -51,6 +66,10 @@ function fullName(first: string | null | undefined, last: string | null | undefi
   return [first, last].filter(Boolean).join(" ") || "-";
 }
 
+async function readJson(response: Response) {
+  return response.json().catch(() => ({}));
+}
+
 export default function EligibilityBatchCenterClient() {
   const [month, setMonth] = useState(currentMonth());
   const [candidates, setCandidates] = useState<Candidate[]>([]);
@@ -60,20 +79,7 @@ export default function EligibilityBatchCenterClient() {
   const [importBatchId, setImportBatchId] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
-  const [diagnostics, setDiagnostics] = useState<{
-    totalAppointmentsInMonth: number;
-    appointmentPolicyMissing: number;
-    clientPolicyFound: number;
-    clientPolicyMissing: number;
-    clientPolicyRejectedMissingPayer: number;
-    clientPolicyRejectedMissingSubscriber: number;
-    multiplePoliciesNeedSelection: number;
-    excludedNoPolicyId: number;
-    excludedCanceledOrNoShow: number;
-    excludedAlreadyCheckedThisMonth: number;
-    includedCandidates: number;
-    usedClientPolicyFallback: number;
-  } | null>(null);
+  const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
 
   const selectedIds = useMemo(
     () => Object.entries(selected).filter(([, checked]) => checked).map(([id]) => id),
@@ -84,7 +90,7 @@ export default function EligibilityBatchCenterClient() {
     const response = await fetch("/api/billing/eligibility-batches", {
       cache: "no-store",
     });
-    const payload = await response.json();
+    const payload = await readJson(response);
     if (!response.ok || !payload.success) {
       throw new Error(payload.error || "Failed to load eligibility batches");
     }
@@ -99,7 +105,7 @@ export default function EligibilityBatchCenterClient() {
         `/api/billing/eligibility-batches/candidates?month=${encodeURIComponent(month)}`,
         { cache: "no-store" },
       );
-      const payload = await response.json();
+      const payload = await readJson(response);
       if (!response.ok || !payload.success) {
         throw new Error(payload.error || "Failed to load candidates");
       }
@@ -114,7 +120,9 @@ export default function EligibilityBatchCenterClient() {
       }
       setSelected(nextSelected);
 
-      setMessage(`Found ${rows.length} scheduled client/policy record${rows.length === 1 ? "" : "s"} missing eligibility for the month.`);
+      setMessage(
+        `Found ${rows.length} scheduled client/policy record${rows.length === 1 ? "" : "s"} missing eligibility for the month.`,
+      );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Failed to load candidates");
     } finally {
@@ -125,22 +133,31 @@ export default function EligibilityBatchCenterClient() {
   async function generateBatch() {
     setLoading(true);
     setMessage("");
+    let generationMessage = "";
+
     try {
       const response = await fetch("/api/billing/eligibility-batches", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ month, appointmentIds: selectedIds }),
       });
-      const payload = await response.json();
+      const payload = await readJson(response);
       if (!response.ok || !payload.success) {
         throw new Error(payload.error || "Failed to generate eligibility batch");
       }
 
-      setMessage(payload.message || "Eligibility batch generated.");
-      await loadBatches();
+      generationMessage = payload.message || "Eligibility batch generated.";
+      setMessage(generationMessage);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Failed to generate batch");
+      generationMessage = error instanceof Error ? error.message : "Failed to generate batch";
+      setMessage(generationMessage);
     } finally {
+      try {
+        await loadBatches();
+      } catch (loadError) {
+        const loadMessage = loadError instanceof Error ? loadError.message : "Failed to reload batches";
+        setMessage(generationMessage ? `${generationMessage} Batch list refresh failed: ${loadMessage}` : loadMessage);
+      }
       setLoading(false);
     }
   }
@@ -168,8 +185,7 @@ export default function EligibilityBatchCenterClient() {
           body: JSON.stringify({ raw271 }),
         },
       );
-
-      const payload = await response.json();
+      const payload = await readJson(response);
 
       if (!response.ok || !payload.success) {
         throw new Error(payload.error || payload.message || "Failed to import 271 response");
@@ -334,7 +350,7 @@ export default function EligibilityBatchCenterClient() {
       </section>
 
       <section className="rounded-lg border bg-white p-5 shadow-sm">
-        <h2 className="mb-3 text-lg font-semibold">Generated 270 Batches</h2>
+        <h2 className="mb-3 text-lg font-semibold">270 Batches</h2>
 
         <div className="overflow-auto">
           <table className="min-w-full text-left text-sm">
@@ -358,25 +374,32 @@ export default function EligibilityBatchCenterClient() {
                   </td>
                 </tr>
               ) : (
-                batches.map((batch) => (
-                  <tr key={batch.id} className="border-b">
-                    <td className="p-2 font-medium">{batch.batch_number}</td>
-                    <td className="p-2">{displayDate(batch.batch_month)}</td>
-                    <td className="p-2">{batch.batch_status}</td>
-                    <td className="p-2">{batch.request_count}</td>
-                    <td className="p-2">{displayDate(batch.generated_at)}</td>
-                    <td className="p-2">{displayDate(batch.downloaded_at)}</td>
-                    <td className="p-2">{displayDate(batch.imported_at)}</td>
-                    <td className="p-2">
-                      <a
-                        href={`/api/billing/eligibility-batches/${batch.id}/download`}
-                        className="font-medium text-blue-700"
-                      >
-                        Download 270
-                      </a>
-                    </td>
-                  </tr>
-                ))
+                batches.map((batch) => {
+                  const canDownload = Boolean(batch.generated_file_name || batch.generated_at);
+                  return (
+                    <tr key={batch.id} className="border-b">
+                      <td className="p-2 font-medium">{batch.batch_number}</td>
+                      <td className="p-2">{displayDate(batch.batch_month)}</td>
+                      <td className="p-2">{batch.batch_status}</td>
+                      <td className="p-2">{batch.request_count}</td>
+                      <td className="p-2">{displayDate(batch.generated_at)}</td>
+                      <td className="p-2">{displayDate(batch.downloaded_at)}</td>
+                      <td className="p-2">{displayDate(batch.imported_at)}</td>
+                      <td className="p-2">
+                        {canDownload ? (
+                          <a
+                            href={`/api/billing/eligibility-batches/${batch.id}/download`}
+                            className="font-medium text-blue-700"
+                          >
+                            Download 270
+                          </a>
+                        ) : (
+                          <span className="text-gray-500">Unavailable</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
