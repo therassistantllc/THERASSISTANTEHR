@@ -7,6 +7,7 @@ import { getDefaultCaseForClient } from "@/lib/cases/clientCasesService";
 
 type RecurrenceFrequency = "none" | "weekly" | "biweekly" | "monthly";
 type RecurrenceEndMode = "by_date" | "by_count";
+type ServiceLocationKind = "office" | "telehealth";
 type DbRow = Record<string, unknown>;
 
 function generateUuid() {
@@ -72,8 +73,8 @@ async function findCredentialingProfileForRosterProvider(params: {
   rosterProvider: DbRow;
 }) {
   const { supabase, organizationId, rosterProvider } = params;
-  const npi = text(rosterProvider.npi) || text(rosterProvider.individual_npi);
-  const providerName = text(rosterProvider.display_name);
+  const npi = text(rosterProvider.npi);
+  const providerName = text(rosterProvider.display_name) || [rosterProvider.first_name, rosterProvider.last_name].map(text).filter(Boolean).join(" ");
   const email = text(rosterProvider.email);
 
   if (npi) {
@@ -84,6 +85,7 @@ async function findCredentialingProfileForRosterProvider(params: {
       .eq("individual_npi", npi)
       .eq("is_active", true)
       .is("archived_at", null)
+      .limit(1)
       .maybeSingle();
     if (data?.id) return String(data.id);
   }
@@ -96,6 +98,7 @@ async function findCredentialingProfileForRosterProvider(params: {
       .eq("email", email)
       .eq("is_active", true)
       .is("archived_at", null)
+      .limit(1)
       .maybeSingle();
     if (data?.id) return String(data.id);
   }
@@ -108,6 +111,7 @@ async function findCredentialingProfileForRosterProvider(params: {
       .eq("provider_name", providerName)
       .eq("is_active", true)
       .is("archived_at", null)
+      .limit(1)
       .maybeSingle();
     if (data?.id) return String(data.id);
   }
@@ -136,7 +140,7 @@ async function resolveProviderId(params: {
 
   const { data: providerById } = await supabase
     .from("providers")
-    .select("id, display_name, email, npi, individual_npi")
+    .select("id, first_name, last_name, display_name, email, npi")
     .eq("organization_id", organizationId)
     .eq("id", providerSelector)
     .is("archived_at", null)
@@ -152,7 +156,7 @@ async function resolveProviderId(params: {
 
   const { data: providerByUser } = await supabase
     .from("providers")
-    .select("id, display_name, email, npi, individual_npi")
+    .select("id, first_name, last_name, display_name, email, npi")
     .eq("organization_id", organizationId)
     .eq("user_id", providerSelector)
     .is("archived_at", null)
@@ -166,45 +170,94 @@ async function resolveProviderId(params: {
     if (credentialingId) return credentialingId;
   }
 
-  const { data: staff } = await supabase
+  const { data: staffById } = await supabase
     .from("staff_profiles")
-    .select("auth_user_id, first_name, last_name, email")
+    .select("id, auth_user_id, first_name, last_name, email")
     .eq("organization_id", organizationId)
-    .eq("auth_user_id", providerSelector)
+    .eq("id", providerSelector)
     .eq("is_active", true)
     .is("archived_at", null)
     .maybeSingle();
 
-  if (!staff) return null;
+  const { data: staffByAuthUserId } = staffById
+    ? { data: null }
+    : await supabase
+        .from("staff_profiles")
+        .select("id, auth_user_id, first_name, last_name, email")
+        .eq("organization_id", organizationId)
+        .eq("auth_user_id", providerSelector)
+        .eq("is_active", true)
+        .is("archived_at", null)
+        .maybeSingle();
 
-  const staffEmail = text(staff.email);
-  const staffName = [staff.first_name, staff.last_name].map(text).filter(Boolean).join(" ");
+  const staff = staffById ?? staffByAuthUserId;
+  if (staff) {
+    const staffEmail = text(staff.email);
+    const staffName = [staff.first_name, staff.last_name].map(text).filter(Boolean).join(" ");
 
-  if (staffEmail) {
-    const { data } = await supabase
-      .from("provider_credentialing_profiles")
-      .select("id")
-      .eq("organization_id", organizationId)
-      .eq("email", staffEmail)
-      .eq("is_active", true)
-      .is("archived_at", null)
-      .maybeSingle();
-    if (data?.id) return String(data.id);
-  }
+    if (staffEmail) {
+      const { data } = await supabase
+        .from("provider_credentialing_profiles")
+        .select("id")
+        .eq("organization_id", organizationId)
+        .eq("email", staffEmail)
+        .eq("is_active", true)
+        .is("archived_at", null)
+        .limit(1)
+        .maybeSingle();
+      if (data?.id) return String(data.id);
+    }
 
-  if (staffName) {
-    const { data } = await supabase
-      .from("provider_credentialing_profiles")
-      .select("id")
-      .eq("organization_id", organizationId)
-      .eq("provider_name", staffName)
-      .eq("is_active", true)
-      .is("archived_at", null)
-      .maybeSingle();
-    if (data?.id) return String(data.id);
+    if (staffName) {
+      const { data } = await supabase
+        .from("provider_credentialing_profiles")
+        .select("id")
+        .eq("organization_id", organizationId)
+        .eq("provider_name", staffName)
+        .eq("is_active", true)
+        .is("archived_at", null)
+        .limit(1)
+        .maybeSingle();
+      if (data?.id) return String(data.id);
+    }
   }
 
   return null;
+}
+
+async function resolveProviderLocationId(params: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any;
+  organizationId: string;
+  serviceLocation: ServiceLocationKind;
+}) {
+  const { supabase, organizationId, serviceLocation } = params;
+  const locationType = serviceLocation === "telehealth" ? "telehealth" : "office";
+
+  const { data: byType } = await supabase
+    .from("service_locations")
+    .select("id")
+    .eq("organization_id", organizationId)
+    .eq("location_type", locationType)
+    .eq("is_active", true)
+    .is("archived_at", null)
+    .order("is_default", { ascending: false })
+    .order("name", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (byType?.id) return String(byType.id);
+
+  const { data: fallback } = await supabase
+    .from("service_locations")
+    .select("id")
+    .eq("organization_id", organizationId)
+    .eq("is_active", true)
+    .is("archived_at", null)
+    .order("is_default", { ascending: false })
+    .order("name", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  return fallback?.id ? String(fallback.id) : null;
 }
 
 export async function POST(request: Request) {
@@ -227,7 +280,8 @@ export async function POST(request: Request) {
       durationMinutes?: number;
       appointmentType?: string;
       memo?: string | null;
-      serviceLocation?: "office" | "telehealth";
+      serviceLocation?: ServiceLocationKind;
+      internalNote?: string | null;
       reminderEmailEnabled?: boolean;
       reminderSmsEnabled?: boolean;
       reminderPortalEnabled?: boolean;
@@ -251,6 +305,8 @@ export async function POST(request: Request) {
     const appointmentType = text(body.appointmentType);
     const memoRaw = typeof body.memo === "string" ? body.memo.trim() : "";
     const memo = memoRaw.length > 0 ? memoRaw : null;
+    const internalNoteRaw = typeof body.internalNote === "string" ? body.internalNote.trim() : "";
+    const internalNote = internalNoteRaw.length > 0 ? internalNoteRaw : null;
     const serviceLocation = body.serviceLocation ?? (appointmentType.toLowerCase().includes("tele") ? "telehealth" : "office");
 
     if (!clientId || !providerSelector || !scheduledStartAt || !appointmentType) {
@@ -264,6 +320,14 @@ export async function POST(request: Request) {
     if (!providerId) {
       return NextResponse.json(
         { success: false, error: "Selected provider could not be resolved to an active provider credentialing profile." },
+        { status: 400 },
+      );
+    }
+
+    const providerLocationId = await resolveProviderLocationId({ supabase, organizationId, serviceLocation });
+    if (!providerLocationId) {
+      return NextResponse.json(
+        { success: false, error: `No active ${serviceLocation} service location is configured for this organization.` },
         { status: 400 },
       );
     }
@@ -364,14 +428,21 @@ export async function POST(request: Request) {
         client_id: clientId,
         provider_id: providerId,
         provider_credentialing_profile_id: providerId,
+        provider_location_id: providerLocationId,
         insurance_policy_id: body.insurancePolicyId ?? null,
         case_id: resolvedCaseId,
         scheduled_start_at: startAt.toISOString(),
         scheduled_end_at: endAt.toISOString(),
         appointment_status: "scheduled",
         appointment_type: appointmentType,
+        service_location: serviceLocation,
         memo,
+        internal_note: internalNote,
         telehealth_url: teleUrl,
+        reminder_email_enabled: reminderEmailEnabled,
+        reminder_sms_enabled: reminderSmsEnabled,
+        reminder_portal_enabled: reminderPortalEnabled,
+        reminder_lead_hours: reminderLeadHours,
         created_at: now,
         updated_at: now,
       };
