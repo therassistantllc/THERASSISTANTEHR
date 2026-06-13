@@ -61,6 +61,52 @@ function errorPayload(error: unknown, fallback: string) {
   };
 }
 
+async function resolveEncounterRenderingCredentialingProfileId(params: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any;
+  organizationId: string;
+  appointmentId: unknown;
+  providerId: unknown;
+}) {
+  const { supabase, organizationId, appointmentId, providerId } = params;
+  const appointmentIdText = text(appointmentId);
+  const providerIdText = text(providerId);
+
+  if (appointmentIdText) {
+    const { data: appointment, error } = await supabase
+      .from("appointments")
+      .select("provider_credentialing_profile_id, provider_id")
+      .eq("organization_id", organizationId)
+      .eq("id", appointmentIdText)
+      .is("archived_at", null)
+      .maybeSingle();
+
+    if (error) throw error;
+
+    const appointmentProfileId = text(appointment?.provider_credentialing_profile_id);
+    if (appointmentProfileId) return appointmentProfileId;
+
+    const appointmentProviderId = text(appointment?.provider_id);
+    if (appointmentProviderId) return appointmentProviderId;
+  }
+
+  if (!providerIdText) return null;
+
+  const { data: profileById, error: profileError } = await supabase
+    .from("provider_credentialing_profiles")
+    .select("id")
+    .eq("organization_id", organizationId)
+    .eq("id", providerIdText)
+    .eq("is_active", true)
+    .is("archived_at", null)
+    .maybeSingle();
+
+  if (profileError) throw profileError;
+  if (profileById?.id) return String(profileById.id);
+
+  return null;
+}
+
 export async function GET(request: Request, context: { params: Promise<{ encounterId: string }> }) {
   try {
     const supabase = createServerSupabaseAdminClient();
@@ -79,7 +125,7 @@ export async function GET(request: Request, context: { params: Promise<{ encount
     const { data: encounter, error: encounterError } = await supabase
       .from("encounters")
       .select(
-        "id, client_id, provider_id, provider_credentialing_profile_id, appointment_id, encounter_status, service_date, started_at, ended_at",
+        "id, client_id, provider_id, appointment_id, encounter_status, service_date, started_at, ended_at",
       )
       .eq("organization_id", organizationId)
       .eq("id", encounterId)
@@ -151,7 +197,7 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
 
     const { data: encounter, error: encounterError } = await supabase
       .from("encounters")
-      .select("id, client_id, provider_id, provider_credentialing_profile_id, service_date, encounter_status")
+      .select("id, client_id, provider_id, appointment_id, service_date, encounter_status")
       .eq("organization_id", organizationId)
       .eq("id", encounterId)
       .is("archived_at", null)
@@ -162,6 +208,13 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
     if (!encounter) {
       return NextResponse.json({ success: false, error: "Encounter not found" }, { status: 404 });
     }
+
+    const renderingCredentialingProfileId = await resolveEncounterRenderingCredentialingProfileId({
+      supabase,
+      organizationId,
+      appointmentId: encounter.appointment_id,
+      providerId: encounter.provider_id,
+    });
 
     const now = new Date().toISOString();
 
@@ -194,7 +247,7 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
         charge_amount: money(line.chargeAmount ?? line.charge_amount),
         place_of_service_code: text(line.placeOfServiceCode ?? line.place_of_service_code) || null,
         rendering_provider_id: encounter.provider_id,
-        rendering_provider_credentialing_profile_id: encounter.provider_credentialing_profile_id ?? null,
+        rendering_provider_credentialing_profile_id: renderingCredentialingProfileId,
         created_at: now,
         updated_at: now,
       }))
