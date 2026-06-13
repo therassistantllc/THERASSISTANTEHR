@@ -117,7 +117,7 @@ export async function captureSignedEncounterCharge(
 
   const { data: encounter, error: encounterError } = await supabase
     .from("encounters")
-    .select("id, organization_id, appointment_id, client_id, provider_id, provider_credentialing_profile_id, encounter_status, service_date, case_id")
+    .select("id, organization_id, appointment_id, client_id, provider_id, encounter_status, service_date, case_id")
     .eq("id", input.encounterId)
     .eq("organization_id", input.organizationId)
     .is("archived_at", null)
@@ -213,15 +213,12 @@ export async function captureSignedEncounterCharge(
   const providerCredentialingProfileId = await resolveActiveCredentialingProfileId({
     organizationId: input.organizationId,
     explicitProfileIds: [
-      encounter.provider_credentialing_profile_id,
+      encounter.provider_id,
       appointmentCredentialingProfileId,
       ...serviceLines.map((line) => line.renderingProviderCredentialingProfileId),
     ],
   });
 
-  // Resolve the case for this encounter — explicit case_id wins, then the
-  // client's default case. Self-pay / charity cases route to client
-  // responsibility instead of generating an insurance claim.
   let resolvedCaseId: string | null = encounter.case_id ? String(encounter.case_id) : null;
   if (!resolvedCaseId && encounter.client_id) {
     const defaultCase = await getDefaultCaseForClient({
@@ -247,7 +244,6 @@ export async function captureSignedEncounterCharge(
       blockers.push({ field: "insurance_policy", message: billing.reason });
     }
   } else if (encounter.client_id) {
-    // Legacy fallback for clients with no case yet (e.g. pre-migration data).
     policyId = await getActivePrimaryPolicy({ organizationId: input.organizationId, clientId: String(encounter.client_id) });
     if (!policyId) blockers.push({ field: "insurance_policy", message: "No active primary insurance policy found for claim creation" });
   }
@@ -324,7 +320,3 @@ export async function captureSignedEncounterCharge(
   if (insertError || !inserted) throw new Error(insertError?.message ?? "Failed to create charge capture item");
   return { ok: okForFlow, chargeId: String(inserted.id), status, blockers, caseId: resolvedCaseId, routing };
 }
-
-// Test-only re-export so unit tests can detect self-pay routing without
-// importing the cases module directly.
-export { isPatientResponsibilityCaseType };
