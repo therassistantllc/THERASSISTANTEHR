@@ -302,32 +302,68 @@ export async function POST(request: Request) {
 
     if (requestError) throw requestError;
 
-    const checkRows = requestRows.map((row) => ({
-      organization_id: guard.organizationId,
-      client_id: row.client_id,
-      appointment_id: row.appointment_id,
-      insurance_policy_id: row.insurance_policy_id,
-      eligibility_status: "not_checked",
-      response_summary: {
-        source: "monthly_270_batch",
-        batch_number: batchNumber,
-        service_type_code: "98",
-      },
-      created_at: now,
-      updated_at: now,
-    }));
+    const appointmentIds = [
+      ...new Set(requestRows.map((row) => text(row.appointment_id)).filter(Boolean)),
+    ];
 
-    const { data: checks, error: checksError } = await supabase
-      .from("eligibility_checks")
-      .insert(checkRows)
-      .select("id,appointment_id,client_id,insurance_policy_id");
+    let existingChecks: DbRow[] = [];
+    if (appointmentIds.length > 0) {
+      const { data: foundChecks, error: foundChecksError } = await supabase
+        .from("eligibility_checks")
+        .select("id,appointment_id,client_id,insurance_policy_id")
+        .eq("organization_id", guard.organizationId)
+        .is("archived_at", null)
+        .in("appointment_id", appointmentIds);
 
-    if (checksError) throw checksError;
+      if (foundChecksError) throw foundChecksError;
+      existingChecks = (foundChecks ?? []) as DbRow[];
+    }
+
+    const existingCheckByAppointment = new Map<string, DbRow>();
+    for (const check of existingChecks) {
+      const appointmentId = text(check.appointment_id);
+      if (appointmentId) existingCheckByAppointment.set(appointmentId, check);
+    }
+
+    const checkRows = requestRows
+      .filter((row) => {
+        const appointmentId = text(row.appointment_id);
+        return !appointmentId || !existingCheckByAppointment.has(appointmentId);
+      })
+      .map((row) => ({
+        organization_id: guard.organizationId,
+        client_id: row.client_id,
+        appointment_id: row.appointment_id,
+        insurance_policy_id: row.insurance_policy_id,
+        eligibility_status: "not_checked",
+        response_summary: {
+          source: "monthly_270_batch",
+          batch_number: batchNumber,
+          service_type_code: "98",
+        },
+        created_at: now,
+        updated_at: now,
+      }));
+
+    let insertedChecks: DbRow[] = [];
+    if (checkRows.length > 0) {
+      const { data: checks, error: checksError } = await supabase
+        .from("eligibility_checks")
+        .insert(checkRows)
+        .select("id,appointment_id,client_id,insurance_policy_id");
+
+      if (checksError) throw checksError;
+      insertedChecks = (checks ?? []) as DbRow[];
+    }
+
+    const allChecks = [...existingChecks, ...insertedChecks];
 
     for (const req of (insertedRequests ?? []) as DbRow[]) {
-      const matchingCheck = ((checks ?? []) as DbRow[]).find(
+      const matchingCheck = allChecks.find(
+        (c) => text(c.appointment_id) && text(c.appointment_id) === text(req.appointment_id),
+      ) ?? allChecks.find(
         (c) =>
-          text(c.appointment_id) === text(req.appointment_id) &&
+          text(c.client_id) === text(req.client_id) &&
           text(c.insurance_policy_id) === text(req.insurance_policy_id),
       );
 
