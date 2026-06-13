@@ -16,6 +16,8 @@ const baseURL =
 const shouldStartWebServer =
   !env.PLAYWRIGHT_BASE_URL && !env.BASE_URL;
 
+const e2eKey = env.E2E_CHECK_VALUE ?? 'local-playwright-system-test';
+
 export default defineConfig({
   testDir: './tests',
   timeout: 60_000,
@@ -35,16 +37,20 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
+    extraHTTPHeaders: {
+      'x-e2e-check': e2eKey,
+    },
   },
   webServer: shouldStartWebServer
     ? {
-        command: 'pnpm dev',
+        command: 'node scripts/testing/start-playwright-dev.mjs',
         url: baseURL,
         reuseExistingServer: !env.CI,
         timeout: 120_000,
         env: {
           PORT: String(port),
           NEXT_TELEMETRY_DISABLED: '1',
+          E2E_CHECK_VALUE: e2eKey,
         },
       }
     : undefined,
