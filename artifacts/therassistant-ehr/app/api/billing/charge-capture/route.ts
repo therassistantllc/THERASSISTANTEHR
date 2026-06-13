@@ -19,6 +19,14 @@ const num = (v: unknown) => {
   return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0;
 };
 
+function displayProviderName(provider: DbRow | undefined) {
+  if (!provider) return "—";
+  const name = text(provider.provider_name) || text(provider.display_name) || [provider.first_name, provider.last_name].map(text).filter(Boolean).join(" ");
+  const credential = text(provider.credential_display) || text(provider.credential);
+  if (name && credential && !name.includes(credential)) return `${name}, ${credential}`;
+  return name || "—";
+}
+
 const DOWNSTREAM_CHARGE_STATUSES = new Set([
   "released",
   "batched",
@@ -173,7 +181,7 @@ export async function GET(request: Request) {
         ? supabase.from("clients").select("id, first_name, last_name, date_of_birth").in("id", clientIds)
         : Promise.resolve({ data: [] as DbRow[] }),
       providerIds.length
-        ? supabase.from("providers").select("id, display_name, first_name, last_name").in("id", providerIds)
+        ? supabase.from("provider_credentialing_profiles").select("id, provider_name, credential_display").in("id", providerIds)
         : Promise.resolve({ data: [] as DbRow[] }),
       appointmentIds.length
         ? (supabase as any)
@@ -269,9 +277,7 @@ export async function GET(request: Request) {
             : "Unknown client",
           dob: client?.date_of_birth ?? null,
         },
-        clinician: provider
-          ? text(provider.display_name) || [provider.first_name, provider.last_name].map(text).filter(Boolean).join(" ") || "—"
-          : "—",
+        clinician: displayProviderName(provider),
         appointment: {
           id: text(c.appointment_id) || null,
           type: appt ? text(appt.appointment_type) || "—" : "—",
