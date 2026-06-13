@@ -61,6 +61,13 @@ function errorPayload(error: unknown, fallback: string) {
   };
 }
 
+function splitProviderName(providerName: string) {
+  const parts = providerName.split(/\s+/).filter(Boolean);
+  const firstName = parts[0] || "Provider";
+  const lastName = parts.slice(1).join(" ") || firstName;
+  return { firstName, lastName };
+}
+
 async function resolveEncounterRenderingCredentialingProfileId(params: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: any;
@@ -105,6 +112,92 @@ async function resolveEncounterRenderingCredentialingProfileId(params: {
   if (profileById?.id) return String(profileById.id);
 
   return null;
+}
+
+async function ensureRosterProviderIdForCredentialingProfile(params: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any;
+  organizationId: string;
+  credentialingProfileId: string | null;
+}) {
+  const { supabase, organizationId, credentialingProfileId } = params;
+  const profileId = text(credentialingProfileId);
+  if (!profileId) return null;
+
+  const { data: profile, error: profileError } = await supabase
+    .from("provider_credentialing_profiles")
+    .select("id, provider_name, credential_display, individual_npi, taxonomy_code, individual_medicaid_id, email, phone")
+    .eq("organization_id", organizationId)
+    .eq("id", profileId)
+    .is("archived_at", null)
+    .maybeSingle();
+
+  if (profileError) throw profileError;
+  if (!profile) return null;
+
+  const npi = text(profile.individual_npi);
+  const email = text(profile.email);
+  const displayName = text(profile.provider_name) || "Provider";
+
+  if (npi) {
+    const { data } = await supabase
+      .from("providers")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("npi", npi)
+      .is("archived_at", null)
+      .limit(1)
+      .maybeSingle();
+    if (data?.id) return String(data.id);
+  }
+
+  if (email) {
+    const { data } = await supabase
+      .from("providers")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("email", email)
+      .is("archived_at", null)
+      .limit(1)
+      .maybeSingle();
+    if (data?.id) return String(data.id);
+  }
+
+  if (displayName) {
+    const { data } = await supabase
+      .from("providers")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("display_name", displayName)
+      .is("archived_at", null)
+      .limit(1)
+      .maybeSingle();
+    if (data?.id) return String(data.id);
+  }
+
+  const { firstName, lastName } = splitProviderName(displayName);
+  const { data: inserted, error: insertError } = await supabase
+    .from("providers")
+    .insert({
+      organization_id: organizationId,
+      first_name: firstName,
+      last_name: lastName,
+      display_name: displayName,
+      email: email || null,
+      phone: text(profile.phone) || null,
+      credential: text(profile.credential_display) || null,
+      npi: npi || null,
+      taxonomy_code: text(profile.taxonomy_code) || null,
+      medicaid_id: text(profile.individual_medicaid_id) || null,
+      provider_type: "clinician",
+      can_bill_independently: true,
+      is_active: true,
+    })
+    .select("id")
+    .single();
+
+  if (insertError) throw insertError;
+  return inserted?.id ? String(inserted.id) : null;
 }
 
 export async function GET(request: Request, context: { params: Promise<{ encounterId: string }> }) {
@@ -216,6 +309,19 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
       providerId: encounter.provider_id,
     });
 
+    const renderingProviderId = await ensureRosterProviderIdForCredentialingProfile({
+      supabase,
+      organizationId,
+      credentialingProfileId: renderingCredentialingProfileId,
+    });
+
+    if (!renderingProviderId) {
+      return NextResponse.json(
+        { success: false, error: "Rendering provider could not be resolved to a provider roster record." },
+        { status: 422 },
+      );
+    }
+
     const now = new Date().toISOString();
 
     const diagnosisPayload = diagnoses
@@ -246,7 +352,7 @@ export async function POST(request: Request, context: { params: Promise<{ encoun
         units: Number(line.units ?? 1) || 1,
         charge_amount: money(line.chargeAmount ?? line.charge_amount),
         place_of_service_code: text(line.placeOfServiceCode ?? line.place_of_service_code) || null,
-        rendering_provider_id: encounter.provider_id,
+        rendering_provider_id: renderingProviderId,
         rendering_provider_credentialing_profile_id: renderingCredentialingProfileId,
         created_at: now,
         updated_at: now,
