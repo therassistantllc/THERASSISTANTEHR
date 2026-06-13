@@ -23,6 +23,17 @@ type AppointmentRow = {
   cpt_code: string | null;
 };
 
+type ClientNameRow = { first_name?: string | null; last_name?: string | null };
+type ProviderCredentialingRow = { provider_name?: string | null; credential_display?: string | null };
+
+function displayProviderName(provider: ProviderCredentialingRow | null | undefined) {
+  if (!provider) return "Unassigned";
+  const name = String(provider.provider_name ?? "").trim();
+  const credential = String(provider.credential_display ?? "").trim();
+  if (name && credential && !name.includes(credential)) return `${name}, ${credential}`;
+  return name || "Unassigned";
+}
+
 async function listAppointmentsFallback(params: {
   supabase: any;
   organizationId: string;
@@ -67,8 +78,8 @@ async function listAppointmentsFallback(params: {
       : Promise.resolve({ data: [], error: null }),
     providerIds.length > 0
       ? (supabase as any)
-          .from("providers")
-          .select("id, display_name, first_name, last_name")
+          .from("provider_credentialing_profiles")
+          .select("id, provider_name, credential_display")
           .in("id", providerIds)
       : Promise.resolve({ data: [], error: null }),
   ]);
@@ -76,10 +87,10 @@ async function listAppointmentsFallback(params: {
   if (clientsResult.error) throw clientsResult.error;
   if (providersResult.error) throw providersResult.error;
 
-  const clientById = new Map<string, { first_name?: string | null; last_name?: string | null }>(
+  const clientById = new Map<string, ClientNameRow>(
     (clientsResult.data ?? []).map((c: any) => [String(c.id), c]),
   );
-  const providerById = new Map<string, { display_name?: string | null; first_name?: string | null; last_name?: string | null }>(
+  const providerById = new Map<string, ProviderCredentialingRow>(
     (providersResult.data ?? []).map((p: any) => [String(p.id), p]),
   );
 
@@ -87,10 +98,7 @@ async function listAppointmentsFallback(params: {
     const client = r.client_id ? clientById.get(r.client_id) : null;
     const provider = r.provider_id ? providerById.get(r.provider_id) : null;
     const clientName = [client?.first_name, client?.last_name].filter(Boolean).join(" ").trim() || "Unknown client";
-    const providerName =
-      provider?.display_name?.trim() ||
-      [provider?.first_name, provider?.last_name].filter(Boolean).join(" ").trim() ||
-      "Unassigned";
+    const providerName = displayProviderName(provider);
 
     const apptType = typeof r.appointment_type === "string" ? r.appointment_type : "";
     const cptCode =
