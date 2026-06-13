@@ -18,6 +18,7 @@ export interface BillingProviderInput {
   zip: string;
   address2?: string | null;
   taxIdType?: "EI" | "SY";
+  phone?: string | null;
 }
 
 export interface ClaimServiceLineInput {
@@ -37,6 +38,7 @@ export interface CreateClaimDraftInput {
   organizationId: string;
   clientId: string;
   policyId?: string | null;
+  caseId?: string | null;
   appointmentId?: string | null;
   encounterId?: string | null;
   placeOfService?: string | null;
@@ -122,6 +124,7 @@ async function resolvePrimaryPolicy(params: {
   organizationId: string;
   clientId: string;
   policyId?: string | null;
+  caseId?: string | null;
 }): Promise<{ policy: DbRecord | null; payer: DbRecord | null; subscriber: DbRecord | null; errors: ClaimReadinessError[] }> {
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) {
@@ -133,28 +136,47 @@ async function resolvePrimaryPolicy(params: {
     };
   }
 
+  const errors: ClaimReadinessError[] = [];
+  let resolvedPolicyId = normalizeNullable(params.policyId);
+
+  if (!resolvedPolicyId && params.caseId) {
+    const { data: casePolicy, error: casePolicyError } = await supabase
+      .from("client_case_policies")
+      .select("policy_id")
+      .eq("organization_id", params.organizationId)
+      .eq("case_id", params.caseId)
+      .eq("priority", "primary")
+      .limit(1)
+      .maybeSingle();
+
+    if (!casePolicyError && casePolicy?.policy_id) {
+      resolvedPolicyId = String(casePolicy.policy_id);
+    }
+  }
+
   let policyQuery = supabase
     .from("insurance_policies")
-    .select("id, payer_id, subscriber_id, plan_name, policy_number, priority, active_flag, subscriber_relationship")
+    .select("id, payer_id, subscriber_id, plan_name, policy_number, group_number, priority, active_flag, subscriber_relationship")
     .eq("organization_id", params.organizationId)
     .eq("client_id", params.clientId)
     .eq("active_flag", true)
     .is("archived_at", null)
     .limit(1);
 
-  if (params.policyId) {
-    policyQuery = policyQuery.eq("id", params.policyId);
+  if (resolvedPolicyId) {
+    policyQuery = policyQuery.eq("id", resolvedPolicyId);
   } else {
     policyQuery = policyQuery.eq("priority", "primary");
   }
 
   const { data: policy, error: policyError } = await policyQuery.maybeSingle();
-  const errors: ClaimReadinessError[] = [];
 
   if (policyError || !policy) {
     errors.push({
-      field: "insurance_policy",
-      message: "No active primary insurance policy found for this client",
+      field: params.caseId ? "client_case_policies.policy_id" : "insurance_policy",
+      message: params.caseId
+        ? "Client case has no active primary insurance policy linked"
+        : "No active primary insurance policy found for this client",
     });
     return { policy: null, payer: null, subscriber: null, errors };
   }
@@ -219,6 +241,13 @@ async function ensurePayerProfile(params: {
   return String(inserted.id);
 }
 
+function normalizeGender(value: unknown) {
+  const raw = normalizeText(value).toUpperCase();
+  if (["M", "MALE"].includes(raw)) return "M";
+  if (["F", "FEMALE"].includes(raw)) return "F";
+  return "U";
+}
+
 export async function createProfessionalClaimDraft(
   input: CreateClaimDraftInput
 ): Promise<CreateClaimDraftResult> {
@@ -238,7 +267,6 @@ export async function createProfessionalClaimDraft(
   addRequired(errors, "billing_provider.state", input.billingProvider.state, "Billing provider state is required");
   addRequired(errors, "billing_provider.zip", input.billingProvider.zip, "Billing provider ZIP is required");
 
-  // Format gates — block claim creation if format is invalid
   const npiVal = normalizeText(input.billingProvider.npi);
   if (npiVal && !/^\d{10}$/.test(npiVal)) {
     errors.push({ field: "billing_provider.npi", message: "Billing provider NPI must be exactly 10 digits" });
@@ -275,8 +303,6 @@ export async function createProfessionalClaimDraft(
     }
   }
 
-  // Reference-table validation: reject any DX or CPT/HCPCS not present
-  // in the seeded code tables, so claim creation can't introduce unbillable codes.
   const dxToCheck = [...new Set(input.diagnosisCodes.map((c) => normalizeText(c).toUpperCase()).filter(Boolean))];
   if (dxToCheck.length > 0) {
     const { data: dxRows } = await supabase
@@ -292,9 +318,7 @@ export async function createProfessionalClaimDraft(
       }
     }
   }
-  const procToCheck = [...new Set(
-    input.serviceLines.map((l) => normalizeText(l.procedureCode).toUpperCase()).filter(Boolean),
-  )];
+  const procToCheck = [...new Set(input.serviceLines.map((l) => normalizeText(l.procedureCode).toUpperCase()).filter(Boolean))];
   if (procToCheck.length > 0) {
     const { data: pxRows } = await supabase
       .from("procedure_codes")
@@ -312,7 +336,7 @@ export async function createProfessionalClaimDraft(
 
   const { data: client, error: clientError } = await supabase
     .from("clients")
-    .select("id, organization_id, first_name, last_name, date_of_birth, sex_at_birth, address_line_1, city, state, postal_code")
+    .select("id, organization_id, first_name, last_name, date_of_birth, sex_at_birth, address_line_1, address_line_2, city, state, postal_code")
     .eq("id", input.clientId)
     .eq("organization_id", input.organizationId)
     .is("archived_at", null)
@@ -326,11 +350,13 @@ export async function createProfessionalClaimDraft(
     organizationId: input.organizationId,
     clientId: input.clientId,
     policyId: input.policyId,
+    caseId: input.caseId,
   });
   errors.push(...policyResolution.errors);
 
   const payer = policyResolution.payer;
   const subscriber = policyResolution.subscriber;
+  const policy = policyResolution.policy;
 
   if (payer && !normalizeText(payer.payer_id)) {
     errors.push({ field: "payer.payer_id", message: "Payer is missing clearinghouse payer ID" });
@@ -360,8 +386,10 @@ export async function createProfessionalClaimDraft(
     .insert({
       organization_id: input.organizationId,
       patient_id: input.clientId,
+      client_id: input.clientId,
       appointment_id: input.appointmentId ?? undefined,
       encounter_id: input.encounterId ?? undefined,
+      case_id: input.caseId ?? undefined,
       payer_profile_id: payerProfileId,
       provider_credentialing_profile_id: normalizeNullable(input.providerCredentialingProfileId),
       claim_number: claimNumber,
@@ -370,6 +398,10 @@ export async function createProfessionalClaimDraft(
       total_charge: totalCharge,
       place_of_service: placeOfService,
       diagnosis_codes: input.diagnosisCodes,
+      accept_assignment: true,
+      benefits_assignment: true,
+      release_of_information: true,
+      signature_on_file: true,
       validation_errors: [],
     })
     .select("id")
@@ -412,12 +444,13 @@ export async function createProfessionalClaimDraft(
     };
   }
 
-  const subscriberRelationship = normalizeText(subscriber!.relationship_to_client) || normalizeText(policyResolution.policy?.subscriber_relationship) || "self";
+  const subscriberRelationship = normalizeText(policy?.subscriber_relationship) || normalizeText(subscriber!.relationship_to_client) || "self";
   const subscriberIsClient = ["self", "client", "patient", "insured"].includes(subscriberRelationship.toLowerCase());
-  const subscriberAddress1 = firstDbText(subscriber, ["address_line1", "address_line_1", "address1", "street", "subscriber_address1"]) || (subscriberIsClient ? normalizeText(client!.address_line_1) : "");
-  const subscriberCity = firstDbText(subscriber, ["address_city", "city", "subscriber_city"]) || (subscriberIsClient ? normalizeText(client!.city) : "");
-  const subscriberState = (firstDbText(subscriber, ["address_state", "state", "subscriber_state"]) || (subscriberIsClient ? normalizeText(client!.state) : "")).toUpperCase();
-  const subscriberZip = firstDbText(subscriber, ["address_zip", "zip", "postal_code", "subscriber_zip"]) || (subscriberIsClient ? normalizeText(client!.postal_code) : "");
+  const subscriberAddress1 = firstDbText(subscriber, ["address_line_1", "address_line1", "address1", "street", "subscriber_address1"]) || (subscriberIsClient ? normalizeText(client!.address_line_1) : "");
+  const subscriberAddress2 = firstDbText(subscriber, ["address_line_2", "address_line2", "address2", "subscriber_address2"]) || (subscriberIsClient ? normalizeText(client!.address_line_2) : "");
+  const subscriberCity = firstDbText(subscriber, ["city", "address_city", "subscriber_city"]) || (subscriberIsClient ? normalizeText(client!.city) : "");
+  const subscriberState = (firstDbText(subscriber, ["state", "address_state", "subscriber_state"]) || (subscriberIsClient ? normalizeText(client!.state) : "")).toUpperCase();
+  const subscriberZip = firstDbText(subscriber, ["postal_code", "address_zip", "zip", "subscriber_zip"]) || (subscriberIsClient ? normalizeText(client!.postal_code) : "");
 
   const subscriberErrors: ClaimReadinessError[] = [];
   addRequired(subscriberErrors, "insurance_subscribers.first_name", subscriber!.first_name, "Subscriber first name is required");
@@ -425,19 +458,14 @@ export async function createProfessionalClaimDraft(
   addRequired(subscriberErrors, "insurance_subscribers.date_of_birth", subscriber!.date_of_birth, "Subscriber DOB is required");
   addRequired(subscriberErrors, "insurance_subscribers.member_id", subscriber!.member_id, "Subscriber member ID is required");
   addRequired(subscriberErrors, "subscriber.address1", subscriberAddress1, subscriberIsClient ? "Subscriber address line 1 is required from clients.address_line_1" : "Subscriber address line 1 is required from insurance_subscribers address fields");
-  addRequired(subscriberErrors, "subscriber.city", subscriberCity, subscriberIsClient ? "Subscriber city is required from clients.city" : "Subscriber city is required from insurance_subscribers address_city/city");
-  addRequired(subscriberErrors, "subscriber.state", subscriberState, subscriberIsClient ? "Subscriber state is required from clients.state" : "Subscriber state is required from insurance_subscribers address_state/state");
-  addRequired(subscriberErrors, "subscriber.zip", subscriberZip, subscriberIsClient ? "Subscriber ZIP is required from clients.postal_code" : "Subscriber ZIP is required from insurance_subscribers address_zip/zip/postal_code");
+  addRequired(subscriberErrors, "subscriber.city", subscriberCity, subscriberIsClient ? "Subscriber city is required from clients.city" : "Subscriber city is required from insurance_subscribers city");
+  addRequired(subscriberErrors, "subscriber.state", subscriberState, subscriberIsClient ? "Subscriber state is required from clients.state" : "Subscriber state is required from insurance_subscribers state");
+  addRequired(subscriberErrors, "subscriber.zip", subscriberZip, subscriberIsClient ? "Subscriber ZIP is required from clients.postal_code" : "Subscriber ZIP is required from insurance_subscribers postal_code");
   if (subscriberErrors.length > 0) {
     await cleanupPartialClaimDraft(supabase, claimId);
     return { ok: false, claimId: null, errors: subscriberErrors };
   }
 
-  // Pull rendering provider taxonomy from the already-resolved
-  // provider_credentialing_profiles row. The downstream claim_readiness rule
-  // (`renderingTaxonomyMissing` in facts.ts) reads this snapshot field, so a
-  // credentialing profile with no taxonomy still produces the existing claim
-  // readiness issue instead of blocking draft creation here.
   let renderingProviderTaxonomy: string | null = null;
   const providerCredentialingProfileId = normalizeNullable(input.providerCredentialingProfileId);
   if (providerCredentialingProfileId) {
@@ -466,19 +494,36 @@ export async function createProfessionalClaimDraft(
     billing_provider_city: input.billingProvider.city,
     billing_provider_state: input.billingProvider.state,
     billing_provider_zip: input.billingProvider.zip,
+    billing_provider_phone: normalizeNullable(input.billingProvider.phone),
     subscriber_last_name: normalizeText(subscriber!.last_name),
     subscriber_first_name: normalizeText(subscriber!.first_name),
     subscriber_member_id: normalizeText(subscriber!.member_id),
     subscriber_dob: normalizeDate(subscriber!.date_of_birth)!,
     subscriber_gender: "U",
     subscriber_address1: subscriberAddress1,
+    subscriber_address2: subscriberAddress2 || null,
     subscriber_city: subscriberCity,
     subscriber_state: subscriberState,
     subscriber_zip: subscriberZip,
     patient_is_subscriber: subscriberIsClient,
+    patient_relationship_to_insured: "self",
+    patient_last_name: normalizeText(client!.last_name),
+    patient_first_name: normalizeText(client!.first_name),
+    patient_dob: normalizeDate(client!.date_of_birth),
+    patient_gender: normalizeGender(client!.sex_at_birth),
+    patient_address1: normalizeText(client!.address_line_1),
+    patient_city: normalizeText(client!.city),
+    patient_state: normalizeText(client!.state).toUpperCase(),
+    patient_zip: normalizeText(client!.postal_code),
     payer_name: normalizeText(payer!.payer_name),
     payer_id: normalizeText(payer!.payer_id),
-    rendering_same_as_billing: true,
+    insured_group_or_feca_number: normalizeNullable(policy?.group_number) ?? normalizeNullable(subscriber!.group_number),
+    condition_employment_related: false,
+    condition_auto_accident_related: false,
+    condition_auto_accident_state: null,
+    condition_other_accident_related: false,
+    rendering_same_as_billing: false,
+    rendering_provider_npi: normalizeNullable(input.serviceLines[0]?.renderingProviderNpi),
     rendering_provider_taxonomy: renderingProviderTaxonomy,
     service_facility_same_as_billing: true,
   });
@@ -544,8 +589,6 @@ export async function validateProfessionalClaimReadiness(
     .eq("claim_id", claimId)
     .order("line_number", { ascending: true });
 
-  // Reference-table validation: reject claims whose stored DX or CPT/HCPCS codes
-  // are not in the seeded code tables (catches data loaded outside the UI).
   const dxOnClaim = Array.isArray(claim.diagnosis_codes)
     ? [...new Set((claim.diagnosis_codes as unknown[]).map((c) => normalizeText(c).toUpperCase()).filter(Boolean))]
     : [];
@@ -592,163 +635,55 @@ export async function validateProfessionalClaimReadiness(
       if (!Number.isFinite(Number(line.units)) || Number(line.units) <= 0) {
         errors.push({ field: `service_lines.${line.line_number}.units`, message: "Service line units must be greater than zero" });
       }
-      // Diagnosis pointer must reference a valid position (1-based, 1-8)
-      const pointers = Array.isArray(line.diagnosis_pointers) ? line.diagnosis_pointers as unknown[] : [];
-      if (pointers.length === 0) {
-        errors.push({ field: `service_lines.${line.line_number}.diagnosis_pointers`, message: "Service line requires at least one diagnosis pointer" });
-      } else {
-        const diagCount = Array.isArray(claim.diagnosis_codes) ? (claim.diagnosis_codes as unknown[]).length : 0;
-        for (const ptr of pointers) {
-          const ptrNum = Number(ptr);
-          if (!Number.isInteger(ptrNum) || ptrNum < 1 || ptrNum > diagCount) {
-            errors.push({ field: `service_lines.${line.line_number}.diagnosis_pointers`, message: `Diagnosis pointer ${String(ptr)} does not reference a valid diagnosis position (1–${diagCount})` });
-          }
-        }
+      if (!Array.isArray(line.diagnosis_pointers) || line.diagnosis_pointers.length === 0) {
+        errors.push({ field: `service_lines.${line.line_number}.diagnosis_pointers`, message: "Diagnosis pointer is required" });
       }
-      // Place of service required per line
-      addRequired(errors, `service_lines.${line.line_number}.place_of_service`, line.place_of_service ?? claim.place_of_service, "Place of service is required");
+      addPlaceOfServiceError(errors, `service_lines.${line.line_number}.place_of_service`, line.place_of_service);
     }
   }
 
   const { data: snapshot } = await supabase
     .from("claim_parties_snapshot")
-    .select("*")
+    .select("billing_provider_name, billing_provider_npi, billing_provider_tax_id, billing_provider_address1, billing_provider_city, billing_provider_state, billing_provider_zip, subscriber_first_name, subscriber_last_name, subscriber_member_id, subscriber_dob, subscriber_address1, subscriber_city, subscriber_state, subscriber_zip, patient_first_name, patient_last_name, patient_dob, patient_address1, patient_city, patient_state, patient_zip, payer_name, payer_id")
     .eq("claim_id", claimId)
     .maybeSingle();
 
   if (!snapshot) {
-    errors.push({ field: "claim_parties_snapshot", message: "Claim is missing party snapshot" });
+    errors.push({ field: "claim_parties_snapshot", message: "Claim party snapshot is missing" });
   } else {
-    const requiredSnapshotFields = [
-      ["billing_provider_name", "Billing provider name is required"],
-      ["billing_provider_npi", "Billing provider NPI is required"],
-      ["billing_provider_tax_id", "Billing provider tax ID is required"],
-      ["billing_provider_address1", "Billing provider address is required"],
-      ["billing_provider_city", "Billing provider city is required"],
-      ["billing_provider_state", "Billing provider state is required"],
-      ["billing_provider_zip", "Billing provider ZIP is required"],
-      ["subscriber_last_name", "Subscriber last name is required"],
-      ["subscriber_first_name", "Subscriber first name is required"],
-      ["subscriber_member_id", "Subscriber member ID is required"],
-      ["subscriber_dob", "Subscriber DOB is required"],
-      ["subscriber_address1", "Subscriber address is required"],
-      ["subscriber_city", "Subscriber city is required"],
-      ["subscriber_state", "Subscriber state is required"],
-      ["subscriber_zip", "Subscriber ZIP is required"],
-      ["payer_name", "Payer name is required"],
-      ["payer_id", "Payer clearinghouse ID is required"],
-    ] as const;
-
-    for (const [field, message] of requiredSnapshotFields) {
-      addRequired(errors, `claim_parties_snapshot.${field}`, (snapshot as DbRecord)[field], message);
-    }
-
-    addPlaceOfServiceError(errors, "claim.place_of_service", (snapshot as DbRecord).place_of_service);
-
-    // Validate ZIP format (5-digit or 9-digit ZIP+4)
-    const zipPattern = /^\d{5}(-?\d{4})?$/;
-    for (const zipField of ["billing_provider_zip", "subscriber_zip", "patient_zip", "service_facility_zip"] as const) {
-      const zipVal = normalizeText((snapshot as DbRecord)[zipField]);
-      if (zipVal && !zipPattern.test(zipVal)) {
-        errors.push({ field: `claim_parties_snapshot.${zipField}`, message: `${zipField} must be a valid 5 or 9-digit ZIP code` });
-      }
-    }
-
-    const linePosValues = Array.isArray(lines)
-      ? (lines as DbRecord[])
-          .map((line) => normalizePlaceOfService(line.place_of_service ?? claim.place_of_service))
-          .filter(Boolean)
-      : [];
-    for (const pos of linePosValues) {
-      if (!isAllowedPlaceOfService(pos)) {
-        errors.push({
-          field: "claim.place_of_service",
-          message: pos === "10"
-            ? "POS 10 is not allowed. Use 11 (office) or 02 (telehealth)."
-            : `POS ${pos} is not allowed. Use 11 (office) or 02 (telehealth).`,
-        });
-      }
-    }
-
-    // If rendering provider is different from billing, NPI is required
-    if ((snapshot as DbRecord).rendering_same_as_billing === false) {
-      addRequired(errors, "claim_parties_snapshot.rendering_provider_npi", (snapshot as DbRecord).rendering_provider_npi, "Rendering provider NPI is required when different from billing provider");
-    }
-
-    // Client DOB is required
-    if (!(snapshot as DbRecord).patient_is_subscriber) {
-      addRequired(errors, "claim_parties_snapshot.patient_dob", (snapshot as DbRecord).patient_dob, "Client date of birth is required");
-    }
-
-    // NPI format: billing provider NPI must be exactly 10 digits
-    const billingNpi = normalizeText((snapshot as DbRecord).billing_provider_npi);
-    if (billingNpi && !/^\d{10}$/.test(billingNpi)) {
-      errors.push({ field: "claim_parties_snapshot.billing_provider_npi", message: "Billing provider NPI must be exactly 10 digits" });
-    }
-
-    // NPI format: rendering provider NPI when present
-    const renderingNpi = normalizeText((snapshot as DbRecord).rendering_provider_npi);
-    if (renderingNpi && !/^\d{10}$/.test(renderingNpi)) {
-      errors.push({ field: "claim_parties_snapshot.rendering_provider_npi", message: "Rendering provider NPI must be exactly 10 digits" });
-    }
-
-    // PO Box is not permitted for billing provider address per 837P spec
-    const billingAddr = normalizeText((snapshot as DbRecord).billing_provider_address1);
-    if (billingAddr && /^p\.?\s*o\.?\s*box/i.test(billingAddr)) {
-      errors.push({ field: "claim_parties_snapshot.billing_provider_address1", message: "Billing provider address must be a street address, not a PO Box" });
-    }
+    const requiredFields: Array<[string, unknown, string]> = [
+      ["billing_provider_name", snapshot.billing_provider_name, "Billing provider name is required"],
+      ["billing_provider_npi", snapshot.billing_provider_npi, "Billing provider NPI is required"],
+      ["billing_provider_tax_id", snapshot.billing_provider_tax_id, "Billing provider tax ID is required"],
+      ["billing_provider_address1", snapshot.billing_provider_address1, "Billing provider address is required"],
+      ["billing_provider_city", snapshot.billing_provider_city, "Billing provider city is required"],
+      ["billing_provider_state", snapshot.billing_provider_state, "Billing provider state is required"],
+      ["billing_provider_zip", snapshot.billing_provider_zip, "Billing provider ZIP is required"],
+      ["subscriber_first_name", snapshot.subscriber_first_name, "Subscriber first name is required"],
+      ["subscriber_last_name", snapshot.subscriber_last_name, "Subscriber last name is required"],
+      ["subscriber_member_id", snapshot.subscriber_member_id, "Subscriber member ID is required"],
+      ["subscriber_dob", snapshot.subscriber_dob, "Subscriber DOB is required"],
+      ["subscriber_address1", snapshot.subscriber_address1, "Subscriber address is required"],
+      ["subscriber_city", snapshot.subscriber_city, "Subscriber city is required"],
+      ["subscriber_state", snapshot.subscriber_state, "Subscriber state is required"],
+      ["subscriber_zip", snapshot.subscriber_zip, "Subscriber ZIP is required"],
+      ["patient_first_name", snapshot.patient_first_name, "Patient first name is required"],
+      ["patient_last_name", snapshot.patient_last_name, "Patient last name is required"],
+      ["patient_dob", snapshot.patient_dob, "Patient DOB is required"],
+      ["patient_address1", snapshot.patient_address1, "Patient address is required"],
+      ["patient_city", snapshot.patient_city, "Patient city is required"],
+      ["patient_state", snapshot.patient_state, "Patient state is required"],
+      ["patient_zip", snapshot.patient_zip, "Patient ZIP is required"],
+      ["payer_name", snapshot.payer_name, "Payer name is required"],
+      ["payer_id", snapshot.payer_id, "Payer ID is required"],
+    ];
+    for (const [field, value, message] of requiredFields) addRequired(errors, `snapshot.${field}`, value, message);
   }
 
-
-  const ready = errors.length === 0;
-  await supabase
-    .from("professional_claims")
-    .update({
-      validation_errors: errors,
-      last_validated_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", claimId);
-
   return {
-    ok: ready,
-    status: ready ? "ready" : "not_ready",
+    ok: errors.length === 0,
+    status: errors.length === 0 ? "ready" : "not_ready",
     claimId,
     errors,
   };
-}
-
-export async function releaseProfessionalClaimToBatch(
-  claimId: string,
-  organizationId: string,
-): Promise<ClaimReadinessResult> {
-  const readiness = await validateProfessionalClaimReadiness(claimId, organizationId);
-  const supabase = createServerSupabaseAdminClient();
-  if (!supabase) return readiness;
-
-  if (readiness.ok) {
-    await supabase
-      .from("professional_claims")
-      .update({
-        claim_status: "ready_for_batch",
-        validation_errors: [],
-        last_validated_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", claimId)
-      .eq("organization_id", organizationId);
-  } else {
-    await supabase
-      .from("professional_claims")
-      .update({
-        claim_status: "draft",
-        validation_errors: readiness.errors,
-        last_validated_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", claimId)
-      .eq("organization_id", organizationId);
-  }
-
-  return readiness;
 }
