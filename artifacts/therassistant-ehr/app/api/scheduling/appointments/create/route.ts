@@ -4,24 +4,28 @@ import { createServerSupabaseServiceRoleClient } from "@/lib/supabase/server";
 import { addMonthsKeepingClock, checkProviderAvailability } from "@/lib/scheduling/core";
 import { requireOrgAccess } from "@/lib/auth/requireOrgAccess";
 import { getDefaultCaseForClient } from "@/lib/cases/clientCasesService";
-import { ensureMeetingForAppointment } from "@/lib/telehealth/sessions";
 
 type RecurrenceFrequency = "none" | "weekly" | "biweekly" | "monthly";
 type RecurrenceEndMode = "by_date" | "by_count";
+type DbRow = Record<string, unknown>;
 
 function generateUuid() {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
   return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
-function formatError(error: unknown) {
-  if (error instanceof Error && error.message) return error.message;
-  return "Appointment creation failed";
+function text(value: unknown) {
+  return String(value ?? "").trim();
 }
 
-function telehealthUrlFor(token: string) {
-  const base = String(process.env.TELEHEALTH_BASE_URL ?? "https://meet.therassistant.app/session").trim();
-  return `${base.replace(/\/$/, "")}/${token}`;
+function formatError(error: unknown) {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "object" && error !== null) {
+    const e = error as { message?: unknown; details?: unknown; hint?: unknown; code?: unknown };
+    const parts = [e.message, e.details, e.hint, e.code].map(text).filter(Boolean);
+    if (parts.length) return parts.join(" | ");
+  }
+  return "Appointment creation failed";
 }
 
 function buildOccurrenceStarts(
@@ -37,9 +41,7 @@ function buildOccurrenceStarts(
   const hardLimit = 260;
   const normalizedCount = Number.isFinite(sessionCount ?? NaN) ? Math.max(1, Number(sessionCount)) : null;
   const until = endDate ? new Date(endDate) : null;
-  if (until && !Number.isNaN(until.getTime())) {
-    until.setHours(23, 59, 59, 999);
-  }
+  if (until && !Number.isNaN(until.getTime())) until.setHours(23, 59, 59, 999);
 
   for (let index = 0; index < hardLimit; index += 1) {
     let nextStart: Date;
@@ -63,6 +65,56 @@ function buildOccurrenceStarts(
   return starts;
 }
 
+async function findCredentialingProfileForRosterProvider(params: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any;
+  organizationId: string;
+  rosterProvider: DbRow;
+}) {
+  const { supabase, organizationId, rosterProvider } = params;
+  const npi = text(rosterProvider.npi) || text(rosterProvider.individual_npi);
+  const providerName = text(rosterProvider.display_name);
+  const email = text(rosterProvider.email);
+
+  if (npi) {
+    const { data } = await supabase
+      .from("provider_credentialing_profiles")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("individual_npi", npi)
+      .eq("is_active", true)
+      .is("archived_at", null)
+      .maybeSingle();
+    if (data?.id) return String(data.id);
+  }
+
+  if (email) {
+    const { data } = await supabase
+      .from("provider_credentialing_profiles")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("email", email)
+      .eq("is_active", true)
+      .is("archived_at", null)
+      .maybeSingle();
+    if (data?.id) return String(data.id);
+  }
+
+  if (providerName) {
+    const { data } = await supabase
+      .from("provider_credentialing_profiles")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("provider_name", providerName)
+      .eq("is_active", true)
+      .is("archived_at", null)
+      .maybeSingle();
+    if (data?.id) return String(data.id);
+  }
+
+  return null;
+}
+
 async function resolveProviderId(params: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: any;
@@ -72,23 +124,47 @@ async function resolveProviderId(params: {
   const { supabase, organizationId, providerSelector } = params;
   if (!providerSelector) return null;
 
+  const { data: credentialingById } = await supabase
+    .from("provider_credentialing_profiles")
+    .select("id")
+    .eq("organization_id", organizationId)
+    .eq("id", providerSelector)
+    .eq("is_active", true)
+    .is("archived_at", null)
+    .maybeSingle();
+  if (credentialingById?.id) return String(credentialingById.id);
+
   const { data: providerById } = await supabase
     .from("providers")
-    .select("id")
+    .select("id, display_name, email, npi, individual_npi")
     .eq("organization_id", organizationId)
     .eq("id", providerSelector)
     .is("archived_at", null)
     .maybeSingle();
-  if (providerById?.id) return String(providerById.id);
+  if (providerById) {
+    const credentialingId = await findCredentialingProfileForRosterProvider({
+      supabase,
+      organizationId,
+      rosterProvider: providerById as DbRow,
+    });
+    if (credentialingId) return credentialingId;
+  }
 
   const { data: providerByUser } = await supabase
     .from("providers")
-    .select("id")
+    .select("id, display_name, email, npi, individual_npi")
     .eq("organization_id", organizationId)
     .eq("user_id", providerSelector)
     .is("archived_at", null)
     .maybeSingle();
-  if (providerByUser?.id) return String(providerByUser.id);
+  if (providerByUser) {
+    const credentialingId = await findCredentialingProfileForRosterProvider({
+      supabase,
+      organizationId,
+      rosterProvider: providerByUser as DbRow,
+    });
+    if (credentialingId) return credentialingId;
+  }
 
   const { data: staff } = await supabase
     .from("staff_profiles")
@@ -101,40 +177,34 @@ async function resolveProviderId(params: {
 
   if (!staff) return null;
 
-  const firstName = String(staff.first_name ?? "").trim() || "Provider";
-  const lastName = String(staff.last_name ?? "").trim() || "User";
-  const displayName = [String(staff.first_name ?? "").trim(), String(staff.last_name ?? "").trim()]
-    .filter(Boolean)
-    .join(" ");
+  const staffEmail = text(staff.email);
+  const staffName = [staff.first_name, staff.last_name].map(text).filter(Boolean).join(" ");
 
-  const insertedId = generateUuid();
-  const { error: insertErr } = await supabase.from("providers").insert({
-    id: insertedId,
-    organization_id: organizationId,
-    user_id: providerSelector,
-    first_name: firstName,
-    last_name: lastName,
-    display_name: displayName || `${firstName} ${lastName}`,
-    email: staff.email ?? null,
-    provider_type: "clinician",
-    is_active: true,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  });
+  if (staffEmail) {
+    const { data } = await supabase
+      .from("provider_credentialing_profiles")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("email", staffEmail)
+      .eq("is_active", true)
+      .is("archived_at", null)
+      .maybeSingle();
+    if (data?.id) return String(data.id);
+  }
 
-  if (!insertErr) return insertedId;
+  if (staffName) {
+    const { data } = await supabase
+      .from("provider_credentialing_profiles")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("provider_name", staffName)
+      .eq("is_active", true)
+      .is("archived_at", null)
+      .maybeSingle();
+    if (data?.id) return String(data.id);
+  }
 
-  const isDuplicate = String((insertErr as { code?: string } | null)?.code ?? "") === "23505";
-  if (!isDuplicate) return null;
-
-  const { data: afterRace } = await supabase
-    .from("providers")
-    .select("id")
-    .eq("organization_id", organizationId)
-    .eq("user_id", providerSelector)
-    .is("archived_at", null)
-    .maybeSingle();
-  return afterRace?.id ? String(afterRace.id) : null;
+  return null;
 }
 
 export async function POST(request: Request) {
@@ -158,7 +228,6 @@ export async function POST(request: Request) {
       appointmentType?: string;
       memo?: string | null;
       serviceLocation?: "office" | "telehealth";
-      internalNote?: string;
       reminderEmailEnabled?: boolean;
       reminderSmsEnabled?: boolean;
       reminderPortalEnabled?: boolean;
@@ -171,17 +240,15 @@ export async function POST(request: Request) {
       };
     };
 
-    const guard = await requireOrgAccess({
-      requestedOrganizationId: body.organizationId ?? null,
-    });
+    const guard = await requireOrgAccess({ requestedOrganizationId: body.organizationId ?? null });
     if (guard instanceof NextResponse) return guard;
     const organizationId = guard.organizationId;
 
-    const clientId = String(body.clientId ?? "").trim();
-    const providerSelector = String(body.providerId ?? "").trim();
-    const scheduledStartAt = String(body.scheduledStartAt ?? "").trim();
+    const clientId = text(body.clientId);
+    const providerSelector = text(body.providerId);
+    const scheduledStartAt = text(body.scheduledStartAt);
     const durationMinutes = Math.max(15, Number(body.durationMinutes ?? 60));
-    const appointmentType = String(body.appointmentType ?? "").trim();
+    const appointmentType = text(body.appointmentType);
     const memoRaw = typeof body.memo === "string" ? body.memo.trim() : "";
     const memo = memoRaw.length > 0 ? memoRaw : null;
     const serviceLocation = body.serviceLocation ?? (appointmentType.toLowerCase().includes("tele") ? "telehealth" : "office");
@@ -193,15 +260,10 @@ export async function POST(request: Request) {
       );
     }
 
-    const providerId = await resolveProviderId({
-      supabase,
-      organizationId,
-      providerSelector,
-    });
-
+    const providerId = await resolveProviderId({ supabase, organizationId, providerSelector });
     if (!providerId) {
       return NextResponse.json(
-        { success: false, error: "Selected provider could not be resolved to an active provider profile." },
+        { success: false, error: "Selected provider could not be resolved to an active provider credentialing profile." },
         { status: 400 },
       );
     }
@@ -231,25 +293,20 @@ export async function POST(request: Request) {
     const seriesId = recurrenceFrequency === "none" ? null : generateUuid();
     const now = new Date().toISOString();
 
-    // Resolve the case for this appointment series. Caller-supplied wins;
-    // otherwise default to the client's active default case.
     let resolvedCaseId: string | null = body.caseId ?? null;
     if (!resolvedCaseId) {
       const defaultCase = await getDefaultCaseForClient({ organizationId, clientId });
       resolvedCaseId = defaultCase?.id ?? null;
     }
 
-    let providerTelehealthUrl: string | null = null;
-    if (serviceLocation === "telehealth") {
-      const { data: profile } = await supabase
-        .from("provider_credentialing_profiles")
-        .select("telehealth_url")
-        .eq("organization_id", organizationId)
-        .eq("id", providerId)
-        .is("archived_at", null)
-        .maybeSingle();
-      providerTelehealthUrl = (profile as { telehealth_url?: string | null } | null)?.telehealth_url ?? null;
-    }
+    const { data: profile } = await supabase
+      .from("provider_credentialing_profiles")
+      .select("telehealth_url")
+      .eq("organization_id", organizationId)
+      .eq("id", providerId)
+      .is("archived_at", null)
+      .maybeSingle();
+    const providerTelehealthUrl = (profile as { telehealth_url?: string | null } | null)?.telehealth_url ?? null;
 
     if (seriesId) {
       const { error: seriesError } = await supabase.from("appointment_series").insert({
@@ -271,14 +328,7 @@ export async function POST(request: Request) {
     const reminderEmailEnabled = Boolean(body.reminderEmailEnabled);
     const reminderSmsEnabled = Boolean(body.reminderSmsEnabled);
     const reminderPortalEnabled = body.reminderPortalEnabled !== false;
-
-    const createdRows: Array<{
-      id: string;
-      scheduled_start_at: string;
-      telehealth_url?: string;
-      meeting_warning?: string;
-    }> = [];
-    const meetingWarnings: string[] = [];
+    const createdRows: Array<{ id: string; scheduled_start_at: string; telehealth_url?: string | null }> = [];
 
     for (let index = 0; index < starts.length; index += 1) {
       const startAt = starts[index];
@@ -306,17 +356,14 @@ export async function POST(request: Request) {
         );
       }
 
-      const teleToken = serviceLocation === "telehealth" && !providerTelehealthUrl ? generateUuid() : null;
-      const teleUrl = serviceLocation === "telehealth"
-        ? providerTelehealthUrl ?? (teleToken ? telehealthUrlFor(teleToken) : null)
-        : null;
-
+      const teleUrl = serviceLocation === "telehealth" ? providerTelehealthUrl : null;
       const appointmentId = generateUuid();
       const appointmentPayload = {
         id: appointmentId,
         organization_id: organizationId,
         client_id: clientId,
         provider_id: providerId,
+        provider_credentialing_profile_id: providerId,
         insurance_policy_id: body.insurancePolicyId ?? null,
         case_id: resolvedCaseId,
         scheduled_start_at: startAt.toISOString(),
@@ -331,60 +378,12 @@ export async function POST(request: Request) {
 
       const { error: appointmentError } = await supabase.from("appointments").insert(appointmentPayload);
       if (appointmentError) throw appointmentError;
-      void teleToken;
-
-      // Best-effort: auto-create the telehealth meeting at booking time
-      // so the client confirmation/reminder can include the real join URL.
-      // Booking succeeds even if this step fails — we fall back to the
-      // legacy static URL stored on the appointment.
-      let autoMeetingJoinUrl: string | null = null;
-      let autoMeetingWarning: string | null = null;
-      if (serviceLocation === "telehealth") {
-        try {
-          const outcome = await ensureMeetingForAppointment(
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            supabase as any,
-            {
-              id: appointmentId,
-              organizationId,
-              providerId,
-              scheduledStartAt: startAt.toISOString(),
-              scheduledEndAt: endAt.toISOString(),
-              appointmentType,
-              telehealthUrl: teleUrl,
-            },
-            { fallbackOwnerUserId: guard.userId ?? null },
-          );
-          if (outcome.status === "created" || outcome.status === "existing") {
-            autoMeetingJoinUrl = outcome.joinUrl;
-            // Surface the real per-meeting link on the appointment so
-            // existing readers (reminders, FHIR export, calendar UI)
-            // pick it up without changes.
-            await supabase
-              .from("appointments")
-              .update({ telehealth_url: outcome.joinUrl, updated_at: new Date().toISOString() })
-              .eq("id", appointmentId)
-              .eq("organization_id", organizationId);
-          } else if (outcome.status === "fallback" || outcome.status === "skipped") {
-            autoMeetingWarning = outcome.warning;
-          } else if (outcome.status === "credential_error" || outcome.status === "adapter_error") {
-            autoMeetingWarning = `Could not auto-create ${outcome.platform} meeting: ${outcome.error}. Using the legacy URL; reconnect in Settings → Providers.`;
-            console.warn("[appointments/create] auto meeting failed", outcome);
-          }
-        } catch (e) {
-          autoMeetingWarning = e instanceof Error ? e.message : "Telehealth meeting auto-create failed";
-          console.warn("[appointments/create] ensureMeetingForAppointment threw", e);
-        }
-      }
-      void autoMeetingJoinUrl;
 
       createdRows.push({
         id: appointmentId,
         scheduled_start_at: startAt.toISOString(),
-        ...(autoMeetingJoinUrl ? { telehealth_url: autoMeetingJoinUrl } : {}),
-        ...(autoMeetingWarning ? { meeting_warning: autoMeetingWarning } : {}),
+        ...(teleUrl ? { telehealth_url: teleUrl } : {}),
       });
-      if (autoMeetingWarning) meetingWarnings.push(autoMeetingWarning);
 
       const reminderChannels = [
         reminderEmailEnabled ? "email" : null,
@@ -395,15 +394,6 @@ export async function POST(request: Request) {
       if (reminderChannels.length > 0) {
         const scheduledFor = new Date(startAt);
         scheduledFor.setHours(scheduledFor.getHours() - reminderLeadHours);
-
-        // Prefer the per-meeting join URL that the telehealth adapter just
-        // produced; fall back to the legacy static URL only when no
-        // per-appointment link is available. Reminder dispatchers should
-        // read this from the payload so the client receives the link
-        // that matches the booked appointment.
-        const reminderJoinUrl =
-          serviceLocation === "telehealth" ? autoMeetingJoinUrl ?? teleUrl ?? null : null;
-
         const reminderRows = reminderChannels.map((channel) => ({
           id: generateUuid(),
           organization_id: organizationId,
@@ -416,7 +406,7 @@ export async function POST(request: Request) {
             serviceLocation,
             memo,
             leadHours: reminderLeadHours,
-            telehealthUrl: reminderJoinUrl,
+            telehealthUrl: teleUrl,
           },
           created_at: now,
           updated_at: now,
@@ -432,7 +422,6 @@ export async function POST(request: Request) {
       seriesId,
       occurrencesCreated: createdRows.length,
       appointments: createdRows,
-      ...(meetingWarnings.length ? { meetingWarnings } : {}),
     });
   } catch (error) {
     console.error("[POST /api/scheduling/appointments/create]", error);
