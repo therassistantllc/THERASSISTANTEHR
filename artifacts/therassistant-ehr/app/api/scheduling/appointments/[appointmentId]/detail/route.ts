@@ -4,6 +4,16 @@ import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireOrgAccess } from "@/lib/auth/requireOrgAccess";
 type Row = Record<string, unknown>;
 
+function providerDisplayName(provider: Row | null) {
+  if (!provider) return "Unassigned";
+  return (
+    String(provider.provider_name ?? "").trim() ||
+    String(provider.display_name ?? "").trim() ||
+    [provider.first_name, provider.last_name].filter(Boolean).join(" ").trim() ||
+    "Unassigned"
+  );
+}
+
 export async function GET(
   request: Request,
   context: { params: Promise<{ appointmentId: string }> },
@@ -28,7 +38,7 @@ export async function GET(
     const { data: appt, error: apptError } = await supabase
       .from("appointments")
       .select(
-        "id, client_id, provider_id, scheduled_start_at, scheduled_end_at, appointment_status, appointment_type, cpt_code, memo",
+        "id, client_id, provider_id, scheduled_start_at, scheduled_end_at, appointment_status, appointment_type, cpt_code, memo, service_location",
       )
       .eq("organization_id", organizationId)
       .eq("id", appointmentId)
@@ -42,10 +52,6 @@ export async function GET(
       );
     }
 
-    // CPT still falls back to the legacy heuristic (CPT-shaped string
-    // stashed in appointment_type) for rows that predate the dedicated
-    // cpt_code column. Memo no longer falls back to reason — historical
-    // memos have been backfilled into the memo column.
     const apptTypeRaw =
       typeof (appt as Row).appointment_type === "string"
         ? String((appt as Row).appointment_type)
@@ -74,10 +80,11 @@ export async function GET(
           : Promise.resolve({ data: null as Row | null }),
         appt.provider_id
           ? supabase
-              .from("providers")
-              .select("id, first_name, last_name, display_name, credential")
+              .from("provider_credentialing_profiles")
+              .select("id, provider_name, credential_display, individual_npi, group_npi")
               .eq("organization_id", organizationId)
               .eq("id", appt.provider_id)
+              .is("archived_at", null)
               .maybeSingle()
           : Promise.resolve({ data: null as Row | null }),
         appt.client_id
@@ -118,8 +125,6 @@ export async function GET(
       payer = (payerRow ?? null) as Row | null;
     }
 
-    // Latest eligibility — scoped to the appointment's primary policy so
-    // we don't show a status that belongs to a different payer.
     let eligibility: Row | null = null;
     if (appt.client_id && primaryPolicy?.id) {
       const { data: elig } = await supabase
@@ -137,7 +142,6 @@ export async function GET(
       eligibility = (elig ?? null) as Row | null;
     }
 
-    // Derive display status: Active / Inactive / Unknown / Stale / not_checked
     const STALE_MS = 30 * 24 * 60 * 60 * 1000;
     let displayStatus: "active" | "inactive" | "unknown" | "stale" | "not_checked" =
       "not_checked";
@@ -148,15 +152,13 @@ export async function GET(
       const isStale =
         asOf !== null && Date.now() - new Date(asOf).getTime() > STALE_MS;
       if (raw === "active" || raw === "eligible") displayStatus = "active";
-      else if (raw === "inactive" || raw === "ineligible")
-        displayStatus = "inactive";
-      else if (raw === "not_checked" || raw === "" || raw === "pending")
+      else if (raw === "inactive" || raw === "ineligible") displayStatus = "inactive";
+      else if (raw === "not_checked" || raw === "" || raw === "pending") {
         displayStatus = asOf ? "unknown" : "not_checked";
-      else displayStatus = "unknown";
+      } else displayStatus = "unknown";
       if (isStale && displayStatus !== "not_checked") displayStatus = "stale";
     }
 
-    // Open client balance
     let openBalance = 0;
     if (appt.client_id) {
       const { data: invoices } = await supabase
@@ -176,11 +178,7 @@ export async function GET(
       ? [client.first_name, client.last_name].filter(Boolean).join(" ") ||
         "Unknown client"
       : "Unknown client";
-    const providerName = provider
-      ? String(provider.display_name ?? "").trim() ||
-        [provider.first_name, provider.last_name].filter(Boolean).join(" ") ||
-        "Unassigned"
-      : "Unassigned";
+    const providerName = providerDisplayName(provider);
 
     return NextResponse.json({
       success: true,
@@ -194,7 +192,7 @@ export async function GET(
         scheduledEndAt: appt.scheduled_end_at,
         status: appt.appointment_status,
         appointmentType: appt.appointment_type,
-        serviceLocation: null,
+        serviceLocation: appt.service_location ?? null,
         cptCode: cpt,
         memo,
       },
