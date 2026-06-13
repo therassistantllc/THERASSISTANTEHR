@@ -16,7 +16,12 @@ function clean(value: unknown) {
 export async function GET(request: Request) {
   try {
     const supabase = createServerSupabaseAdminClient();
-    if (!supabase) return NextResponse.json({ success: false, error: "Database connection not available" }, { status: 500 });
+    if (!supabase) {
+      return NextResponse.json(
+        { success: false, error: "Database connection not available" },
+        { status: 500 },
+      );
+    }
 
     const { searchParams } = new URL(request.url);
     const guard = await requireOrgAccess({
@@ -24,6 +29,38 @@ export async function GET(request: Request) {
     });
     if (guard instanceof NextResponse) return guard;
     const organizationId = guard.organizationId;
+
+    const { data: credentialingRows, error: credentialingError } = await supabase
+      .from("provider_credentialing_profiles")
+      .select("id, provider_name, credential_display, individual_npi, email, is_active")
+      .eq("organization_id", organizationId)
+      .is("archived_at", null)
+      .eq("is_active", true)
+      .order("provider_name", { ascending: true });
+
+    if (credentialingError && !isMissingRelation(credentialingError)) {
+      return NextResponse.json({ success: false, error: credentialingError.message }, { status: 422 });
+    }
+
+    const credentialingProviders = ((credentialingRows ?? []) as Record<string, unknown>[]).map((row) => {
+      const providerName = clean(row.provider_name) || "Unnamed provider";
+      return {
+        id: clean(row.id),
+        provider_name: providerName,
+        display_name: providerName,
+        credential_display: clean(row.credential_display) || null,
+        npi: clean(row.individual_npi) || null,
+        is_active: row.is_active !== false,
+        user_id: null,
+        email: clean(row.email) || null,
+        credentialing_profile_id: clean(row.id),
+        source: "provider_credentialing_profiles",
+      };
+    });
+
+    if (credentialingProviders.length > 0) {
+      return NextResponse.json({ success: true, organizationId, providers: credentialingProviders });
+    }
 
     const { data, error } = await supabase
       .from("providers")
@@ -66,17 +103,20 @@ export async function GET(request: Request) {
     }
 
     const providers = providerRows.map((row: Record<string, unknown>) => {
-      const first = String(row.first_name ?? "").trim();
-      const last = String(row.last_name ?? "").trim();
-      const display = String(row.display_name ?? "").trim() || [first, last].filter(Boolean).join(" ");
+      const first = clean(row.first_name);
+      const last = clean(row.last_name);
+      const display = clean(row.display_name) || [first, last].filter(Boolean).join(" ");
       return {
-        id: String(row.id),
+        id: clean(row.id),
         provider_name: display || "Unnamed provider",
-        credential_display: row.credential ? String(row.credential) : null,
-        npi: row.npi ? String(row.npi) : null,
+        display_name: display || "Unnamed provider",
+        credential_display: clean(row.credential) || null,
+        npi: clean(row.npi) || null,
         is_active: row.is_active !== false,
-        user_id: row.user_id ? String(row.user_id) : null,
-        email: row.email ? String(row.email) : null,
+        user_id: clean(row.user_id) || null,
+        email: clean(row.email) || null,
+        credentialing_profile_id: null,
+        source: "providers",
       };
     });
 
