@@ -39,7 +39,10 @@ export default async function AppShell({ children }: { children: React.ReactNode
   return (
     <div className={styles.frame}>
       {/* Top utility bar */}
-      <header className={styles.topbar}>
+      <header
+        className={styles.topbar}
+        style={{ height: "72px", padding: "0 24px", background: "var(--card)", borderBottom: "1px solid var(--line)" }}
+      >
         <MobileNavButton />
         <span className={styles.currentDate}>{todayStr}</span>
         {orgName ? (
@@ -65,6 +68,7 @@ export default async function AppShell({ children }: { children: React.ReactNode
           id="app-sidebar"
           data-app-sidebar
           className={styles.sidebar}
+          style={{ width: "252px", top: "72px", height: "calc(100dvh - 72px)", background: "var(--shell-bg)", borderRight: "1px solid var(--line)" }}
           aria-label="Application navigation"
         >
           <Link className={styles.brand} href="/">
