@@ -20,7 +20,13 @@ type AppointmentRow = {
   scheduled_end_at: string | null;
   appointment_status: string | null;
   appointment_type: string | null;
+  service_location: string | null;
   cpt_code: string | null;
+  check_in_at?: string | null;
+  client_arrival_status?: string | null;
+  client_arrival_status_at?: string | null;
+  check_in_review_needed?: boolean | null;
+  check_in_review_reason?: string | null;
 };
 
 type ClientNameRow = { first_name?: string | null; last_name?: string | null };
@@ -34,67 +40,19 @@ function displayProviderName(provider: ProviderCredentialingRow | null | undefin
   return name || "Unassigned";
 }
 
-async function listAppointmentsFallback(params: {
-  supabase: any;
-  organizationId: string;
-  fromIso: string;
-  toIso: string;
-  limit: number;
-  offset: number;
+function calendarStatus(row: AppointmentRow): string {
+  const raw = String(row.appointment_status ?? "scheduled");
+  if (raw === "scheduled" && row.check_in_at) return "checked_in";
+  return raw;
+}
+
+function mapRows(params: {
+  rows: AppointmentRow[];
+  clientById: Map<string, ClientNameRow>;
+  providerById: Map<string, ProviderCredentialingRow>;
 }) {
-  const { supabase, organizationId, fromIso, toIso, limit, offset } = params;
-
-  const [{ count, error: countError }, { data: appointmentRows, error: appointmentsError }] = await Promise.all([
-    (supabase as any)
-      .from("appointments")
-      .select("id", { count: "exact", head: true })
-      .eq("organization_id", organizationId)
-      .is("archived_at", null)
-      .gte("scheduled_start_at", fromIso)
-      .lt("scheduled_start_at", toIso),
-    (supabase as any)
-      .from("appointments")
-      .select(
-        "id, client_id, provider_id, scheduled_start_at, scheduled_end_at, appointment_status, appointment_type, cpt_code",
-      )
-      .eq("organization_id", organizationId)
-      .is("archived_at", null)
-      .gte("scheduled_start_at", fromIso)
-      .lt("scheduled_start_at", toIso)
-      .order("scheduled_start_at", { ascending: true })
-      .range(offset, offset + limit - 1),
-  ]);
-
-  if (countError) throw countError;
-  if (appointmentsError) throw appointmentsError;
-
-  const rows = (appointmentRows ?? []) as AppointmentRow[];
-  const clientIds = Array.from(new Set(rows.map((r) => r.client_id).filter((id): id is string => Boolean(id))));
-  const providerIds = Array.from(new Set(rows.map((r) => r.provider_id).filter((id): id is string => Boolean(id))));
-
-  const [clientsResult, providersResult] = await Promise.all([
-    clientIds.length > 0
-      ? (supabase as any).from("clients").select("id, first_name, last_name").in("id", clientIds)
-      : Promise.resolve({ data: [], error: null }),
-    providerIds.length > 0
-      ? (supabase as any)
-          .from("provider_credentialing_profiles")
-          .select("id, provider_name, credential_display")
-          .in("id", providerIds)
-      : Promise.resolve({ data: [], error: null }),
-  ]);
-
-  if (clientsResult.error) throw clientsResult.error;
-  if (providersResult.error) throw providersResult.error;
-
-  const clientById = new Map<string, ClientNameRow>(
-    (clientsResult.data ?? []).map((c: any) => [String(c.id), c]),
-  );
-  const providerById = new Map<string, ProviderCredentialingRow>(
-    (providersResult.data ?? []).map((p: any) => [String(p.id), p]),
-  );
-
-  const appointments = rows.map((r) => {
+  const { rows, clientById, providerById } = params;
+  return rows.map((r) => {
     const client = r.client_id ? clientById.get(r.client_id) : null;
     const provider = r.provider_id ? providerById.get(r.provider_id) : null;
     const clientName = [client?.first_name, client?.last_name].filter(Boolean).join(" ").trim() || "Unknown client";
@@ -113,16 +71,17 @@ async function listAppointmentsFallback(params: {
       providerName,
       scheduledStartAt: r.scheduled_start_at,
       scheduledEndAt: r.scheduled_end_at,
-      status: r.appointment_status,
+      status: calendarStatus(r),
       appointmentType: r.appointment_type,
+      serviceLocation: r.service_location,
       cptCode,
+      checkInAt: r.check_in_at ?? null,
+      arrivalStatus: r.client_arrival_status ?? null,
+      arrivalStatusAt: r.client_arrival_status_at ?? null,
+      checkInReviewNeeded: Boolean(r.check_in_review_needed),
+      checkInReviewReason: r.check_in_review_reason ?? null,
     };
   });
-
-  return {
-    appointments,
-    totalCount: Number(count ?? 0),
-  };
 }
 
 export async function GET(request: Request) {
@@ -178,73 +137,58 @@ export async function GET(request: Request) {
       );
     }
 
-    const { data, error } = await (supabase as any).rpc("scheduling_appointments_page", {
-      p_organization_id: organizationId,
-      p_from: fromDate.toISOString(),
-      p_to: toDate.toISOString(),
-      p_limit: limit,
-      p_offset: offset,
-    });
+    const [{ count, error: countError }, { data: appointmentRows, error: appointmentsError }] = await Promise.all([
+      (supabase as any)
+        .from("appointments")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", organizationId)
+        .is("archived_at", null)
+        .gte("scheduled_start_at", fromDate.toISOString())
+        .lt("scheduled_start_at", toDate.toISOString()),
+      (supabase as any)
+        .from("appointments")
+        .select(
+          "id, client_id, provider_id, scheduled_start_at, scheduled_end_at, appointment_status, appointment_type, service_location, cpt_code, check_in_at, client_arrival_status, client_arrival_status_at, check_in_review_needed, check_in_review_reason",
+        )
+        .eq("organization_id", organizationId)
+        .is("archived_at", null)
+        .gte("scheduled_start_at", fromDate.toISOString())
+        .lt("scheduled_start_at", toDate.toISOString())
+        .order("scheduled_start_at", { ascending: true })
+        .range(offset, offset + limit - 1),
+    ]);
 
-    if (error) {
-      const errorCode = typeof (error as { code?: unknown })?.code === "string" ? (error as { code: string }).code : "";
-      const isRpcMissing = errorCode === "PGRST202";
-      if (!isRpcMissing) {
-        console.error("Appointments list query failed", error);
-        return NextResponse.json(
-          { success: false, error: "Failed to load appointments" },
-          { status: 500 },
-        );
-      }
+    if (countError) throw countError;
+    if (appointmentsError) throw appointmentsError;
 
-      console.warn("scheduling_appointments_page RPC not available; using fallback query path");
-      const fallback = await listAppointmentsFallback({
-        supabase,
-        organizationId,
-        fromIso: fromDate.toISOString(),
-        toIso: toDate.toISOString(),
-        limit,
-        offset,
-      });
+    const rows = (appointmentRows ?? []) as AppointmentRow[];
+    const clientIds = Array.from(new Set(rows.map((r) => r.client_id).filter((id): id is string => Boolean(id))));
+    const providerIds = Array.from(new Set(rows.map((r) => r.provider_id).filter((id): id is string => Boolean(id))));
 
-      return NextResponse.json({
-        success: true,
-        organizationId,
-        from,
-        to,
-        pagination: {
-          limit,
-          offset,
-          returned: fallback.appointments.length,
-          totalCount: fallback.totalCount,
-          hasMore: offset + fallback.appointments.length < fallback.totalCount,
-        },
-        appointments: fallback.appointments,
-      });
-    }
+    const [clientsResult, providersResult] = await Promise.all([
+      clientIds.length > 0
+        ? (supabase as any).from("clients").select("id, first_name, last_name").in("id", clientIds)
+        : Promise.resolve({ data: [], error: null }),
+      providerIds.length > 0
+        ? (supabase as any)
+            .from("provider_credentialing_profiles")
+            .select("id, provider_name, credential_display")
+            .in("id", providerIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
 
-    const rows = (data ?? []) as Array<Record<string, unknown>>;
-    const totalCount = rows.length > 0 ? Number(rows[0].total_count ?? 0) : 0;
+    if (clientsResult.error) throw clientsResult.error;
+    if (providersResult.error) throw providersResult.error;
 
-    const appointments = rows.map((r) => {
-      const apptType = typeof r.appointment_type === "string" ? r.appointment_type : "";
-      const cptCode =
-        (typeof r.cpt_code === "string" && r.cpt_code) ||
-        (/^9\d{4}$/.test(apptType) ? apptType : null);
+    const clientById = new Map<string, ClientNameRow>(
+      (clientsResult.data ?? []).map((c: any) => [String(c.id), c]),
+    );
+    const providerById = new Map<string, ProviderCredentialingRow>(
+      (providersResult.data ?? []).map((p: any) => [String(p.id), p]),
+    );
 
-      return {
-        id: String(r.id),
-        clientId: r.client_id ? String(r.client_id) : null,
-        clientName: String(r.client_name ?? "Unknown client"),
-        providerId: r.provider_id ? String(r.provider_id) : null,
-        providerName: String(r.provider_name ?? "Unassigned"),
-        scheduledStartAt: r.scheduled_start_at,
-        scheduledEndAt: r.scheduled_end_at,
-        status: r.appointment_status,
-        appointmentType: r.appointment_type,
-        cptCode,
-      };
-    });
+    const appointments = mapRows({ rows, clientById, providerById });
+    const totalCount = Number(count ?? 0);
 
     return NextResponse.json({
       success: true,
