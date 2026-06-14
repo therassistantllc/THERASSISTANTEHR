@@ -5,6 +5,39 @@ import { requireOrgAccess } from "@/lib/auth/requireOrgAccess";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type DbRow = Record<string, any>;
 
+const ENHANCED_SELECT = "id, scheduled_start_at, scheduled_end_at, appointment_status, appointment_type, memo, service_location, check_in_at, client_arrival_status, client_arrival_status_at, check_in_review_needed, check_in_review_reason, check_in_answers, cancelled_at, cancellation_reason, provider_id, insurance_policy_id, created_at";
+const BASE_SELECT = "id, scheduled_start_at, scheduled_end_at, appointment_status, appointment_type, memo, check_in_at, cancelled_at, cancellation_reason, provider_id, insurance_policy_id, created_at";
+
+function isMissingColumnError(error: unknown): boolean {
+  const message = String((error as { message?: unknown } | null)?.message ?? error ?? "").toLowerCase();
+  return message.includes("column") && message.includes("does not exist");
+}
+
+async function fetchClientAppointments(params: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any;
+  organizationId: string;
+  clientId: string;
+}) {
+  const { supabase, organizationId, clientId } = params;
+  const baseQuery = (selectColumns: string) =>
+    supabase
+      .from("appointments")
+      .select(selectColumns)
+      .eq("organization_id", organizationId)
+      .eq("client_id", clientId)
+      .is("archived_at", null)
+      .order("scheduled_start_at", { ascending: false })
+      .limit(50);
+
+  const enhanced = await baseQuery(ENHANCED_SELECT);
+  if (!enhanced.error) return enhanced;
+  if (!isMissingColumnError(enhanced.error)) return enhanced;
+
+  console.warn("Enhanced appointment check-in columns are not available yet; using base client appointment select.");
+  return baseQuery(BASE_SELECT);
+}
+
 export async function GET(request: Request, context: { params: Promise<{ clientId: string }> }) {
   try {
     const supabase = createServerSupabaseAdminClient();
@@ -18,14 +51,7 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
     if (guard instanceof NextResponse) return guard;
     const organizationId = guard.organizationId;
 
-    const { data: appointments, error } = await supabase
-      .from("appointments")
-      .select("id, scheduled_start_at, scheduled_end_at, appointment_status, appointment_type, memo, service_location, check_in_at, client_arrival_status, client_arrival_status_at, check_in_review_needed, check_in_review_reason, check_in_answers, cancelled_at, cancellation_reason, provider_id, insurance_policy_id, created_at")
-      .eq("organization_id", organizationId)
-      .eq("client_id", clientId)
-      .is("archived_at", null)
-      .order("scheduled_start_at", { ascending: false })
-      .limit(50);
+    const { data: appointments, error } = await fetchClientAppointments({ supabase, organizationId, clientId });
 
     if (error) return NextResponse.json({ success: false, error: error.message }, { status: 422 });
 
@@ -51,12 +77,12 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
       status: appt.appointment_status as string | null,
       type: appt.appointment_type as string | null,
       memo: appt.memo as string | null,
-      serviceLocation: appt.service_location as string | null,
+      serviceLocation: (appt.service_location ?? null) as string | null,
       checkedInAt: appt.check_in_at as string | null,
-      arrivalStatus: appt.client_arrival_status as string | null,
-      arrivalStatusAt: appt.client_arrival_status_at as string | null,
+      arrivalStatus: (appt.client_arrival_status ?? null) as string | null,
+      arrivalStatusAt: (appt.client_arrival_status_at ?? null) as string | null,
       checkInReviewNeeded: Boolean(appt.check_in_review_needed),
-      checkInReviewReason: appt.check_in_review_reason as string | null,
+      checkInReviewReason: (appt.check_in_review_reason ?? null) as string | null,
       checkInAnswers: (appt.check_in_answers ?? null) as Record<string, unknown> | null,
       cancelledAt: appt.cancelled_at as string | null,
       cancellationReason: appt.cancellation_reason as string | null,
