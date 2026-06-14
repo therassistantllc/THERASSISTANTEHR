@@ -178,7 +178,8 @@ export async function intakeEra835(input: IntakeEra835Input): Promise<IntakeEra8
           clp05_patient_responsibility: claim.clp05PatientResponsibility,
           payer_claim_control_number: claim.payerClaimControlNumber,
           claim_match_status: match ? "matched" : "unmatched",
-          posting_status: match ? "ready" : "blocked",
+          // For unmatched ERA payments, set posting_status to "ready" so claimless rows are not auto-blocked.
+          posting_status: "ready",
           cas_adjustments: claim.casAdjustments,
           service_lines: claim.serviceLines,
           raw_segments: claim.rawSegments,
