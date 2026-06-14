@@ -20,6 +20,14 @@ function getOrg() {
   return params.get("organizationId") || process.env.NEXT_PUBLIC_ORGANIZATION_ID || DEFAULT_ORG_ID;
 }
 
+function matchClientHref(row: EraRow, organizationId: string) {
+  const qs = new URLSearchParams({ organizationId });
+  if (row.patientName && row.patientName !== "Unknown client") {
+    qs.set("patientName", row.patientName);
+  }
+  return `/billing/unmatched-era/${encodeURIComponent(row.eraClaimPaymentId)}/match-client?${qs.toString()}`;
+}
+
 export default function ClaimlessEraMatchLinks() {
   const organizationId = useMemo(() => getOrg(), []);
   const [rows, setRows] = useState<EraRow[]>([]);
@@ -43,7 +51,7 @@ export default function ClaimlessEraMatchLinks() {
       {rows.slice(0, 10).map((row) => (
         <div key={row.eraClaimPaymentId} style={{ display: "flex", justifyContent: "space-between", gap: 10, borderTop: "1px solid #e2e8f0", paddingTop: 8 }}>
           <span>{row.patientName || row.claimNumberFromEra || row.payerName || "ERA row"}</span>
-          <Link href={`/billing/unmatched-era/${encodeURIComponent(row.eraClaimPaymentId)}/match-client?organizationId=${encodeURIComponent(organizationId)}`}>Match client</Link>
+          <Link href={matchClientHref(row, organizationId)}>Match client</Link>
         </div>
       ))}
     </section>
