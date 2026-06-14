@@ -17,6 +17,8 @@ const shouldStartWebServer =
   !env.PLAYWRIGHT_BASE_URL && !env.BASE_URL;
 
 const e2eKey = env.E2E_CHECK_VALUE ?? 'local-playwright-system-test';
+const localPublicUrl = env.NEXT_PUBLIC_SUPABASE_URL ?? 'http://127.0.0.1:54321';
+const localPublicKey = env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? 'local-playwright-key';
 
 export default defineConfig({
   testDir: './tests',
@@ -51,6 +53,8 @@ export default defineConfig({
           PORT: String(port),
           NEXT_TELEMETRY_DISABLED: '1',
           E2E_CHECK_VALUE: e2eKey,
+          NEXT_PUBLIC_SUPABASE_URL: localPublicUrl,
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: localPublicKey,
         },
       }
     : undefined,
