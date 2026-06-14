@@ -33,15 +33,15 @@ export default async function AppShell({ children }: { children: React.ReactNode
     return <>{children}</>;
   }
   const orgName = await fetchOrgName();
+  // compute today's date label
+  const todayStr = new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+
   return (
     <div className={styles.frame}>
       {/* Top utility bar */}
       <header className={styles.topbar}>
         <MobileNavButton />
-        <Link className={styles.brand} href="/">
-          <span className={styles.brandName}>THERASSISTANT</span>
-          <span className={styles.brandTag}>EHR</span>
-        </Link>
+        <span className={styles.currentDate}>{todayStr}</span>
         {orgName ? (
           <span className={styles.orgName} title="Organization" style={{ textDecoration: "none" }}>
             {orgName}
@@ -52,9 +52,11 @@ export default async function AppShell({ children }: { children: React.ReactNode
           </span>
         )}
         <div className={styles.topbarSpacer} />
-        <div className={styles.topbarRight}>
-          <span className={styles.userAvatar} aria-label="User menu">TA</span>
-        </div>
+        <input type="text" placeholder="Search" className={styles.searchBox} />
+        <button type="button" className={styles.notificationButton} aria-label="Notifications">
+          {'\uD83D\uDD14'}
+        </button>
+        <span className={styles.userAvatar} aria-label="User menu">TA</span>
       </header>
 
       {/* Body: sidebar + content */}
@@ -65,6 +67,10 @@ export default async function AppShell({ children }: { children: React.ReactNode
           className={styles.sidebar}
           aria-label="Application navigation"
         >
+          <Link className={styles.brand} href="/">
+            <span className={styles.brandName}>THERASSISTANT</span>
+            <span className={styles.brandTag}>EHR</span>
+          </Link>
           <AppSidebarNav />
         </aside>
         <div className={styles.content}>
