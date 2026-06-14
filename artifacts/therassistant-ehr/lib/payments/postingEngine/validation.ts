@@ -18,21 +18,34 @@ import type {
 /** Money tolerance for "balanced" checks. Half a cent. */
 export const POSTING_BALANCE_TOLERANCE = 0.005;
 
-function casGroupCode(adjustment: EraClaimPaymentRow["cas_adjustments"][number]) {
+type CasAdjustmentLike = EraClaimPaymentRow["cas_adjustments"][number];
+
+function casGroupCode(adjustment: CasAdjustmentLike) {
   return (adjustment.groupCode ?? adjustment.group_code ?? "").toString().toUpperCase();
 }
 
-function casReasonCode(adjustment: EraClaimPaymentRow["cas_adjustments"][number]) {
+function casReasonCode(adjustment: CasAdjustmentLike) {
   return (adjustment.reasonCode ?? adjustment.reason_code ?? "").toString();
 }
 
 function sumAdjustments(
-  adjustments: EraClaimPaymentRow["cas_adjustments"],
+  adjustments: CasAdjustmentLike[],
   groupCodeFilter?: string,
 ) {
   return (adjustments ?? [])
     .filter((adj) => !groupCodeFilter || casGroupCode(adj) === groupCodeFilter)
     .reduce((sum, adj) => sum + Number(adj.amount ?? 0), 0);
+}
+
+function allCasAdjustments(row: EraClaimPaymentRow): CasAdjustmentLike[] {
+  const serviceLineCas = (row.service_lines ?? []).flatMap((line) =>
+    Array.isArray(line.adjustments)
+      ? line.adjustments
+      : Array.isArray(line.cas_adjustments)
+        ? line.cas_adjustments
+        : [],
+  );
+  return [...(row.cas_adjustments ?? []), ...serviceLineCas];
 }
 
 function round2(n: number) {
@@ -50,12 +63,26 @@ export function validateEra835Posting(row: EraClaimPaymentRow): ValidationResult
 
   // ── BLOCKING ──────────────────────────────────────────────────────────────
 
-  if (row.claim_match_status !== "matched" || !row.professional_claim_id) {
+  if (!row.professional_claim_id && !row.client_id) {
+    blocking.push({
+      severity: "blocking",
+      code: "claim_or_client_not_matched",
+      field: "claim_match_status",
+      message: "ERA claim payment is not matched to a claim or client and cannot be posted.",
+    });
+  } else if (!row.professional_claim_id && row.client_id) {
+    warning.push({
+      severity: "warning",
+      code: "claimless_patient_account_post",
+      field: "professional_claim_id",
+      message: "ERA claim payment has no matching claim; it will post to the client's account ledger.",
+    });
+  } else if (row.claim_match_status !== "matched") {
     blocking.push({
       severity: "blocking",
       code: "claim_not_matched",
       field: "claim_match_status",
-      message: "ERA claim payment is not matched to a claim and cannot be posted.",
+      message: "ERA claim payment is linked to a claim but is not marked matched.",
     });
   }
 
@@ -71,7 +98,9 @@ export function validateEra835Posting(row: EraClaimPaymentRow): ValidationResult
   const charge = Number(row.clp03_total_charge ?? 0);
   const insurancePayment = Number(row.clp04_payment_amount ?? 0);
   const patientResp = Number(row.clp05_patient_responsibility ?? 0);
-  const casTotal = sumAdjustments(row.cas_adjustments);
+  const allCas = allCasAdjustments(row);
+  const patientCasTotal = sumAdjustments(allCas, "PR");
+  const nonPatientCasTotal = sumAdjustments(allCas) - patientCasTotal;
 
   if (insurancePayment < 0) {
     blocking.push({
@@ -93,7 +122,8 @@ export function validateEra835Posting(row: EraClaimPaymentRow): ValidationResult
 
   // Balance check: charge ≈ payment + adjustments + patient_responsibility.
   // 835 spec: CLP03 = CLP04 + Σ(CAS amounts) + CLP05 (for the claim line).
-  const expected = round2(insurancePayment + casTotal + patientResp);
+  // PR CAS rows explain CLP05; they do not reduce the client ledger balance.
+  const expected = round2(insurancePayment + nonPatientCasTotal + patientResp);
   const actualCharge = round2(charge);
   const variance = round2(expected - actualCharge);
 
@@ -103,7 +133,7 @@ export function validateEra835Posting(row: EraClaimPaymentRow): ValidationResult
       severity: "blocking",
       code: "balance_mismatch",
       field: "clp03_total_charge",
-      message: `Posting does not balance: payment ${insurancePayment.toFixed(2)} + adjustments ${casTotal.toFixed(2)} + client ${patientResp.toFixed(2)} = ${expected.toFixed(2)}, but charge is ${actualCharge.toFixed(2)} (variance ${variance.toFixed(2)}).`,
+      message: `Posting does not balance: payment ${insurancePayment.toFixed(2)} + payer adjustments ${nonPatientCasTotal.toFixed(2)} + client ${patientResp.toFixed(2)} = ${expected.toFixed(2)}, but charge is ${actualCharge.toFixed(2)} (variance ${variance.toFixed(2)}).`,
     });
   } else if (Math.abs(variance) > POSTING_BALANCE_TOLERANCE) {
     // ½ cent .. 1 cent — warn (rounding noise).
@@ -154,8 +184,17 @@ export function validateEra835Posting(row: EraClaimPaymentRow): ValidationResult
     }
   }
 
+  if (patientCasTotal > 0 && Math.abs(patientCasTotal - patientResp) > 0.02) {
+    warning.push({
+      severity: "warning",
+      code: "patient_responsibility_cas_mismatch",
+      field: "clp05_patient_responsibility",
+      message: `PR CAS totals ${patientCasTotal.toFixed(2)} but CLP05 client responsibility is ${patientResp.toFixed(2)}.`,
+    });
+  }
+
   // Denial-like signal: zero payment, nonzero adjustments, no client resp.
-  if (insurancePayment === 0 && casTotal > 0 && patientResp === 0) {
+  if (insurancePayment === 0 && nonPatientCasTotal > 0 && patientResp === 0) {
     warning.push({
       severity: "warning",
       code: "likely_denial",
