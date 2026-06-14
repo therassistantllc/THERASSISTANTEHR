@@ -42,37 +42,23 @@ create policy client_ledger_entries_org_policy on public.client_ledger_entries
   for all to authenticated
   using (
     organization_id::text = coalesce(auth.jwt() ->> 'organization_id', auth.jwt() -> 'app_metadata' ->> 'organization_id', '')
-    or exists (
-      select 1
-      from public.billing_company_organization_access bcoa
-      where bcoa.client_organization_id = client_ledger_entries.organization_id
-        and bcoa.billing_company_organization_id::text = coalesce(auth.jwt() ->> 'organization_id', auth.jwt() -> 'app_metadata' ->> 'organization_id', '')
-        and bcoa.access_status = 'active'
-        and bcoa.archived_at is null
-        and ('view_billing' = any(bcoa.scopes) or '*' = any(bcoa.scopes))
-    )
   )
   with check (
     organization_id::text = coalesce(auth.jwt() ->> 'organization_id', auth.jwt() -> 'app_metadata' ->> 'organization_id', '')
-    or exists (
-      select 1
-      from public.billing_company_organization_access bcoa2
-      where bcoa2.client_organization_id = client_ledger_entries.organization_id
-        and bcoa2.billing_company_organization_id::text = coalesce(auth.jwt() ->> 'organization_id', auth.jwt() -> 'app_metadata' ->> 'organization_id', '')
-        and bcoa2.access_status = 'active'
-        and bcoa2.archived_at is null
-        and ('view_billing' = any(bcoa2.scopes) or '*' = any(bcoa2.scopes))
-    )
   );
 
--- Extend claim_match_status enumeration to support patient-matched claimless posts
 alter table public.era_claim_payments
   drop constraint if exists era_claim_payments_claim_match_status_check;
 alter table public.era_claim_payments
   add constraint era_claim_payments_claim_match_status_check
-    check (claim_match_status in ('matched','unmatched','ambiguous','patient_matched'));
+    check (claim_match_status in ('matched','unmatched','ambiguous','patient_matched','manual_posting','pending_claim_creation','ignored'));
 
--- Ensure unmatched rows with a professional claim or client are ready for posting
+alter table public.era_claim_payments
+  drop constraint if exists era_claim_payments_posting_status_check;
+alter table public.era_claim_payments
+  add constraint era_claim_payments_posting_status_check
+    check (posting_status in ('ready','posted','blocked','skipped','in_progress','ignored'));
+
 update public.era_claim_payments
   set posting_status = 'ready'
   where posting_status = 'blocked'
