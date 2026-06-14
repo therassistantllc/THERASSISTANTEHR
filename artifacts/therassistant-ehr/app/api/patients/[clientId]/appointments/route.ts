@@ -20,7 +20,7 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
 
     const { data: appointments, error } = await supabase
       .from("appointments")
-      .select("id, scheduled_start_at, scheduled_end_at, appointment_status, appointment_type, memo, check_in_at, cancelled_at, cancellation_reason, provider_id, insurance_policy_id, created_at")
+      .select("id, scheduled_start_at, scheduled_end_at, appointment_status, appointment_type, memo, service_location, check_in_at, client_arrival_status, client_arrival_status_at, check_in_review_needed, check_in_review_reason, check_in_answers, cancelled_at, cancellation_reason, provider_id, insurance_policy_id, created_at")
       .eq("organization_id", organizationId)
       .eq("client_id", clientId)
       .is("archived_at", null)
@@ -51,7 +51,13 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
       status: appt.appointment_status as string | null,
       type: appt.appointment_type as string | null,
       memo: appt.memo as string | null,
+      serviceLocation: appt.service_location as string | null,
       checkedInAt: appt.check_in_at as string | null,
+      arrivalStatus: appt.client_arrival_status as string | null,
+      arrivalStatusAt: appt.client_arrival_status_at as string | null,
+      checkInReviewNeeded: Boolean(appt.check_in_review_needed),
+      checkInReviewReason: appt.check_in_review_reason as string | null,
+      checkInAnswers: (appt.check_in_answers ?? null) as Record<string, unknown> | null,
       cancelledAt: appt.cancelled_at as string | null,
       cancellationReason: appt.cancellation_reason as string | null,
       providerId: appt.provider_id as string | null,

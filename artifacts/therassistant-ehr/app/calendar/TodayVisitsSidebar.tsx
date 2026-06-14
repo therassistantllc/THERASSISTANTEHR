@@ -31,7 +31,7 @@ function statusGroup(status: string): GroupKey {
 const GROUP_ORDER: GroupKey[] = ["in_progress", "upcoming", "completed", "blocked"];
 
 const GROUP_LABELS: Record<GroupKey, string> = {
-  in_progress: "In Progress",
+  in_progress: "Checked In / In Progress",
   upcoming: "Not Checked In",
   completed: "Completed",
   blocked: "No Show / Cancelled",
