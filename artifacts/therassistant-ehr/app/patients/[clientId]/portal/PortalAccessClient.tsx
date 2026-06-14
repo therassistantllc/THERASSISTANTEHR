@@ -175,9 +175,14 @@ export default function PortalAccessClient({ clientId }: { clientId: string }) {
             Manage portal invites for {patientName}.
           </p>
         </div>
-        <Link href={`/clients/${clientId}`} className="summary-rail-action">
-          Back to chart
-        </Link>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <Link href={`/patients/${clientId}/portal/preview`} className="summary-rail-action">
+            Preview patient portal
+          </Link>
+          <Link href={`/clients/${clientId}`} className="summary-rail-action">
+            Back to chart
+          </Link>
+        </div>
       </header>
 
       {loading ? (
