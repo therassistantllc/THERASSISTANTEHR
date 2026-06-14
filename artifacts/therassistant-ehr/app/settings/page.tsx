@@ -11,7 +11,7 @@ const rows: SettingsIndexRow[] = [
     settingArea: "Organizations",
     purpose: "Review organization profile and legal entity details.",
     route: "/settings/organizations",
-    status: "Placeholder",
+    status: "Live",
   },
   {
     settingArea: "Payers",
