@@ -16,7 +16,33 @@ type Appointment = {
   cancelledAt: string | null;
   providerId: string | null;
   createdAt: string | null;
+  serviceLocation: string | null;
+  arrivalStatus: string | null;
+  arrivalStatusAt: string | null;
+  checkInReviewNeeded: boolean;
+  checkInReviewReason: string | null;
+  checkInAnswers: Record<string, unknown> | null;
   encounter: { id: string; status: string | null; serviceDate: string | null } | null;
+};
+
+type CheckInAnswers = {
+  moodRating: string;
+  sessionFocus: string;
+  goalFocus: string;
+  symptomChange: string;
+  safetyConcern: string;
+  medicationChange: string;
+  adminConcern: string;
+};
+
+const EMPTY_ANSWERS: CheckInAnswers = {
+  moodRating: "",
+  sessionFocus: "",
+  goalFocus: "",
+  symptomChange: "none",
+  safetyConcern: "no",
+  medicationChange: "no",
+  adminConcern: "",
 };
 
 function formatDate(v: string | null | undefined) {
@@ -33,6 +59,21 @@ function statusClass(v: string | null | undefined) {
   return "status";
 }
 
+function isTelehealth(appt: Appointment): boolean {
+  return /telehealth|video|virtual|remote/i.test(String(appt.serviceLocation ?? ""));
+}
+
+function arrivalLabel(v: string | null | undefined): string {
+  switch (v) {
+    case "on_my_way":
+      return "On my way";
+    case "arrived":
+      return "I'm here";
+    default:
+      return "—";
+  }
+}
+
 export default function VisitsAppointmentsPage() {
   const params = useParams<{ clientId?: string; id?: string }>();
   const clientId = params?.clientId ?? params?.id ?? "";
@@ -43,6 +84,9 @@ export default function VisitsAppointmentsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [schedulerOpen, setSchedulerOpen] = useState(false);
+  const [checkInOpenId, setCheckInOpenId] = useState<string | null>(null);
+  const [answers, setAnswers] = useState<CheckInAnswers>(EMPTY_ANSWERS);
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!clientId || !orgId) return;
@@ -61,6 +105,32 @@ export default function VisitsAppointmentsPage() {
   }, [clientId, orgId]);
 
   useEffect(() => { void load(); }, [load]);
+
+  async function postCheckIn(appt: Appointment, action: "on_my_way" | "arrived" | "complete_check_in") {
+    setBusyId(appt.id);
+    setError(null);
+    try {
+      const payload: Record<string, unknown> = { action };
+      if (action === "complete_check_in") payload.answers = answers;
+      const r = await fetch(
+        `/api/patients/${encodeURIComponent(clientId)}/appointments/${encodeURIComponent(appt.id)}/check-in?organizationId=${encodeURIComponent(orgId)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+      );
+      const json = await r.json().catch(() => null) as { success?: boolean; error?: string } | null;
+      if (!r.ok || !json?.success) throw new Error(json?.error ?? "Check-in update failed");
+      setCheckInOpenId(null);
+      setAnswers(EMPTY_ANSWERS);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Check-in update failed");
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   const orgQ = orgId ? `?organizationId=${encodeURIComponent(orgId)}` : "";
 
@@ -97,55 +167,125 @@ export default function VisitsAppointmentsPage() {
               <tr>
                 <th>Date / Time</th>
                 <th>Type</th>
-                <th>Memo</th>
+                <th>Location</th>
                 <th>Status</th>
+                <th>Arrival</th>
                 <th>Check-in</th>
                 <th>Encounter</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {appointments.map((appt) => (
-                <tr key={appt.id}>
-                  <td>{formatDate(appt.scheduledStart)}</td>
-                  <td>{appt.type ?? "—"}</td>
-                  <td>
-                    {appt.memo ? (
-                      <span
-                        title={appt.memo}
-                        style={{
-                          display: "inline-block",
-                          maxWidth: "260px",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                          verticalAlign: "bottom",
-                        }}
-                      >
-                        {appt.memo}
-                      </span>
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                  <td><span className={statusClass(appt.status)}>{appt.status ?? "—"}</span></td>
-                  <td>{appt.checkedInAt ? formatDate(appt.checkedInAt) : "—"}</td>
-                  <td>
-                    {appt.encounter
-                      ? <Link className="inline-link" href={`/encounters/${appt.encounter.id}${orgQ}`}>{appt.encounter.status ?? "open"}</Link>
-                      : <span className="muted">No encounter</span>}
-                  </td>
-                  <td>
-                    <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-                      {appt.encounter && (
-                        <Link className="button button-secondary" href={`/encounters/${appt.encounter.id}${orgQ}`}>
-                          Open Note
-                        </Link>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {appointments.map((appt) => {
+                const telehealth = isTelehealth(appt);
+                const checkInOpen = checkInOpenId === appt.id;
+                const busy = busyId === appt.id;
+                return (
+                  <tr key={appt.id}>
+                    <td>{formatDate(appt.scheduledStart)}</td>
+                    <td>{appt.type ?? "—"}</td>
+                    <td>{appt.serviceLocation ?? "—"}</td>
+                    <td><span className={statusClass(appt.status)}>{appt.status ?? "—"}</span></td>
+                    <td>
+                      <div>{telehealth ? "Not used" : arrivalLabel(appt.arrivalStatus)}</div>
+                      {appt.arrivalStatusAt ? <div className="muted">{formatDate(appt.arrivalStatusAt)}</div> : null}
+                    </td>
+                    <td>
+                      {appt.checkedInAt ? (
+                        <>
+                          <div>{formatDate(appt.checkedInAt)}</div>
+                          {appt.checkInReviewNeeded ? (
+                            <div className="status status-red" title={appt.checkInReviewReason ?? undefined}>Review needed</div>
+                          ) : null}
+                        </>
+                      ) : "—"}
+                    </td>
+                    <td>
+                      {appt.encounter
+                        ? <Link className="inline-link" href={`/encounters/${appt.encounter.id}${orgQ}`}>{appt.encounter.status ?? "open"}</Link>
+                        : <span className="muted">No encounter</span>}
+                    </td>
+                    <td>
+                      <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                        {!telehealth ? (
+                          <>
+                            <button className="button button-secondary" type="button" disabled={busy} onClick={() => postCheckIn(appt, "on_my_way")}>On my way</button>
+                            <button className="button button-secondary" type="button" disabled={busy} onClick={() => postCheckIn(appt, "arrived")}>I'm here</button>
+                          </>
+                        ) : null}
+                        <button
+                          className="button button-secondary"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => {
+                            setCheckInOpenId(checkInOpen ? null : appt.id);
+                            setAnswers(EMPTY_ANSWERS);
+                          }}
+                        >
+                          {appt.checkedInAt ? "Update Check-In" : "Start Check-In"}
+                        </button>
+                        {appt.encounter && (
+                          <Link className="button button-secondary" href={`/encounters/${appt.encounter.id}${orgQ}`}>
+                            Open Note
+                          </Link>
+                        )}
+                      </div>
+                      {checkInOpen ? (
+                        <div style={{ marginTop: 10, padding: 10, border: "1px solid #e5e7eb", borderRadius: 8, minWidth: 280 }}>
+                          <div style={{ display: "grid", gap: 8 }}>
+                            <label>
+                              <span className="muted">Mood 1-10</span>
+                              <input className="input" value={answers.moodRating} onChange={(e) => setAnswers({ ...answers, moodRating: e.target.value })} inputMode="numeric" />
+                            </label>
+                            <label>
+                              <span className="muted">What do you want to focus on today?</span>
+                              <textarea className="input" value={answers.sessionFocus} onChange={(e) => setAnswers({ ...answers, sessionFocus: e.target.value })} />
+                            </label>
+                            <label>
+                              <span className="muted">Goal you want to work on</span>
+                              <input className="input" value={answers.goalFocus} onChange={(e) => setAnswers({ ...answers, goalFocus: e.target.value })} />
+                            </label>
+                            <label>
+                              <span className="muted">Symptom change</span>
+                              <select className="input" value={answers.symptomChange} onChange={(e) => setAnswers({ ...answers, symptomChange: e.target.value })}>
+                                <option value="none">No major change</option>
+                                <option value="minor">Minor change</option>
+                                <option value="major">Major change</option>
+                              </select>
+                            </label>
+                            <label>
+                              <span className="muted">Safety concern?</span>
+                              <select className="input" value={answers.safetyConcern} onChange={(e) => setAnswers({ ...answers, safetyConcern: e.target.value })}>
+                                <option value="no">No</option>
+                                <option value="yes">Yes</option>
+                              </select>
+                            </label>
+                            <label>
+                              <span className="muted">Medication change?</span>
+                              <select className="input" value={answers.medicationChange} onChange={(e) => setAnswers({ ...answers, medicationChange: e.target.value })}>
+                                <option value="no">No</option>
+                                <option value="yes">Yes</option>
+                              </select>
+                            </label>
+                            <label>
+                              <span className="muted">Admin or billing concern</span>
+                              <input className="input" value={answers.adminConcern} onChange={(e) => setAnswers({ ...answers, adminConcern: e.target.value })} />
+                            </label>
+                          </div>
+                          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                            <button className="button button-primary" type="button" disabled={busy} onClick={() => postCheckIn(appt, "complete_check_in")}>
+                              {busy ? "Saving…" : "Complete Check-In"}
+                            </button>
+                            <button className="button button-secondary" type="button" disabled={busy} onClick={() => setCheckInOpenId(null)}>
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </section>
