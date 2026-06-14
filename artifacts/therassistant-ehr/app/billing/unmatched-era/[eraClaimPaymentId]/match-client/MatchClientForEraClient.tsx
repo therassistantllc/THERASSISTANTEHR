@@ -6,6 +6,11 @@ import { DEFAULT_ORG_ID } from "@/lib/config";
 
 type ClientRow = { id: string; name: string; dateOfBirth?: string | null; phone?: string | null; email?: string | null };
 
+function initialSearchName() {
+  if (typeof window === "undefined") return "";
+  return new URLSearchParams(window.location.search).get("patientName") || "";
+}
+
 export default function MatchClientForEraClient({
   eraClaimPaymentId,
   initialOrganizationId,
@@ -14,7 +19,7 @@ export default function MatchClientForEraClient({
   initialOrganizationId: string;
 }) {
   const organizationId = useMemo(() => initialOrganizationId || DEFAULT_ORG_ID, [initialOrganizationId]);
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(initialSearchName);
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [clientId, setClientId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -32,7 +37,9 @@ export default function MatchClientForEraClient({
   }
 
   useEffect(() => {
-    void loadClients("").catch((e) => setError(e instanceof Error ? e.message : "Could not load clients"));
+    const search = initialSearchName();
+    if (search) setQ(search);
+    void loadClients(search).catch((e) => setError(e instanceof Error ? e.message : "Could not load clients"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [organizationId]);
 
