@@ -11,10 +11,8 @@
  * would never appear in the "Denials by RARC" historical-notes panel
  * for the relevant RARC.
  *
- * Inference unions:
+ * Inference source:
  *   • era_claim_payments.rarc_codes (what the ERA layer recorded)
- *   • claim_workqueue_items.rarc_code (what the denials workqueue surfaced,
- *     non-archived only)
  *
  * Callers may pass an explicit `rarcCodes` array to override inference
  * (e.g. denials-by-carc actions that already know the relevant code).
@@ -28,28 +26,22 @@ export async function inferRarcCodesForClaim(
 ): Promise<string[]> {
   if (!supabase || !claimId) return [];
   const codes = new Set<string>();
-  const [eraRes, wqRes] = await Promise.all([
-    supabase
-      .from("era_claim_payments")
-      .select("rarc_codes")
-      .eq("professional_claim_id", claimId),
-    supabase
-      .from("claim_workqueue_items")
-      .select("rarc_code")
-      .eq("claim_id", claimId)
-      .is("archived_at", null),
-  ]);
-  for (const row of (eraRes?.data as any[]) ?? []) {
+  // Pull RARC codes from ERA claim payments.
+  const { data: eraData } = await supabase
+    .from("era_claim_payments")
+    .select("rarc_codes")
+    .eq("professional_claim_id", claimId);
+
+  for (const row of (eraData as any[]) ?? []) {
     const arr = Array.isArray(row?.rarc_codes) ? row.rarc_codes : [];
     for (const c of arr) {
       const s = text(c).toUpperCase();
       if (s) codes.add(s);
     }
   }
-  for (const row of (wqRes?.data as any[]) ?? []) {
-    const s = text(row?.rarc_code).toUpperCase();
-    if (s) codes.add(s);
-  }
+
+  // NOTE: Not inferring from claim_workqueue_items because that table
+  // has been superseded by workqueue_items.
   return Array.from(codes);
 }
 
