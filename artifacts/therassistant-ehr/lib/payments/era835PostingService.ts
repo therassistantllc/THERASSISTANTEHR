@@ -103,6 +103,7 @@ export async function postEra835Batch(
   const SKIPPABLE_VALIDATION_CODES = new Set([
     "claim_not_matched",
     "posting_status_blocked",
+    "claim_or_client_not_matched",
   ]);
 
   for (const row of payments ?? []) {
