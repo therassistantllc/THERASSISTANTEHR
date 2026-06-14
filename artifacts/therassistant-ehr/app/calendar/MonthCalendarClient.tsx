@@ -576,11 +576,7 @@ export default function MonthCalendarClient() {
         )}
         </div> {/* calendarArea */}
       </div> {/* body */}
-
-      {selectedId ? (
-) : null}
-
-      {collectOpen ? (
+{collectOpen ? (
         <CollectModal
           organizationId={ORG_ID}
           clientId={collectData?.clientId ?? ""}
