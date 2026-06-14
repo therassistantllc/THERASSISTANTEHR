@@ -104,34 +104,117 @@ function payloadText(
   return "";
 }
 
+function asObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function splitDisplayName(displayName: string): { firstName: string; lastName: string } {
+  const cleaned = displayName.replace(/\s+/g, " ").trim();
+  if (!cleaned) return { firstName: "", lastName: "" };
+
+  if (cleaned.includes(",")) {
+    const [last, first] = cleaned.split(",").map((part) => part.trim());
+    return { firstName: first ?? "", lastName: last ?? "" };
+  }
+
+  const parts = cleaned.split(" ");
+  if (parts.length === 1) return { firstName: parts[0] ?? "", lastName: "" };
+  return {
+    firstName: parts.slice(0, -1).join(" "),
+    lastName: parts[parts.length - 1] ?? "",
+  };
+}
+
+function candidatePayloads(payload: Record<string, unknown>): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [payload];
+  for (const key of [
+    "patient",
+    "subscriber",
+    "client",
+    "nm1Qc",
+    "nm1_qc",
+    "raw_claim_payload",
+    "rawClaimPayload",
+    "raw",
+  ]) {
+    const nested = asObject(payload[key]);
+    if (nested) out.push(nested);
+  }
+  return out;
+}
+
 function prefillFromPayload(
   payload: Record<string, unknown>,
   rawSegments: string[],
 ) {
-  let firstName = payloadText(
-    payload,
-    "patient_first_name",
-    "patientFirstName",
-    "first_name",
-    "firstName",
-  );
-  let lastName = payloadText(
-    payload,
-    "patient_last_name",
-    "patientLastName",
-    "last_name",
-    "lastName",
-  );
-  let dateOfBirth = normalizeEraDate(
-    payloadText(
-      payload,
+  let firstName = "";
+  let lastName = "";
+  let dateOfBirth = "";
+
+  for (const source of candidatePayloads(payload)) {
+    firstName = firstName || payloadText(
+      source,
+      "patient_first_name",
+      "patientFirstName",
+      "subscriber_first_name",
+      "subscriberFirstName",
+      "first_name",
+      "firstName",
+      "given_name",
+      "givenName",
+      "given",
+      "first",
+    );
+    lastName = lastName || payloadText(
+      source,
+      "patient_last_name",
+      "patientLastName",
+      "subscriber_last_name",
+      "subscriberLastName",
+      "last_name",
+      "lastName",
+      "family_name",
+      "familyName",
+      "family",
+      "last",
+    );
+    dateOfBirth = dateOfBirth || normalizeEraDate(payloadText(
+      source,
       "patient_date_of_birth",
       "patientDateOfBirth",
+      "subscriber_date_of_birth",
+      "subscriberDateOfBirth",
       "date_of_birth",
       "dateOfBirth",
+      "birthDate",
+      "birth_date",
       "dob",
-    ),
-  );
+    ));
+
+    if (!firstName || !lastName) {
+      const displayName = payloadText(
+        source,
+        "patient_name",
+        "patientName",
+        "patient_display_name",
+        "patientDisplayName",
+        "subscriber_name",
+        "subscriberName",
+        "display_name",
+        "displayName",
+        "full_name",
+        "fullName",
+        "name",
+      );
+      if (displayName) {
+        const split = splitDisplayName(displayName);
+        firstName = firstName || split.firstName;
+        lastName = lastName || split.lastName;
+      }
+    }
+  }
 
   for (const segment of rawSegments) {
     const parts = String(segment ?? "").split("*");
@@ -292,23 +375,6 @@ export async function GET(
           row.raw_item_payload && typeof row.raw_item_payload === "object"
             ? (row.raw_item_payload as Record<string, unknown>)
             : {};
-        const payloadPatientFirstName =
-          payload.patient_first_name === null ||
-          payload.patient_first_name === undefined
-            ? payload.patientFirstName
-            : payload.patient_first_name;
-        const payloadPatientLastName =
-          payload.patient_last_name === null ||
-          payload.patient_last_name === undefined
-            ? payload.patientLastName
-            : payload.patient_last_name;
-        const payloadPatientDisplayName = [
-          payloadPatientFirstName,
-          payloadPatientLastName,
-        ]
-          .map((value) => (value == null ? "" : String(value).trim()))
-          .filter(Boolean)
-          .join(" ");
         const cas = asArray<{
           groupCode?: string;
           reasonCode?: string;
@@ -318,6 +384,13 @@ export async function GET(
           payload.raw_segments ?? payload.rawSegments,
         );
         const patientPrefill = prefillFromPayload(payload, rawSegments);
+        const payloadPatientDisplayName = [
+          patientPrefill?.firstName,
+          patientPrefill?.lastName,
+        ]
+          .map((value) => (value == null ? "" : String(value).trim()))
+          .filter(Boolean)
+          .join(" ");
         const clp01 = String(
           payload.claim_ref ?? row.imported_item_ref ?? "",
         ).trim();
