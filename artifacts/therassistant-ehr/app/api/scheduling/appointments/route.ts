@@ -5,6 +5,12 @@ import { requireOrgAccess } from "@/lib/auth/requireOrgAccess";
 const MAX_RANGE_DAYS = 62;
 const MAX_LIMIT = 500;
 
+const ENHANCED_APPOINTMENT_SELECT =
+  "id, client_id, provider_id, scheduled_start_at, scheduled_end_at, appointment_status, appointment_type, service_location, cpt_code, check_in_at, client_arrival_status, client_arrival_status_at, check_in_review_needed, check_in_review_reason";
+
+const BASE_APPOINTMENT_SELECT =
+  "id, client_id, provider_id, scheduled_start_at, scheduled_end_at, appointment_status, appointment_type, cpt_code, check_in_at";
+
 function parseIso(input: string | null) {
   if (!input) return null;
   const date = new Date(input);
@@ -20,7 +26,7 @@ type AppointmentRow = {
   scheduled_end_at: string | null;
   appointment_status: string | null;
   appointment_type: string | null;
-  service_location: string | null;
+  service_location?: string | null;
   cpt_code: string | null;
   check_in_at?: string | null;
   client_arrival_status?: string | null;
@@ -73,7 +79,7 @@ function mapRows(params: {
       scheduledEndAt: r.scheduled_end_at,
       status: calendarStatus(r),
       appointmentType: r.appointment_type,
-      serviceLocation: r.service_location,
+      serviceLocation: r.service_location ?? null,
       cptCode,
       checkInAt: r.check_in_at ?? null,
       arrivalStatus: r.client_arrival_status ?? null,
@@ -82,6 +88,40 @@ function mapRows(params: {
       checkInReviewReason: r.check_in_review_reason ?? null,
     };
   });
+}
+
+function isMissingColumnError(error: unknown): boolean {
+  const message = String((error as { message?: unknown } | null)?.message ?? error ?? "").toLowerCase();
+  return message.includes("column") && message.includes("does not exist");
+}
+
+async function fetchAppointmentRows(params: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any;
+  organizationId: string;
+  fromIso: string;
+  toIso: string;
+  offset: number;
+  limit: number;
+}) {
+  const { supabase, organizationId, fromIso, toIso, offset, limit } = params;
+  const baseQuery = (selectColumns: string) =>
+    supabase
+      .from("appointments")
+      .select(selectColumns)
+      .eq("organization_id", organizationId)
+      .is("archived_at", null)
+      .gte("scheduled_start_at", fromIso)
+      .lt("scheduled_start_at", toIso)
+      .order("scheduled_start_at", { ascending: true })
+      .range(offset, offset + limit - 1);
+
+  const enhanced = await baseQuery(ENHANCED_APPOINTMENT_SELECT);
+  if (!enhanced.error) return enhanced;
+  if (!isMissingColumnError(enhanced.error)) return enhanced;
+
+  console.warn("Enhanced appointment check-in columns are not available yet; using base appointment select.");
+  return baseQuery(BASE_APPOINTMENT_SELECT);
 }
 
 export async function GET(request: Request) {
@@ -137,31 +177,24 @@ export async function GET(request: Request) {
       );
     }
 
-    const [{ count, error: countError }, { data: appointmentRows, error: appointmentsError }] = await Promise.all([
+    const fromIso = fromDate.toISOString();
+    const toIso = toDate.toISOString();
+
+    const [{ count, error: countError }, rowsResult] = await Promise.all([
       (supabase as any)
         .from("appointments")
         .select("id", { count: "exact", head: true })
         .eq("organization_id", organizationId)
         .is("archived_at", null)
-        .gte("scheduled_start_at", fromDate.toISOString())
-        .lt("scheduled_start_at", toDate.toISOString()),
-      (supabase as any)
-        .from("appointments")
-        .select(
-          "id, client_id, provider_id, scheduled_start_at, scheduled_end_at, appointment_status, appointment_type, service_location, cpt_code, check_in_at, client_arrival_status, client_arrival_status_at, check_in_review_needed, check_in_review_reason",
-        )
-        .eq("organization_id", organizationId)
-        .is("archived_at", null)
-        .gte("scheduled_start_at", fromDate.toISOString())
-        .lt("scheduled_start_at", toDate.toISOString())
-        .order("scheduled_start_at", { ascending: true })
-        .range(offset, offset + limit - 1),
+        .gte("scheduled_start_at", fromIso)
+        .lt("scheduled_start_at", toIso),
+      fetchAppointmentRows({ supabase, organizationId, fromIso, toIso, offset, limit }),
     ]);
 
     if (countError) throw countError;
-    if (appointmentsError) throw appointmentsError;
+    if (rowsResult.error) throw rowsResult.error;
 
-    const rows = (appointmentRows ?? []) as AppointmentRow[];
+    const rows = (rowsResult.data ?? []) as AppointmentRow[];
     const clientIds = Array.from(new Set(rows.map((r) => r.client_id).filter((id): id is string => Boolean(id))));
     const providerIds = Array.from(new Set(rows.map((r) => r.provider_id).filter((id): id is string => Boolean(id))));
 
