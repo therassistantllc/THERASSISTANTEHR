@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "./monthCalendar.module.css";
 import { DEFAULT_ORG_ID } from "@/lib/config";
 import { supabase } from "@/lib/supabase/client";
-import AppointmentWorkspace from "./AppointmentWorkspace";
 import TodayVisitsSidebar from "./TodayVisitsSidebar";
 
 const ORG_ID =
@@ -579,34 +578,7 @@ export default function MonthCalendarClient() {
       </div> {/* body */}
 
       {selectedId ? (
-        <AppointmentWorkspace
-          appointmentId={selectedId}
-          onClose={closeDrawer}
-          onRefresh={loadAppointments}
-          onOpenNext={handleOpenNext}
-          onCollect={(data) => {
-            setCollectPrefill({
-              amount: 0,
-              note: "",
-              title: `Collect — ${data.clientName}`,
-            });
-            setCollectData({
-              clientId: data.clientId ?? "",
-              appointmentId: data.appointmentId,
-              providerId: data.providerId,
-              openBalance: data.openBalance,
-            });
-            setCollectOpen(true);
-          }}
-          onCancel={(data) => {
-            setCancelData({
-              appointmentId: data.appointmentId,
-              alreadyCancelled: data.alreadyCancelled,
-            });
-            setCancelOpen(true);
-          }}
-        />
-      ) : null}
+) : null}
 
       {collectOpen ? (
         <CollectModal
