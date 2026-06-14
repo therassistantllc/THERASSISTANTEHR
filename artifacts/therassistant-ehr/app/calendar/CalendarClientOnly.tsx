@@ -2,10 +2,10 @@
 
 import dynamic from "next/dynamic";
 
-const MonthCalendarClient = dynamic(() => import("./MonthCalendarClient"), {
+const InteractiveCalendarClient = dynamic(() => import("./InteractiveCalendarClient"), {
   ssr: false,
 });
 
 export default function CalendarClientOnly() {
-  return <MonthCalendarClient />;
+  return <InteractiveCalendarClient />;
 }
