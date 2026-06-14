@@ -132,20 +132,75 @@ function firstServiceDate(serviceLines: unknown): string | null {
   return null;
 }
 
+function splitDisplayName(value: string): string | null {
+  const cleaned = value.replace(/\s+/g, " ").trim();
+  if (!cleaned) return null;
+  if (cleaned.includes(",")) {
+    const [last, first] = cleaned.split(",").map((part) => part.trim());
+    return [first, last].filter(Boolean).join(" ").trim() || cleaned;
+  }
+  return cleaned;
+}
+
+function directPatientName(obj: Record<string, unknown>): string | null {
+  const first = text(
+    obj.patient_first_name ??
+      obj.patientFirstName ??
+      obj.subscriber_first_name ??
+      obj.subscriberFirstName ??
+      obj.first_name ??
+      obj.firstName ??
+      obj.given_name ??
+      obj.givenName ??
+      obj.given ??
+      obj.first,
+  );
+  const last = text(
+    obj.patient_last_name ??
+      obj.patientLastName ??
+      obj.subscriber_last_name ??
+      obj.subscriberLastName ??
+      obj.last_name ??
+      obj.lastName ??
+      obj.family_name ??
+      obj.familyName ??
+      obj.family ??
+      obj.last,
+  );
+  const joined = [first, last].filter(Boolean).join(" ").trim();
+  if (joined) return joined;
+
+  const display = text(
+    obj.patient_name ??
+      obj.patientName ??
+      obj.patient_display_name ??
+      obj.patientDisplayName ??
+      obj.subscriber_name ??
+      obj.subscriberName ??
+      obj.display_name ??
+      obj.displayName ??
+      obj.full_name ??
+      obj.fullName ??
+      obj.name,
+  );
+  return splitDisplayName(display);
+}
+
 function patientNameFromRawSegments(raw: unknown): string | null {
   if (!raw || typeof raw !== "object") return null;
-  // Common shapes used elsewhere: nm1Qc { firstName, lastName, middleName }
-  // or arrays of { tag, elements: [...] }.
   const obj = raw as Record<string, unknown>;
-  const nm1 = (obj.nm1Qc ?? obj.client ?? obj.nm1_qc) as
-    | Record<string, unknown>
-    | undefined;
-  if (nm1) {
-    const first = text(nm1.firstName ?? nm1.first_name ?? nm1.given);
-    const last = text(nm1.lastName ?? nm1.last_name ?? nm1.family);
-    const joined = [first, last].filter(Boolean).join(" ").trim();
-    if (joined) return joined;
+
+  const direct = directPatientName(obj);
+  if (direct) return direct;
+
+  for (const key of ["nm1Qc", "client", "patient", "subscriber", "nm1_qc", "raw_claim_payload", "rawClaimPayload", "raw"]) {
+    const nested = obj[key];
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+      const fromNested = directPatientName(nested as Record<string, unknown>);
+      if (fromNested) return fromNested;
+    }
   }
+
   if (Array.isArray(obj.segments)) {
     for (const s of obj.segments as Array<Record<string, unknown>>) {
       const tag = text(s.tag).toUpperCase();
@@ -158,6 +213,19 @@ function patientNameFromRawSegments(raw: unknown): string | null {
       }
     }
   }
+
+  if (Array.isArray(raw)) {
+    for (const segment of raw) {
+      const parts = String(segment ?? "").split("*");
+      if (parts[0] === "NM1" && parts[1] === "QC") {
+        const last = text(parts[3]);
+        const first = text(parts[4]);
+        const joined = [first, last].filter(Boolean).join(" ").trim();
+        if (joined) return joined;
+      }
+    }
+  }
+
   return null;
 }
 
