@@ -33,42 +33,36 @@ export default async function AppShell({ children }: { children: React.ReactNode
     return <>{children}</>;
   }
   const orgName = await fetchOrgName();
-  // compute today's date label
-  const todayStr = new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+  const todayStr = new Date().toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+  });
 
   return (
     <div className={styles.frame}>
-      {/* Top utility bar */}
-      <header
-        className={styles.topbar}
-        style={{ height: "72px", padding: "0 24px", background: "var(--card)", borderBottom: "1px solid var(--line)" }}
-      >
+      <header className={styles.topbar}>
         <MobileNavButton />
         <span className={styles.currentDate}>{todayStr}</span>
-        {orgName ? (
-          <span className={styles.orgName} title="Organization" style={{ textDecoration: "none" }}>
-            {orgName}
-          </span>
-        ) : (
-          <span className={styles.orgName} title="Organization" style={{ textDecoration: "none" }}>
-            + Add organization
-          </span>
-        )}
+        <span className={styles.orgName} title="Organization">
+          {orgName ?? "+ Add organization"}
+        </span>
         <div className={styles.topbarSpacer} />
-        <input type="text" placeholder="Search" className={styles.searchBox} />
+        <label className={styles.searchWrap} aria-label="Search THERASSISTANT EHR">
+          <span className={styles.searchIcon} aria-hidden="true">Search</span>
+          <input type="search" placeholder="Search" className={styles.searchBox} />
+        </label>
         <button type="button" className={styles.notificationButton} aria-label="Notifications">
-          {'\uD83D\uDD14'}
+          <span aria-hidden="true">Alert</span>
         </button>
         <span className={styles.userAvatar} aria-label="User menu">TA</span>
       </header>
 
-      {/* Body: sidebar + content */}
       <div className={styles.body}>
         <aside
           id="app-sidebar"
           data-app-sidebar
           className={styles.sidebar}
-          style={{ width: "252px", top: "72px", height: "calc(100dvh - 72px)", background: "var(--shell-bg)", borderRight: "1px solid var(--line)" }}
           aria-label="Application navigation"
         >
           <Link className={styles.brand} href="/">
