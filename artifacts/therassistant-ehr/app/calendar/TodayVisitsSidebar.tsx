@@ -10,6 +10,10 @@ export type SidebarAppointment = {
   appointmentType: string | null;
   cptCode: string | null;
   providerName: string;
+  checkInAt?: string | null;
+  arrivalStatus?: string | null;
+  checkInReviewNeeded?: boolean;
+  checkInReviewReason?: string | null;
 };
 
 function fmtTime(iso: string): string {
@@ -19,22 +23,34 @@ function fmtTime(iso: string): string {
   });
 }
 
-type GroupKey = "in_progress" | "upcoming" | "completed" | "blocked";
+type GroupKey = "review" | "arrived" | "en_route" | "upcoming" | "completed" | "blocked";
 
-function statusGroup(status: string): GroupKey {
-  if (status === "checked_in" || status === "in_progress") return "in_progress";
-  if (status === "completed") return "completed";
-  if (status === "cancelled" || status === "no_show") return "blocked";
+function statusGroup(appt: SidebarAppointment): GroupKey {
+  if (appt.checkInReviewNeeded) return "review";
+  if (appt.status === "completed") return "completed";
+  if (appt.status === "cancelled" || appt.status === "no_show") return "blocked";
+  if (appt.checkInAt || appt.status === "checked_in" || appt.status === "in_progress" || appt.arrivalStatus === "arrived") return "arrived";
+  if (appt.arrivalStatus === "on_my_way") return "en_route";
   return "upcoming";
 }
 
-const GROUP_ORDER: GroupKey[] = ["in_progress", "upcoming", "completed", "blocked"];
+function statusText(appt: SidebarAppointment): string {
+  if (appt.checkInReviewNeeded) return appt.checkInReviewReason || "Review needed";
+  if (appt.checkInAt) return "Checked in";
+  if (appt.arrivalStatus === "arrived") return "I'm here";
+  if (appt.arrivalStatus === "on_my_way") return "On my way";
+  return appt.status.replace(/_/g, " ");
+}
+
+const GROUP_ORDER: GroupKey[] = ["review", "arrived", "en_route", "upcoming", "completed", "blocked"];
 
 const GROUP_LABELS: Record<GroupKey, string> = {
-  in_progress: "Checked In / In Progress",
-  upcoming: "Not Checked In",
+  review: "Review needed",
+  arrived: "I'm here / checked in",
+  en_route: "On my way",
+  upcoming: "Not checked in",
   completed: "Completed",
-  blocked: "No Show / Cancelled",
+  blocked: "No show / cancelled",
 };
 
 export default function TodayVisitsSidebar({
@@ -60,13 +76,16 @@ export default function TodayVisitsSidebar({
   const groups = GROUP_ORDER.map((g) => ({
     key: g,
     label: GROUP_LABELS[g],
-    items: todayAppts.filter((a) => statusGroup(a.status) === g),
+    items: todayAppts.filter((a) => statusGroup(a) === g),
   })).filter((g) => g.items.length > 0);
 
   return (
     <aside className={styles.sidebar} aria-label="Today's visits">
       <div className={styles.sidebarHeader}>
-        <span className={styles.sidebarTitle}>Today&rsquo;s Visits</span>
+        <div>
+          <span className={styles.sidebarKicker}>Schedule</span>
+          <span className={styles.sidebarTitle}>Today's Visits</span>
+        </div>
         {todayAppts.length > 0 ? (
           <span className={styles.sidebarCount}>{todayAppts.length}</span>
         ) : null}
@@ -74,7 +93,7 @@ export default function TodayVisitsSidebar({
 
       {todayAppts.length === 0 ? (
         <div className={styles.empty}>
-          {today ? "No appointments today." : "Loading…"}
+          {today ? "No appointments today." : "Loading..."}
         </div>
       ) : (
         <div className={styles.groups}>
@@ -85,12 +104,13 @@ export default function TodayVisitsSidebar({
                 <span className={styles.groupCount}>{group.items.length}</span>
               </div>
               {group.items.map((appt) => {
+                const groupKey = statusGroup(appt);
                 const isSelected = appt.id === selectedId;
                 const typeLabel = appt.cptCode || appt.appointmentType || null;
                 return (
                   <button
                     key={appt.id}
-                    className={`${styles.apptRow} ${isSelected ? styles.apptRowSelected : ""} ${styles[`row_${statusGroup(appt.status)}`]}`}
+                    className={`${styles.apptRow} ${isSelected ? styles.apptRowSelected : ""} ${styles[`row_${groupKey}`]}`}
                     onClick={() => onSelect(appt.id)}
                     type="button"
                     aria-current={isSelected ? "true" : undefined}
@@ -98,11 +118,12 @@ export default function TodayVisitsSidebar({
                     <span className={styles.apptTime}>{fmtTime(appt.scheduledStartAt)}</span>
                     <span className={styles.apptInfo}>
                       <span className={styles.apptName}>{appt.clientName}</span>
+                      <span className={styles.apptMeta}>{statusText(appt)}</span>
                       {typeLabel ? (
                         <span className={styles.apptType}>{typeLabel}</span>
                       ) : null}
                     </span>
-                    <span className={`${styles.dot} ${styles[`dot_${statusGroup(appt.status)}`]}`} aria-hidden="true" />
+                    <span className={`${styles.dot} ${styles[`dot_${groupKey}`]}`} aria-hidden="true" />
                   </button>
                 );
               })}
