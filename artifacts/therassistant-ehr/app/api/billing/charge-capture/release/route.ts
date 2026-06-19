@@ -99,7 +99,7 @@ export async function POST(request: Request) {
         const { error: updateError } = await supabase
           .from("charge_capture_items")
           .update({
-            charge_status: "released",
+            charge_status: "claim_created",
             claim_id: result.claimId,
             released_at: now,
             updated_at: now,
