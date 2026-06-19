@@ -20,7 +20,7 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
 
     const { data: items, error } = await supabase
       .from("workqueue_items")
-      .select("id, title, work_type, status, priority, description, professional_claim_id, claim_id, encounter_id, appointment_id, deferred_until, defer_reason, created_at, updated_at")
+      .select("id, title, work_type, status, priority, description, source_object_type, source_object_id, professional_claim_id, claim_id, encounter_id, appointment_id, deferred_until, defer_reason, created_at, updated_at")
       .eq("organization_id", organizationId)
       .eq("client_id", clientId)
       .is("archived_at", null)
@@ -87,7 +87,7 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
           title: "Signed visit blocked from billing",
           workType: "clinician_routed_billing_review",
           status: "open",
-          priority: "medium",
+          priority: "normal",
           description: description || "Charge capture is blocked. Resolve in Charge Capture to create a claim.",
           professionalClaimId: null,
           claimId: null,

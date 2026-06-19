@@ -116,24 +116,6 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
           { status: 422 },
         );
       }
-
-      const { error: chargeUpdateError } = await supabase
-        .from("charge_capture_items")
-        .update({
-          charge_status: "submitted",
-          submitted_at: now,
-          updated_at: now,
-        })
-        .eq("organization_id", guard.organizationId)
-        .in("claim_id", claimIds)
-        .is("archived_at", null);
-
-      if (chargeUpdateError) {
-        return NextResponse.json(
-          { success: false, error: chargeUpdateError.message ?? "Failed to update charge statuses" },
-          { status: 422 },
-        );
-      }
     }
 
     return NextResponse.json({ success: true, batchId: id, status: "submitted", submittedAt: now });
