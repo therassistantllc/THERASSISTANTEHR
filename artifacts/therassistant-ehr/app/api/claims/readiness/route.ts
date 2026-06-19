@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import {
   createProfessionalClaimDraft,
-  releaseProfessionalClaimToBatch,
   validateProfessionalClaimReadiness,
 } from "@/lib/claims/claimReadinessService";
+import { assignClaimToAutoBatch } from "@/lib/claims/autoBatchClaimService";
+import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 import { assertClaimSubmissionReady, gateResponse } from "@/lib/validation/claimSubmissionGate";
 
 export async function POST(request: Request) {
@@ -25,8 +26,34 @@ export async function POST(request: Request) {
         return NextResponse.json({ success: false, error: "organizationId and claimId are required" }, { status: 400 });
       }
 
-      const result = await releaseProfessionalClaimToBatch(String(body.claimId), String(body.organizationId));
-      return NextResponse.json({ success: result.ok, result }, { status: result.ok ? 200 : 422 });
+      const organizationId = String(body.organizationId);
+      const claimId = String(body.claimId);
+      const validation = await validateProfessionalClaimReadiness(claimId, organizationId);
+      if (!validation.ok) {
+        return NextResponse.json({ success: false, result: validation }, { status: 422 });
+      }
+
+      const supabase = createServerSupabaseAdminClient();
+      if (!supabase) {
+        return NextResponse.json({ success: false, error: "Database connection not available" }, { status: 500 });
+      }
+
+      const { error: updateError } = await supabase
+        .from("professional_claims")
+        .update({ claim_status: "ready_for_batch", updated_at: new Date().toISOString() })
+        .eq("organization_id", organizationId)
+        .eq("id", claimId)
+        .in("claim_status", ["draft", "ready_for_validation", "validation_failed", "ready_for_batch"]);
+
+      if (updateError) {
+        return NextResponse.json({ success: false, error: updateError.message }, { status: 422 });
+      }
+
+      const batchResult = await assignClaimToAutoBatch({ organizationId, claimId });
+      return NextResponse.json(
+        { success: batchResult.ok, result: { ...validation, batch: batchResult } },
+        { status: batchResult.ok ? 200 : 422 },
+      );
     }
 
     const required = ["organizationId", "clientId", "diagnosisCodes", "serviceLines", "billingProvider"];

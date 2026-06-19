@@ -21,15 +21,10 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 24
-
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare pnpm@10.32.1 --activate
+          node-version: lts/*
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: npm install -g pnpm && pnpm install
 
       - name: Lint
         run: pnpm --filter @workspace/therassistant-ehr... run lint

@@ -51,7 +51,9 @@ const EMPTY_ANSWERS: Answers = {
 function formatDateTime(value: string | null | undefined): string {
   if (!value) return "—";
   const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  return Number.isNaN(d.getTime())
+    ? "—"
+    : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
 function isTelehealth(appt: Appointment): boolean {
@@ -102,7 +104,9 @@ export default function PortalPreviewClient({ clientId }: { clientId: string }) 
       const apptsJson = await appointmentsRes.json().catch(() => null);
       const p = summaryJson?.client ?? summaryJson?.data?.client ?? null;
       if (summaryRes.ok && p) setClient(p as ClientSummary);
-      if (!appointmentsRes.ok || !apptsJson?.success) throw new Error(apptsJson?.error ?? "Failed to load appointments");
+      if (!appointmentsRes.ok || !apptsJson?.success) {
+        throw new Error(apptsJson?.error ?? "Failed to load appointments");
+      }
       setAppointments(apptsJson.appointments ?? []);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Failed to load patient portal preview");
@@ -218,7 +222,7 @@ export default function PortalPreviewClient({ clientId }: { clientId: string }) 
                     {!telehealth ? (
                       <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
                         <button className="button button-secondary" type="button" disabled={busy} onClick={() => postCheckIn(appt, "on_my_way")}>On my way</button>
-                        <button className="button button-secondary" type="button" disabled={busy} onClick={() => postCheckIn(appt, "arrived")}>I'm here</button>
+                        <button className="button button-secondary" type="button" disabled={busy} onClick={() => postCheckIn(appt, "arrived")}>I&apos;m here</button>
                       </div>
                     ) : null}
 
@@ -295,7 +299,7 @@ export default function PortalPreviewClient({ clientId }: { clientId: string }) 
             This is a staff preview, not the actual client session. It uses the authenticated app APIs so you can test the check-in flow without emailing a portal invite.
           </p>
           <p className="muted">
-            For in-person visits, test On my way, I'm here, and Complete Check-In. For telehealth, only test Complete Check-In.
+            For in-person visits, test On my way, I&apos;m here, and Complete Check-In. For telehealth, only test Complete Check-In.
           </p>
           <p className="muted">
             After completing check-in, return to the calendar. The appointment should display as checked in and open the appointment drawer when clicked.
