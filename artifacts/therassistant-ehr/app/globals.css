@@ -196,64 +196,35 @@ textarea {
   font-size: 12px;
 }
 
-.button,
-.reports-download-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 28px;
-  padding: 4px 9px;
-  border: 1px solid var(--navy);
-  border-radius: var(--radius-md);
-  background: var(--navy);
-  color: #fff;
-  text-decoration: none;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
+/* --- THERASSISTANT UI redesign overrides (2026-06) --- */
+:root {
+  /* Updated sage palette and sizes */
+  --navy: #24433A;
+  --sage: #3F866E;
+  --background: #F6F8F5;
+  --card: #FFFFFF;
+  --line: #DDE8E1;
+  --muted: #6F8179;
+  --shell-bg: #EEF4F0;
+  --shell-bg-soft: #F3F7F4;
+  --shell-text: #24433A;
+  --shell-text-muted: #6F8179;
+  --shell-text-strong: #24433A;
+  --shell-accent: #3F866E;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --nav-active-bg: #DDEDE4;
+  --nav-active-text: #236B57;
 }
 
-.button-secondary {
-  background: var(--sage-soft);
-  color: var(--navy);
-  border-color: var(--sage-mid);
-}
-
-.button-tertiary {
-  background: transparent;
-  color: var(--navy);
-  border: 1px solid var(--line);
-}
-
-input,
-select,
-textarea {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  padding: 6px 8px;
-  background: var(--card);
-  color: var(--text);
-  font-size: 12px;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-
-th,
-td {
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--line);
-  text-align: left;
-}
-
-th {
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+body.theme-billing,
+body.theme-patient {
+  /* unify billing and patient themes to calm sage background */
+  --shell-bg: #F6F8F5;
+  --shell-bg-soft: #EEF4F0;
+  --shell-text: #24433A;
+  --shell-text-muted: #6F8179;
+  --shell-text-strong: #24433A;
+  --shell-accent: #3F866E;
 }

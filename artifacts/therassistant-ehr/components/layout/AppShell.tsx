@@ -33,31 +33,31 @@ export default async function AppShell({ children }: { children: React.ReactNode
     return <>{children}</>;
   }
   const orgName = await fetchOrgName();
+  const todayStr = new Date().toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+  });
+
   return (
     <div className={styles.frame}>
-      {/* Top utility bar */}
       <header className={styles.topbar}>
         <MobileNavButton />
-        <Link className={styles.brand} href="/">
-          <span className={styles.brandName}>THERASSISTANT</span>
-          <span className={styles.brandTag}>EHR</span>
-        </Link>
-        {orgName ? (
-          <span className={styles.orgName} title="Organization" style={{ textDecoration: "none" }}>
-            {orgName}
-          </span>
-        ) : (
-          <span className={styles.orgName} title="Organization" style={{ textDecoration: "none" }}>
-            + Add organization
-          </span>
-        )}
+        <span className={styles.currentDate}>{todayStr}</span>
+        <span className={styles.orgName} title="Organization">
+          {orgName ?? "+ Add organization"}
+        </span>
         <div className={styles.topbarSpacer} />
-        <div className={styles.topbarRight}>
-          <span className={styles.userAvatar} aria-label="User menu">TA</span>
-        </div>
+        <label className={styles.searchWrap} aria-label="Search THERASSISTANT EHR">
+          <span className={styles.searchIcon} aria-hidden="true">Search</span>
+          <input type="search" placeholder="Search" className={styles.searchBox} />
+        </label>
+        <button type="button" className={styles.notificationButton} aria-label="Notifications">
+          <span aria-hidden="true">Alert</span>
+        </button>
+        <span className={styles.userAvatar} aria-label="User menu">TA</span>
       </header>
 
-      {/* Body: sidebar + content */}
       <div className={styles.body}>
         <aside
           id="app-sidebar"
@@ -65,6 +65,10 @@ export default async function AppShell({ children }: { children: React.ReactNode
           className={styles.sidebar}
           aria-label="Application navigation"
         >
+          <Link className={styles.brand} href="/">
+            <span className={styles.brandName}>THERASSISTANT</span>
+            <span className={styles.brandTag}>EHR</span>
+          </Link>
           <AppSidebarNav />
         </aside>
         <div className={styles.content}>
