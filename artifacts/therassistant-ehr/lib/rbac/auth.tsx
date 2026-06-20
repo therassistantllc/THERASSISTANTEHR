@@ -9,6 +9,57 @@ import { cookies } from "next/headers";
 import { PermissionCode, StaffRoleCode } from "./constants";
 
 const SERVER_AUTH_COOKIE = "sb-therassistant-auth-token";
+const SUPABASE_AUTH_COOKIE_RE = /^(sb-.*-auth-token)(?:\.(\d+))?$/;
+
+type CookieLike = { name: string; value?: string };
+
+function resolveAuthTokenFromCookieList(cookieList: CookieLike[]): string | null {
+  const explicit = cookieList.find((cookie) => cookie.name === SERVER_AUTH_COOKIE)?.value?.trim();
+  if (explicit) return explicit;
+
+  const grouped = new Map<string, { single: string | null; chunks: Array<{ index: number; value: string }> }>();
+
+  for (const cookie of cookieList) {
+    const match = SUPABASE_AUTH_COOKIE_RE.exec(cookie.name);
+    if (!match) continue;
+    const key = match[1];
+    const index = match[2] === undefined ? null : Number(match[2]);
+    const value = cookie.value ?? "";
+    const group = grouped.get(key) ?? { single: null, chunks: [] };
+
+    if (index === null) {
+      const trimmed = value.trim();
+      if (trimmed) group.single = trimmed;
+    } else if (Number.isFinite(index)) {
+      group.chunks.push({ index, value });
+    }
+
+    grouped.set(key, group);
+  }
+
+  for (const group of grouped.values()) {
+    if (group.single) return group.single;
+    if (group.chunks.length > 0) {
+      const token = group.chunks
+        .sort((a, b) => a.index - b.index)
+        .map((chunk) => chunk.value)
+        .join("")
+        .trim();
+      if (token) return token;
+    }
+  }
+
+  return null;
+}
+
+async function readAuthTokenFromCookies(): Promise<string | null> {
+  try {
+    const jar = await cookies();
+    return resolveAuthTokenFromCookieList(jar.getAll());
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Authenticated user context loaded from Supabase auth
@@ -26,18 +77,7 @@ async function getAuthenticatedUserInternal(
 
   let token = typeof accessToken === "string" && accessToken.trim().length > 0 ? accessToken.trim() : null;
   if (!token) {
-    try {
-      const jar = await cookies();
-      token = jar.get(SERVER_AUTH_COOKIE)?.value?.trim() || null;
-      if (!token) {
-        const cookieMatch = jar
-          .getAll()
-          .find((cookie) => /^sb-.*-auth-token(?:\.\d+)?$/.test(cookie.name));
-        token = cookieMatch?.value?.trim() || null;
-      }
-    } catch {
-      token = null;
-    }
+    token = await readAuthTokenFromCookies();
   }
 
   try {
