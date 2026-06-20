@@ -3,14 +3,20 @@ import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 
 import { requireOrgAccess } from "@/lib/auth/requireOrgAccess";
 
+function clean(value: unknown) {
+  return String(value ?? "").trim();
+}
+
 function isMissingRelation(error: unknown) {
   if (!error || typeof error !== "object") return false;
   const code = (error as { code?: unknown }).code;
   return typeof code === "string" && code === "42P01";
 }
 
-function clean(value: unknown) {
-  return String(value ?? "").trim();
+function isSchemaDrift(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && ["42703", "PGRST200", "PGRST204"].includes(code);
 }
 
 export async function GET(request: Request) {
@@ -38,28 +44,30 @@ export async function GET(request: Request) {
       .eq("is_active", true)
       .order("provider_name", { ascending: true });
 
-    if (credentialingError && !isMissingRelation(credentialingError)) {
-      return NextResponse.json({ success: false, error: credentialingError.message }, { status: 422 });
+    if (credentialingError && !isMissingRelation(credentialingError) && !isSchemaDrift(credentialingError)) {
+      console.warn("provider_credentialing_profiles lookup failed; falling back to providers", credentialingError);
     }
 
-    const credentialingProviders = ((credentialingRows ?? []) as Record<string, unknown>[]).map((row) => {
-      const providerName = clean(row.provider_name) || "Unnamed provider";
-      return {
-        id: clean(row.id),
-        provider_name: providerName,
-        display_name: providerName,
-        credential_display: clean(row.credential_display) || null,
-        npi: clean(row.individual_npi) || null,
-        is_active: row.is_active !== false,
-        user_id: null,
-        email: clean(row.email) || null,
-        credentialing_profile_id: clean(row.id),
-        source: "provider_credentialing_profiles",
-      };
-    });
+    if (!credentialingError) {
+      const credentialingProviders = ((credentialingRows ?? []) as Record<string, unknown>[]).map((row) => {
+        const providerName = clean(row.provider_name) || "Unnamed provider";
+        return {
+          id: clean(row.id),
+          provider_name: providerName,
+          display_name: providerName,
+          credential_display: clean(row.credential_display) || null,
+          npi: clean(row.individual_npi) || null,
+          is_active: row.is_active !== false,
+          user_id: null,
+          email: clean(row.email) || null,
+          credentialing_profile_id: clean(row.id),
+          source: "provider_credentialing_profiles",
+        };
+      });
 
-    if (credentialingProviders.length > 0) {
-      return NextResponse.json({ success: true, organizationId, providers: credentialingProviders });
+      if (credentialingProviders.length > 0) {
+        return NextResponse.json({ success: true, organizationId, providers: credentialingProviders });
+      }
     }
 
     const { data, error } = await supabase
@@ -72,11 +80,11 @@ export async function GET(request: Request) {
 
     let providerRows = (data ?? []) as Record<string, unknown>[];
 
-    if (error && !isMissingRelation(error)) {
-      return NextResponse.json({ success: false, error: error.message }, { status: 422 });
+    if (error && !isMissingRelation(error) && !isSchemaDrift(error)) {
+      console.warn("providers lookup failed; falling back to staff_profiles", error);
     }
 
-    if (providerRows.length === 0) {
+    if (error || providerRows.length === 0) {
       const { data: staff, error: staffError } = await supabase
         .from("staff_profiles")
         .select("auth_user_id, first_name, last_name, email")
@@ -99,6 +107,8 @@ export async function GET(request: Request) {
           user_id: clean(row.auth_user_id),
           email: clean(row.email) || null,
         }));
+      } else if (error) {
+        return NextResponse.json({ success: false, error: error.message }, { status: 422 });
       }
     }
 
