@@ -59,12 +59,6 @@ function deriveEligibilityState(latest: Row | null | undefined): {
   return { status, checkedAt, daysSinceChecked: days, copayAmount, isStale };
 }
 
-function isRpcUnavailable(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const code = (error as { code?: unknown }).code;
-  return typeof code === "string" && code === "PGRST202";
-}
-
 function isMissingPrimaryProviderColumn(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const code = (error as { code?: unknown }).code;
@@ -210,7 +204,7 @@ export async function POST(request: Request) {
       updated_by_user_id: staffId ?? null,
     };
 
-    let { data: inserted, error } = await supabase
+    const { data: inserted, error } = await supabase
       .from("clients")
       .insert(insertRow)
       .select("id, first_name, last_name, preferred_name, email, phone, date_of_birth")
@@ -263,6 +257,7 @@ export async function GET(request: Request) {
     const offsetRaw = Number(searchParams.get("offset") ?? "0");
     const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 200) : 50;
     const offset = Number.isFinite(offsetRaw) ? Math.max(Math.trunc(offsetRaw), 0) : 0;
+
     const { data, error } = await (supabase as any).rpc("billing_clients_roster_page", {
       p_organization_id: organizationId,
       p_query: q || null,
@@ -273,8 +268,7 @@ export async function GET(request: Request) {
     let totalCount = rows.length > 0 ? Number(rows[0].total_count ?? 0) : 0;
 
     if (error) {
-      if (!isRpcUnavailable(error)) throw error;
-      console.warn("billing_clients_roster_page RPC not available; using fallback clients list");
+      console.warn("billing_clients_roster_page RPC failed; using fallback clients list", error);
       const fallback = await listClientsFallback({
         supabase,
         organizationId,
