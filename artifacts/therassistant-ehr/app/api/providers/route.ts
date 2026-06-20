@@ -9,6 +9,13 @@ function isMissingRelation(error: unknown) {
   return typeof code === "string" && code === "42P01";
 }
 
+function isMissingColumn(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: unknown }).code;
+  const message = String((error as { message?: unknown }).message ?? "").toLowerCase();
+  return code === "42703" || message.includes("does not exist");
+}
+
 function clean(value: unknown) {
   return String(value ?? "").trim();
 }
@@ -38,25 +45,27 @@ export async function GET(request: Request) {
       .eq("is_active", true)
       .order("provider_name", { ascending: true });
 
-    if (credentialingError && !isMissingRelation(credentialingError)) {
+    if (credentialingError && !isMissingRelation(credentialingError) && !isMissingColumn(credentialingError)) {
       return NextResponse.json({ success: false, error: credentialingError.message }, { status: 422 });
     }
 
-    const credentialingProviders = ((credentialingRows ?? []) as Record<string, unknown>[]).map((row) => {
-      const providerName = clean(row.provider_name) || "Unnamed provider";
-      return {
-        id: clean(row.id),
-        provider_name: providerName,
-        display_name: providerName,
-        credential_display: clean(row.credential_display) || null,
-        npi: clean(row.individual_npi) || null,
-        is_active: row.is_active !== false,
-        user_id: null,
-        email: clean(row.email) || null,
-        credentialing_profile_id: clean(row.id),
-        source: "provider_credentialing_profiles",
-      };
-    });
+    const credentialingProviders = !credentialingError
+      ? ((credentialingRows ?? []) as Record<string, unknown>[]).map((row) => {
+          const providerName = clean(row.provider_name) || "Unnamed provider";
+          return {
+            id: clean(row.id),
+            provider_name: providerName,
+            display_name: providerName,
+            credential_display: clean(row.credential_display) || null,
+            npi: clean(row.individual_npi) || null,
+            is_active: row.is_active !== false,
+            user_id: null,
+            email: clean(row.email) || null,
+            credentialing_profile_id: clean(row.id),
+            source: "provider_credentialing_profiles",
+          };
+        })
+      : [];
 
     if (credentialingProviders.length > 0) {
       return NextResponse.json({ success: true, organizationId, providers: credentialingProviders });
