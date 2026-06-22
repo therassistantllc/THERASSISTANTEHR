@@ -1,0 +1,17 @@
+{
+  "name": "THERASSISTANT EHR",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm",
+  "remoteUser": "node",
+  "containerEnv": {
+    "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0"
+  },
+  "postCreateCommand": "corepack enable && corepack prepare pnpm@9.15.9 --activate && pnpm install",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode"
+      ]
+    }
+  }
+}
