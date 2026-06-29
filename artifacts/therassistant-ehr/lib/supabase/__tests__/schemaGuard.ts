@@ -1,26 +1,11 @@
 /**
- * Schema-aware guard for in-memory supabase fakes (shared across test suites).
+ * Schema-aware guard for in-memory Supabase fakes.
  *
- * Originally lived at `lib/payments/postingEngine/__tests__/_schemaGuard.ts`
- * (Task #179). Task #140 surfaced a class of bug where a workqueue insert
- * used the wrong column name (`patient_id`, `queue_type`) or an enum value
- * that does not exist in `public.source_object_type` (e.g. `payment_refund`).
- * The fakes accepted those writes silently, so the bug only manifested in
- * production. Promoting the guard to a shared location lets every module's
- * hand-rolled fake supabase client (claims, eligibility, mailroom, EHR
- * billing, payments-import, ...) catch the same regression class at test
- * time instead of in prod.
- *
- * This guard parses the generated `lib/supabase/database.types.ts` once at
- * load time to extract the column allowlist for each table's `Insert:` block,
- * and pulls runtime enum values from the file's exported `Constants` object.
- * Tests that wire `validateWritePayload` into their fake's insert/update path
- * will fail loudly when a payload uses an unknown column or an invalid enum
- * value.
- *
- * Tables outside the allowlist (e.g. helper-only test tables that don't exist
- * in the real schema) are passed through untouched so existing assertions
- * keep working.
+ * The live THERASSISTANT EHR schema was cleaned up to the tenant/session/claims
+ * model. This guard must not keep stale overlays for deleted tables because that
+ * masks production drift in tests. Unknown helper-only tables still pass through,
+ * but known table columns are validated when they can be parsed from generated
+ * types or the checked-in schema dump.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -47,11 +32,9 @@ const ENUM_VALUES: Record<string, Set<string>> = Object.fromEntries(
 );
 
 /**
- * Manually-maintained enum-value overlay for enums whose generated
- * `Constants` entry is stale relative to later migrations or whose
- * accepted values have been extended in production code ahead of a
- * matching migration. Keep entries here in sync with new ALTER TYPE
- * migrations until the types file is regenerated.
+ * Temporary enum overlay for production enum values that are ahead of generated
+ * types. Keep this empty unless a migration exists and the generated types are
+ * being regenerated separately.
  */
 const EXTRA_ENUM_VALUES: Record<string, string[]> = {};
 for (const [name, extras] of Object.entries(EXTRA_ENUM_VALUES)) {
@@ -60,150 +43,16 @@ for (const [name, extras] of Object.entries(EXTRA_ENUM_VALUES)) {
 }
 
 /**
- * Manually-maintained column overlay for tables whose `database.types.ts`
- * entry is stale relative to later migrations, or for tables missing from
- * the generated types entirely.
+ * Temporary column overlay for generated-type lag only.
  *
- * Currently empty: `database.types.ts` has been regenerated against the
- * live Supabase schema (covering migrations through
- * `20260603000000_insurance_policy_subscriber_relationship.sql`), so the
- * parser sees every real column natively and no overlay is required.
- *
- * RULE (Task #303): if you ever need to re-add an entry here, it MUST
- * cite the migration filename that actually creates the column in the
- * database. Adding an entry without a matching `alter table ... add
- * column` in `supabase/migrations/` will mask a Task #300-class prod bug
- * (writes silently dropped because the column does not really exist).
- * The preferred fix is always to regenerate `database.types.ts` rather
- * than add an overlay entry.
+ * Do not add deleted legacy tables here. The old cleanup-era tables
+ * `encounters`, `encounter_clinical_notes`, `professional_claims`,
+ * `claim_lines`, `era_import_batches`, and `era_claim_payments` are deliberately
+ * absent from the overlay so tests do not accept writes to tables that no longer
+ * exist in the live Supabase schema.
  */
-const EXTRA_COLUMNS: Record<string, string[]> = {
-  // Added by supabase/migrations/20260610000000_cob_signals.sql (Task #457).
-  // Generated database.types.ts is regenerated less often than migrations
-  // ship; the overlay keeps the schema guard accepting the COB columns
-  // until the next types regen.
-  eligibility_checks: [
-    "other_payers",
-    "other_payer_name",
-    "other_payer_id",
-    "other_payer_effective_date",
-    "other_payer_termination_date",
-  ],
-  // Added by supabase/migrations/20260611010000_clients_emergency_contact.sql
-  // (Task: capture full client identity when adding a new client).
-  clients: ["emergency_contact_name", "emergency_contact_phone"],
-  // Added by supabase/migrations/20260615000000_payer_documentation_transmissions.sql
-  // (Task #550: send medical-review docs to the payer's records contact).
-  payer_profiles: ["records_email", "records_fax"],
-  // Added by supabase/migrations/20260603000000_professional_claims_responsibility_amounts.sql
-  // and supabase/migrations/20260605000000_billing_workflow_redesign.sql.
-  professional_claims: [
-    "payer_responsibility_amount",
-    "patient_responsibility_amount",
-    "write_off_amount",
-  ],
-  // Added by supabase/migrations/20260523010000_payment_posting_manual_patient.sql.
-  era_posting_ledger_entries: ["source_type", "source_id", "posted_at"],
-  // Added by supabase/migrations/20260523000000_payment_posting_foundation.sql.
-  era_import_batches: [
-    "payer_identifier",
-    "payer_name",
-    "eft_or_check_number",
-    "payment_date",
-    "payment_method_code",
-  ],
-  // Added by supabase/migrations/20260524000000_payment_posting_reversal_refunds.sql
-  // and supabase/migrations/20260615000000_era_claim_payments_remark_codes.sql.
-  era_claim_payments: [
-    "reversed_at",
-    "reversal_reason",
-    "reversed_by_actor_id",
-    "voided_at",
-    "void_reason",
-    "voided_by_actor_id",
-    "remark_codes",
-  ],
-  // Created by supabase/migrations/20260507010000_manual_payments_workflow.sql
-  // and extended by 20260523010000_payment_posting_manual_patient.sql,
-  // 20260524000000_payment_posting_reversal_refunds.sql,
-  // 20260524010000_payment_bulk_action_columns.sql, and
-  // 20260528000000_stripe_connect_express.sql. This table is absent from
-  // schema.sql in the mounted repo, so select guards need the real column
-  // set here to reject drifted names like payment_date.
-  client_payments: [
-    "id",
-    "organization_id",
-    "client_id",
-    "claim_id",
-    "payment_method",
-    "amount",
-    "reference_number",
-    "note",
-    "posted_at",
-    "created_at",
-    "updated_at",
-    "archived_at",
-    "patient_invoice_id",
-    "external_payment_id",
-    "stripe_charge_id",
-    "source_label",
-    "posted_actor_id",
-    "posting_status",
-    "reversed_at",
-    "reversal_reason",
-    "reversed_by_actor_id",
-    "voided_at",
-    "void_reason",
-    "voided_by_actor_id",
-    "assigned_to_staff_id",
-    "defer_until",
-    "defer_reason",
-    "stripe_connected_account_id",
-  ],
-  // Created by supabase/migrations/20260507010000_manual_payments_workflow.sql
-  // and extended by 20260523010000_payment_posting_manual_patient.sql and
-  // 20260524000000_payment_posting_reversal_refunds.sql. This table is absent
-  // from schema.sql in the mounted repo, so select guards need the real column
-  // set here to reject drifted names like payer_payment_amount.
-  insurance_manual_payments: [
-    "id",
-    "organization_id",
-    "claim_id",
-    "client_id",
-    "eob_reference",
-    "allowed_amount",
-    "paid_amount",
-    "adjustment_amount",
-    "patient_responsibility_amount",
-    "note",
-    "posted_at",
-    "created_at",
-    "updated_at",
-    "archived_at",
-    "payer_profile_id",
-    "check_number",
-    "payment_date",
-    "mailroom_item_id",
-    "posted_actor_id",
-    "posting_status",
-    "reversed_at",
-    "reversal_reason",
-    "reversed_by_actor_id",
-    "voided_at",
-    "void_reason",
-    "voided_by_actor_id",
-  ],
-};
+const EXTRA_COLUMNS: Record<string, string[]> = {};
 
-/**
- * Some mounted repos intentionally carry a temporary permissive
- * `database.types.ts` (`Tables: Record<string, ...>`) instead of generated
- * Supabase table definitions. In that shape the indentation parser above sees
- * no concrete tables, which makes `validateSelect()` pass through every table
- * and defeats the posted-payments drift sweep. Fall back to the checked-in
- * schema dump so tests still validate real table columns until generated types
- * are restored.
- */
 function loadSchemaSqlColumns(): Record<string, Set<string>> {
   let src = "";
   try {
@@ -235,8 +84,8 @@ const ENUM_COLUMNS: Record<string, Record<string, string>> = {
     priority: "workqueue_priority",
   },
   appointments: { appointment_status: "appointment_status" },
-  encounters: { encounter_status: "encounter_status" },
-  era_claim_payments: { posting_status: "payment_posting_status" },
+  sessions: { session_status: "session_status" },
+  session_notes: { note_status: "note_status" },
   insurance_manual_payments: { posting_status: "payment_posting_status" },
   client_payments: { posting_status: "payment_posting_status" },
 };
@@ -244,13 +93,13 @@ const ENUM_COLUMNS: Record<string, Record<string, string>> = {
 let tableColumnsCache: Record<string, Set<string>> | null = null;
 let tableRowColumnsCache: Record<string, Set<string>> | null = null;
 
-/**
- * Parse `database.types.ts` and extract the `Insert:` column lists per
- * table. The generated file uses very regular indentation: tables sit at
- * 6 spaces (`      tablename: {`), each `Insert: {` block sits at 8 spaces,
- * and columns inside it sit at 10 spaces. We rely on that shape rather
- * than running a real TS parser.
- */
+function mergeExtraColumns(out: Record<string, Set<string>>): void {
+  for (const [table, extras] of Object.entries(EXTRA_COLUMNS)) {
+    if (!out[table]) out[table] = new Set<string>();
+    for (const c of extras) out[table].add(c);
+  }
+}
+
 function loadTableColumns(): Record<string, Set<string>> {
   if (tableColumnsCache) return tableColumnsCache;
   const src = readFileSync(TYPES_PATH, "utf-8");
@@ -259,6 +108,7 @@ function loadTableColumns(): Record<string, Set<string>> {
   let currentTable: string | null = null;
   let inInsert = false;
   let cols: Set<string> | null = null;
+
   for (const line of lines) {
     const tableMatch = line.match(/^ {6}([a-z_][a-z0-9_]*): \{$/);
     if (tableMatch) {
@@ -284,16 +134,12 @@ function loadTableColumns(): Record<string, Set<string>> {
     const colMatch = line.match(/^ {10}([a-z_][a-z0-9_]*)\??:/);
     if (colMatch && cols) cols.add(colMatch[1]);
   }
-  // Merge schema.sql fallback columns when generated types are permissive or stale.
+
   for (const [table, sqlCols] of Object.entries(loadSchemaSqlColumns())) {
     if (!out[table]) out[table] = new Set<string>();
     for (const c of sqlCols) out[table].add(c);
   }
-  // Merge the manual overlay for stale/missing tables.
-  for (const [table, extras] of Object.entries(EXTRA_COLUMNS)) {
-    if (!out[table]) out[table] = new Set<string>();
-    for (const c of extras) out[table].add(c);
-  }
+  mergeExtraColumns(out);
   tableColumnsCache = out;
   return out;
 }
@@ -305,13 +151,6 @@ export class SchemaGuardError extends Error {
   }
 }
 
-/**
- * Parse `database.types.ts` and extract the `Row:` column lists per
- * table. Rows describe what the database can return for a SELECT, so the
- * Row set is the source of truth for validating select column lists
- * (Task #396 — guard against drift like `era_received_date`/`check_number`
- * silently being requested from columns that no longer exist).
- */
 function loadTableRowColumns(): Record<string, Set<string>> {
   if (tableRowColumnsCache) return tableRowColumnsCache;
   const src = readFileSync(TYPES_PATH, "utf-8");
@@ -320,6 +159,7 @@ function loadTableRowColumns(): Record<string, Set<string>> {
   let currentTable: string | null = null;
   let inRow = false;
   let cols: Set<string> | null = null;
+
   for (const line of lines) {
     const tableMatch = line.match(/^ {6}([a-z_][a-z0-9_]*): \{$/);
     if (tableMatch) {
@@ -345,37 +185,23 @@ function loadTableRowColumns(): Record<string, Set<string>> {
     const colMatch = line.match(/^ {10}([a-z_][a-z0-9_]*):/);
     if (colMatch && cols) cols.add(colMatch[1]);
   }
+
   for (const [table, sqlCols] of Object.entries(loadSchemaSqlColumns())) {
     if (!out[table]) out[table] = new Set<string>();
     for (const c of sqlCols) out[table].add(c);
   }
-  for (const [table, extras] of Object.entries(EXTRA_COLUMNS)) {
-    if (!out[table]) out[table] = new Set<string>();
-    for (const c of extras) out[table].add(c);
-  }
+  mergeExtraColumns(out);
   tableRowColumnsCache = out;
   return out;
 }
 
-/**
- * Validate a PostgREST `.select(...)` column list against the live row
- * schema. Accepts comma-separated columns, with optional embedded
- * resource clauses like `foreign_table(col1, col2)` which are recursed
- * into using the foreign-table name as the table. Star (`*`) and PostgREST
- * aliases (`alias:col`) are accepted; JSON arrow operators (`col->>x`)
- * and count expressions are tolerated.
- *
- * Unknown columns throw `SchemaGuardError`. Unknown tables are ignored
- * (helper-only tables that don't exist in the real schema pass through).
- */
 export function validateSelect(table: string, selectClause: string): void {
   const schema = loadTableRowColumns();
   const cols = schema[table];
-  // Split the top-level select on commas, respecting parens depth so that
-  // embedded `foreign(...)` clauses stay intact.
   const parts: string[] = [];
   let depth = 0;
   let buf = "";
+
   for (const ch of selectClause) {
     if (ch === "(") depth++;
     else if (ch === ")") depth--;
@@ -391,7 +217,6 @@ export function validateSelect(table: string, selectClause: string): void {
   for (const raw of parts) {
     const piece = raw.trim();
     if (!piece || piece === "*") continue;
-    // Embedded resource: `foreign[!hint](col1, col2)` or `alias:foreign(...)`
     const embed = piece.match(
       /^(?:[a-z_][a-z0-9_]*\s*:\s*)?([a-z_][a-z0-9_]*)(?:![a-z_][a-z0-9_]*)?\s*\((.*)\)$/,
     );
@@ -399,11 +224,10 @@ export function validateSelect(table: string, selectClause: string): void {
       validateSelect(embed[1], embed[2]);
       continue;
     }
-    // Strip alias prefix and JSON path / cast suffix.
     let name = piece.includes(":") ? piece.split(":").pop()!.trim() : piece;
     name = name.split(/->>?|::/)[0].trim();
     if (!name || !/^[a-z_][a-z0-9_]*$/.test(name)) continue;
-    if (!cols) continue; // unknown table — pass through
+    if (!cols) continue;
     if (!cols.has(name)) {
       throw new SchemaGuardError(
         `[schemaGuard] select on '${table}' references unknown column '${name}'. ` +
@@ -413,21 +237,13 @@ export function validateSelect(table: string, selectClause: string): void {
   }
 }
 
-/**
- * Validate a single insert/update payload against the parsed schema.
- *
- * - Unknown columns throw `SchemaGuardError`.
- * - Enum-typed columns with a value outside the allowed set throw.
- * - Tables that are not in `Database["public"]["Tables"]` (e.g. ad-hoc
- *   tables the fake seeds for convenience) are passed through.
- */
 export function validateWritePayload(
   table: string,
   payload: Record<string, unknown>,
 ): void {
   const schema = loadTableColumns();
   const cols = schema[table];
-  if (!cols) return; // table not in schema — don't block
+  if (!cols) return;
   for (const key of Object.keys(payload)) {
     if (!cols.has(key)) {
       throw new SchemaGuardError(
@@ -453,9 +269,6 @@ export function validateWritePayload(
   }
 }
 
-/**
- * Validate a possibly-batched insert payload.
- */
 export function validateInsert(
   table: string,
   payload: Record<string, unknown> | Array<Record<string, unknown>>,
@@ -464,7 +277,8 @@ export function validateInsert(
   for (const row of list) validateWritePayload(table, row);
 }
 
-/** Test-only: clear the parse cache (used by the self-test). */
+/** Test-only: clear the parse cache used by schema guard self-tests. */
 export function _resetSchemaCacheForTests(): void {
   tableColumnsCache = null;
+  tableRowColumnsCache = null;
 }
