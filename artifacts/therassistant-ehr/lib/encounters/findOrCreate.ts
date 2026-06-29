@@ -1,21 +1,18 @@
 /**
- * Idempotent find-or-create for the (encounter, clinical note) pair attached
- * to an appointment. Two near-simultaneous "Check In" clicks (double-tap,
- * retry after slow network, second tab) used to race the read-then-insert
- * and produce duplicate encounters / duplicate notes for one visit.
+ * Idempotent find-or-create for the clinical session and documentation row
+ * attached to an appointment.
  *
- * The partial unique indexes on
- *   encounters(organization_id, appointment_id) where archived_at is null
- *   encounter_clinical_notes(organization_id, encounter_id) where archived_at is null
- * close the race at the DB. These helpers catch the resulting 23505
- * unique_violation and re-select the winning row, so concurrent callers
- * deterministically converge on the same encounter_id / note_id.
+ * Historical app routes still use "encounter" terminology, but the live
+ * Supabase schema now stores that visit object in `sessions` and note content
+ * in `session_documentation`. Keep the public helper names stable while routing
+ * database writes to the current schema.
  */
 
 // Postgres unique_violation.
 export const UNIQUE_VIOLATION = "23505";
 
 export type FindOrCreateAppointment = {
+  tenant_id?: string | null;
   client_id: string | null;
   provider_id: string | null;
   scheduled_start_at: string | null;
@@ -28,7 +25,7 @@ type MaybeSingleResult<T> = Promise<{ data: T | null; error: { message: string; 
 type SingleResult<T> = Promise<{ data: T | null; error: { message: string; code?: string } | null }>;
 
 export type EncountersSupabase = {
-  from(table: "encounters" | "encounter_clinical_notes"): {
+  from(table: "sessions" | "session_documentation"): {
     select(columns: string): {
       eq(field: string, value: string): {
         eq(field: string, value: string): {
@@ -44,8 +41,8 @@ export type EncountersSupabase = {
   };
 };
 
-type EncounterRow = { id: string; client_id: string | null; provider_id: string | null };
-type NoteRow = { id: string };
+type SessionRow = { id: string; client_id: string | null; provider_id: string | null };
+type DocumentationRow = { id: string };
 
 export type FindOrCreateEncounterResult =
   | { ok: true; encounterId: string; created: boolean; clientId: string; providerId: string | null }
@@ -53,7 +50,7 @@ export type FindOrCreateEncounterResult =
 
 export async function findOrCreateEncounter(
   supabase: EncountersSupabase,
-  organizationId: string,
+  tenantId: string,
   appointmentId: string,
   appt: FindOrCreateAppointment,
   nowIso: string,
@@ -65,17 +62,17 @@ export async function findOrCreateEncounter(
 
   const selectExisting = () =>
     supabase
-      .from("encounters")
+      .from("sessions")
       .select("id, client_id, provider_id")
-      .eq("organization_id", organizationId)
+      .eq("tenant_id", tenantId)
       .eq("appointment_id", appointmentId)
       .is("archived_at", null)
       .limit(1)
-      .maybeSingle<EncounterRow>();
+      .maybeSingle<SessionRow>();
 
   const { data: existing, error: existingError } = await selectExisting();
   if (existingError) {
-    return { ok: false, status: 500, error: `Failed to look up encounter: ${existingError.message}` };
+    return { ok: false, status: 500, error: `Failed to look up session: ${existingError.message}` };
   }
   if (existing?.id) {
     return {
@@ -92,20 +89,22 @@ export async function findOrCreateEncounter(
     : nowIso.slice(0, 10);
 
   const { data: inserted, error: insertError } = await supabase
-    .from("encounters")
+    .from("sessions")
     .insert({
-      organization_id: organizationId,
+      tenant_id: tenantId,
       client_id: apptClientId,
       provider_id: appt.provider_id,
       appointment_id: appointmentId,
-      encounter_status: "draft",
+      session_status: "scheduled",
       service_date: serviceDate,
       required_billing_fields_complete: false,
       started_at: appt.scheduled_start_at ?? null,
       ended_at: appt.scheduled_end_at ?? null,
+      created_at: nowIso,
+      updated_at: nowIso,
     })
     .select("id, client_id, provider_id")
-    .single<EncounterRow>();
+    .single<SessionRow>();
 
   if (!insertError && inserted) {
     return {
@@ -117,9 +116,6 @@ export async function findOrCreateEncounter(
     };
   }
 
-  // Race: another request inserted between our SELECT and INSERT, and the
-  // partial unique index (organization_id, appointment_id) WHERE archived_at IS NULL
-  // raised 23505. Re-select to return the winner.
   if (insertError?.code === UNIQUE_VIOLATION) {
     const { data: raceRow } = await selectExisting();
     if (raceRow?.id) {
@@ -136,7 +132,7 @@ export async function findOrCreateEncounter(
   return {
     ok: false,
     status: 422,
-    error: `Failed to create encounter: ${insertError?.message ?? "unknown error"}`,
+    error: `Failed to create session: ${insertError?.message ?? "unknown error"}`,
   };
 }
 
@@ -153,7 +149,7 @@ export type NoteDefaults = {
 
 export async function findOrCreateNote(
   supabase: EncountersSupabase,
-  organizationId: string,
+  tenantId: string,
   encounterId: string,
   clientId: string,
   providerId: string | null,
@@ -162,27 +158,27 @@ export async function findOrCreateNote(
 ): Promise<FindOrCreateNoteResult> {
   const selectExisting = () =>
     supabase
-      .from("encounter_clinical_notes")
+      .from("session_documentation")
       .select("id")
-      .eq("organization_id", organizationId)
-      .eq("encounter_id", encounterId)
+      .eq("tenant_id", tenantId)
+      .eq("session_id", encounterId)
       .is("archived_at", null)
       .limit(1)
-      .maybeSingle<NoteRow>();
+      .maybeSingle<DocumentationRow>();
 
   const { data: existing, error: existingError } = await selectExisting();
   if (existingError) {
-    return { ok: false, status: 500, error: `Failed to look up clinical note: ${existingError.message}` };
+    return { ok: false, status: 500, error: `Failed to look up session documentation: ${existingError.message}` };
   }
   if (existing?.id) {
     return { ok: true, noteId: String(existing.id), created: false };
   }
 
   const { data: inserted, error: insertError } = await supabase
-    .from("encounter_clinical_notes")
+    .from("session_documentation")
     .insert({
-      organization_id: organizationId,
-      encounter_id: encounterId,
+      tenant_id: tenantId,
+      session_id: encounterId,
       client_id: clientId,
       provider_id: providerId,
       note_status: "draft",
@@ -196,7 +192,7 @@ export async function findOrCreateNote(
       updated_at: nowIso,
     })
     .select("id")
-    .single<NoteRow>();
+    .single<DocumentationRow>();
 
   if (!insertError && inserted) {
     return { ok: true, noteId: String(inserted.id), created: true };
@@ -212,6 +208,6 @@ export async function findOrCreateNote(
   return {
     ok: false,
     status: 422,
-    error: `Failed to create clinical note: ${insertError?.message ?? "unknown error"}`,
+    error: `Failed to create session documentation: ${insertError?.message ?? "unknown error"}`,
   };
 }
