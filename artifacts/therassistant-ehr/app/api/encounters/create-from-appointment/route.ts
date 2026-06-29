@@ -25,12 +25,15 @@ export async function POST(request: Request) {
       requestedOrganizationId: body.organizationId ? String(body.organizationId) : null,
     });
     if (guard instanceof NextResponse) return guard;
-    const organizationId = guard.organizationId;
+
+    // Auth context is still named organizationId in the app layer, but the live
+    // Supabase schema now stores this foreign key as tenant_id.
+    const tenantId = guard.organizationId;
 
     const { data: appointment, error: appointmentError } = await supabase
       .from("appointments")
-      .select("id, organization_id, client_id, provider_id, scheduled_start_at, scheduled_end_at")
-      .eq("organization_id", organizationId)
+      .select("id, tenant_id, client_id, provider_id, scheduled_start_at, scheduled_end_at")
+      .eq("tenant_id", tenantId)
       .eq("id", appointmentId)
       .is("archived_at", null)
       .maybeSingle();
@@ -42,10 +45,10 @@ export async function POST(request: Request) {
 
     // Route through the shared find-or-create helper so concurrent retries
     // (double-click, second tab, network retry) deterministically converge on
-    // the same encounter row instead of inserting a duplicate.
+    // the same session row instead of inserting a duplicate.
     const result = await findOrCreateEncounter(
       supabase as unknown as EncountersSupabase,
-      organizationId,
+      tenantId,
       appointmentId,
       appointment as FindOrCreateAppointment,
       nowIso,
@@ -55,7 +58,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: result.error }, { status: result.status });
     }
 
-    return NextResponse.json({ success: true, encounterId: result.encounterId, created: result.created });
+    return NextResponse.json({ success: true, encounterId: result.encounterId, sessionId: result.encounterId, created: result.created });
   } catch (error) {
     console.error("Create encounter from appointment API error:", error);
     return NextResponse.json(
