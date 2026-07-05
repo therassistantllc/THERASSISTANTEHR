@@ -3,22 +3,25 @@ import { headers } from "next/headers";
 import AppSidebarNav from "./AppSidebarNav";
 import MobileNavButton from "./MobileNavButton";
 import styles from "./AppShell.module.css";
-import { ORGANIZATION_ID } from "@/lib/config";
+import { TENANT_ID } from "@/lib/config";
 import { createServerSupabaseAdminClient } from "@/lib/supabase/server";
 
 const CHROMELESS_PREFIXES = ["/portal"];
 
-async function fetchOrgName(): Promise<string | null> {
-  if (!ORGANIZATION_ID) return null;
+async function fetchTenantName(): Promise<string | null> {
+  if (!TENANT_ID) return null;
   const supabase = createServerSupabaseAdminClient();
   if (!supabase) return null;
+
   try {
     const { data, error } = await supabase
-      .from("organizations")
+      .from("tenants")
       .select("name")
-      .eq("id", ORGANIZATION_ID)
+      .eq("id", TENANT_ID)
       .maybeSingle();
+
     if (error) return null;
+
     const name = (data as { name?: string | null } | null)?.name;
     return typeof name === "string" && name.trim().length > 0 ? name : null;
   } catch {
@@ -32,7 +35,8 @@ export default async function AppShell({ children }: { children: React.ReactNode
   if (CHROMELESS_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
     return <>{children}</>;
   }
-  const orgName = await fetchOrgName();
+
+  const tenantName = await fetchTenantName();
   const todayStr = new Date().toLocaleDateString("en-US", {
     weekday: "long",
     month: "short",
@@ -44,8 +48,8 @@ export default async function AppShell({ children }: { children: React.ReactNode
       <header className={styles.topbar}>
         <MobileNavButton />
         <span className={styles.currentDate}>{todayStr}</span>
-        <span className={styles.orgName} title="Organization">
-          {orgName ?? "+ Add organization"}
+        <span className={styles.orgName} title="Tenant">
+          {tenantName ?? "+ Add tenant"}
         </span>
         <div className={styles.topbarSpacer} />
         <label className={styles.searchWrap} aria-label="Search THERASSISTANT EHR">
