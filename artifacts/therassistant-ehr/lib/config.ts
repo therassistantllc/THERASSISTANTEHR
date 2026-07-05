@@ -1,19 +1,27 @@
-export const DEFAULT_ORG_ID = "11111111-1111-1111-1111-111111111111";
+export const DEFAULT_TENANT_ID = "11111111-1111-1111-1111-111111111111";
 
-export const ORGANIZATION_ID: string =
-  (typeof process !== "undefined" && process.env.NEXT_PUBLIC_ORGANIZATION_ID) ||
-  DEFAULT_ORG_ID;
+export const TENANT_ID: string =
+  (typeof process !== "undefined" &&
+    (process.env.NEXT_PUBLIC_TENANT_ID || process.env.NEXT_PUBLIC_ORGANIZATION_ID)) ||
+  DEFAULT_TENANT_ID;
 
-function getOrgIdFromSearchParams(searchParams: URLSearchParams): string {
-  return searchParams.get("organizationId") || ORGANIZATION_ID;
+export const ORGANIZATION_ID = TENANT_ID;
+
+export function getTenantIdFromSearchParams(searchParams: URLSearchParams): string {
+  return searchParams.get("tenantId") || searchParams.get("organizationId") || TENANT_ID;
 }
 
-function getOrgIdFromRequest(req: { nextUrl?: { searchParams: URLSearchParams }; url?: string }): string {
+export function getTenantIdFromRequest(req: { nextUrl?: { searchParams: URLSearchParams }; url?: string }): string {
   if (req.nextUrl?.searchParams) {
-    return req.nextUrl.searchParams.get("organizationId") || ORGANIZATION_ID;
+    return getTenantIdFromSearchParams(req.nextUrl.searchParams);
   }
+
   if (req.url) {
-    return new URL(req.url).searchParams.get("organizationId") || ORGANIZATION_ID;
+    return getTenantIdFromSearchParams(new URL(req.url).searchParams);
   }
-  return ORGANIZATION_ID;
+
+  return TENANT_ID;
 }
+
+export const getOrgIdFromSearchParams = getTenantIdFromSearchParams;
+export const getOrgIdFromRequest = getTenantIdFromRequest;
