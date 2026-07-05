@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useRbac } from "@/lib/rbac/client";
 import styles from "./AppShell.module.css";
 
 function CalendarIcon() {
@@ -105,34 +106,57 @@ const ELIGIBILITY_PREFIXES = ["/billing/eligibility-batches", "/billing/eligibil
 const PAYMENTS_PREFIXES = ["/billing/payments/era", "/billing/payments", "/billing/era-import", "/billing/unmatched-era", "/billing/partial-payments", "/billing/unposted-payments", "/billing/vcc", "/billing/paper-checks", "/billing/fax-queue", "/billing/patient-balances", "/billing/patient-responsibility", "/billing/patient-billing", "/billing/bad-debt-review", "/billing/write-offs", "/billing/refunds", "/billing/credit-balances", "/billing/recoupments", "/billing/reconciliation-exceptions"];
 const DENIALS_PREFIXES = ["/billing/denials", "/billing/denials-by-carc", "/billing/denials-by-rarc", "/billing/partial-denials", "/billing/underpayments", "/billing/timely-filing", "/billing/medical-necessity", "/billing/medical-review", "/billing/aging", "/billing/claim-submission"];
 
+type PermissionCode =
+  | "dashboard.read"
+  | "schedule.read"
+  | "workqueue.read"
+  | "clients.read"
+  | "clinical.read"
+  | "billing.read"
+  | "charge_capture.read"
+  | "claims.read"
+  | "eligibility.read"
+  | "payments.read"
+  | "denials.read"
+  | "documents.read"
+  | "settings.read"
+  | "settings.manage";
+
 export default function AppSidebarNav() {
   const pathname = usePathname();
+  const rbac = useRbac();
+
+  const allow = (permissions: PermissionCode[]) => {
+    if (rbac.loading || rbac.error) return true;
+    return rbac.hasAnyPermission(permissions);
+  };
+
   return (
     <nav className={styles.nav} aria-label="Primary navigation">
       {/* Today group */}
       <div className={styles.navSection}>Today</div>
-      <NavLink href="/billing/my-inbox" icon={<TasksIcon />} label="Dashboard" prefixes={DASHBOARD_PREFIXES} pathname={pathname} />
-      <NavLink href="/calendar" icon={<CalendarIcon />} label="Schedule" prefixes={["/calendar", "/clinician/agenda"]} pathname={pathname} />
-      <NavLink href="/inbox" icon={<TasksIcon />} label="My Workqueue" prefixes={["/inbox"]} pathname={pathname} />
+      {allow(["dashboard.read", "workqueue.read"]) && <NavLink href="/billing/my-inbox" icon={<TasksIcon />} label="Dashboard" prefixes={DASHBOARD_PREFIXES} pathname={pathname} />}
+      {allow(["schedule.read"]) && <NavLink href="/calendar" icon={<CalendarIcon />} label="Schedule" prefixes={["/calendar", "/clinician/agenda"]} pathname={pathname} />}
+      {allow(["workqueue.read"]) && <NavLink href="/inbox" icon={<TasksIcon />} label="My Workqueue" prefixes={["/inbox"]} pathname={pathname} />}
       <div className={styles.navSectionSpacer} />
       {/* Clinical group */}
-      <div className={styles.navSection}>Clinical</div>
-      <NavLink href="/clients" icon={<UsersIcon />} label="Clients" prefixes={["/clients", "/patients"]} pathname={pathname} />
+      {allow(["clients.read", "clinical.read"]) && <div className={styles.navSection}>Clinical</div>}
+      {allow(["clients.read", "clinical.read"]) && <NavLink href="/clients" icon={<UsersIcon />} label="Clients" prefixes={["/clients", "/patients"]} pathname={pathname} />}
       <div className={styles.navSectionSpacer} />
       {/* Billing group */}
-      <div className={styles.navSection}>Billing</div>
-      <NavLink href="/billing/charge-capture" icon={<ClipboardIcon />} label="Charge Capture" prefixes={CHARGE_CAPTURE_PREFIXES} pathname={pathname} />
-      <NavLink href="/billing/claims" icon={<ClipboardIcon />} label="Claims" prefixes={CLAIMS_PREFIXES} pathname={pathname} />
-      <NavLink href="/billing/batches" icon={<ClipboardIcon />} label="837P Batches" prefixes={BATCHES_837P_PREFIXES} pathname={pathname} />
-      <NavLink href="/billing/eligibility-batches" icon={<ShieldIcon />} label="Eligibility" prefixes={ELIGIBILITY_PREFIXES} pathname={pathname} />
-      <NavLink href="/billing/payments" icon={<CreditCardIcon />} label="Payments" prefixes={PAYMENTS_PREFIXES} pathname={pathname} />
-      <NavLink href="/billing/denials-by-carc" icon={<XCircleIcon />} label="Denials & Appeals" prefixes={DENIALS_PREFIXES} pathname={pathname} />
+      {allow(["billing.read", "charge_capture.read", "claims.read", "eligibility.read", "payments.read", "denials.read"]) && <div className={styles.navSection}>Billing</div>}
+      {allow(["billing.read", "charge_capture.read"]) && <NavLink href="/billing/charge-capture" icon={<ClipboardIcon />} label="Charge Capture" prefixes={CHARGE_CAPTURE_PREFIXES} pathname={pathname} />}
+      {allow(["billing.read", "claims.read"]) && <NavLink href="/billing/claims" icon={<ClipboardIcon />} label="Claims" prefixes={CLAIMS_PREFIXES} pathname={pathname} />}
+      {allow(["billing.read", "claims.read"]) && <NavLink href="/billing/batches" icon={<ClipboardIcon />} label="837P Batches" prefixes={BATCHES_837P_PREFIXES} pathname={pathname} />}
+      {allow(["billing.read", "eligibility.read"]) && <NavLink href="/billing/eligibility-batches" icon={<ShieldIcon />} label="Eligibility" prefixes={ELIGIBILITY_PREFIXES} pathname={pathname} />}
+      {allow(["billing.read", "payments.read"]) && <NavLink href="/billing/payments" icon={<CreditCardIcon />} label="Payments" prefixes={PAYMENTS_PREFIXES} pathname={pathname} />}
+      {allow(["billing.read", "denials.read"]) && <NavLink href="/billing/denials-by-carc" icon={<XCircleIcon />} label="Denials & Appeals" prefixes={DENIALS_PREFIXES} pathname={pathname} />}
       <div className={styles.navSectionSpacer} />
       {/* Operations group */}
-      <div className={styles.navSection}>Operations</div>
-      <NavLink href="/mailroom" icon={<InboxIcon />} label="Documents" prefixes={["/mailroom"]} pathname={pathname} />
-      <NavLink href="/settings" icon={<ShieldIcon />} label="Settings" prefixes={["/settings"]} pathname={pathname} />
-      <NavLink href="/settings/system-readiness" icon={<ChartIcon />} label="Admin" prefixes={["/settings/system-readiness", "/settings/audit-log", "/settings/edi"]} pathname={pathname} />
+      {allow(["documents.read", "settings.read", "settings.manage"]) && <div className={styles.navSection}>Operations</div>}
+      {allow(["documents.read"]) && <NavLink href="/mailroom" icon={<InboxIcon />} label="Documents" prefixes={["/mailroom"]} pathname={pathname} />}
+      {allow(["settings.read", "settings.manage"]) && <NavLink href="/settings" icon={<ShieldIcon />} label="Settings" prefixes={["/settings"]} pathname={pathname} />}
+      {allow(["settings.manage"]) && <NavLink href="/settings/system-readiness" icon={<ChartIcon />} label="Admin" prefixes={["/settings/system-readiness", "/settings/audit-log", "/settings/edi"]} pathname={pathname} />}
     </nav>
   );
 }
