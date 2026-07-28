@@ -18,7 +18,7 @@
     "@supabase/supabase-js": "^2.104.1",
     "json-rules-engine": "^7.3.1",
     "lucide-react": "catalog:",
-    "next": "^16.2.6",
+    "next": "^16.2.11",
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^2.4.5",
     "react": "19.2.4",
