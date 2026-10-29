@@ -18,13 +18,13 @@
     "@supabase/supabase-js": "^2.104.1",
     "json-rules-engine": "^7.3.1",
     "lucide-react": "catalog:",
-    "next": "^16.3.3",
+    "next": "^16.4.1",
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^2.4.5",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "resend": "^6.12.3",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.4",
     "survey-core": "^2.5.25",
     "survey-react-ui": "^2.5.25",
     "zustand": "^5.0.12"
@@ -43,7 +43,7 @@
     "tailwindcss": "^4",
     "tsx": "catalog:",
     "typescript": "^5",
-    "undici": "^8.5.0",
+    "undici": "^8.10.2",
     "vitest": "^4.1.0"
   }
 }
