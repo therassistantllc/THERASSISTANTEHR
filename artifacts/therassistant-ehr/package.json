@@ -24,7 +24,7 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "resend": "^6.12.3",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.4",
     "survey-core": "^2.5.25",
     "survey-react-ui": "^2.5.25",
     "zustand": "^5.0.12"
